@@ -1,0 +1,100 @@
+{
+  "target": "./foia_documents/",
+  "database": "foiacquire.db",
+  "scrapers": {
+    "fbi_vault": {
+      "discovery": {
+        "type": "html_crawl",
+        "base_url": "https://vault.fbi.gov",
+        "start_paths": ["/alphabetical-index"],
+        "document_links": ["a[href*='/vault/']"],
+        "document_patterns": ["\\.pdf$"],
+        "pagination": {
+          "next_selectors": ["a[rel='next']", "a.pager-next"]
+        }
+      },
+      "fetch": {
+        "use_browser": false
+      }
+    },
+    "cia_foia": {
+      "discovery": {
+        "type": "html_crawl",
+        "base_url": "https://www.cia.gov/readingroom",
+        "start_paths": ["/collection"],
+        "use_browser": true,
+        "document_links": ["a[href*='/document/']"],
+        "document_patterns": ["\\.pdf$"],
+        "pagination": {
+          "next_selectors": ["a[rel='next']", ".pager-next a"]
+        }
+      },
+      "fetch": {
+        "use_browser": true,
+        "pdf_selectors": ["a[href$='.pdf']"],
+        "title_selectors": ["h1.page-title", "h1", "title"]
+      }
+    },
+    "muckrock": {
+      "discovery": {
+        "type": "api_search",
+        "api": {
+          "base_url": "https://www.muckrock.com/api_v1",
+          "endpoints": [
+            {
+              "path": "/foia/",
+              "params": {
+                "page_size": 100,
+                "status": "done"
+              },
+              "url_extractors": [
+                {
+                  "path": "results",
+                  "url_field": "communications"
+                }
+              ]
+            }
+          ],
+          "pagination": {
+            "page_param": "page",
+            "results_key": "results",
+            "page_size": 100
+          }
+        }
+      },
+      "fetch": {
+        "use_browser": false
+      }
+    },
+    "documentcloud": {
+      "discovery": {
+        "type": "api_search",
+        "api": {
+          "base_url": "https://api.www.documentcloud.org/api",
+          "endpoints": [
+            {
+              "path": "/documents/search/",
+              "params": {
+                "q": "FOIA",
+                "per_page": 100
+              },
+              "url_extractors": [
+                {
+                  "path": "results",
+                  "url_field": "pdf_url"
+                }
+              ]
+            }
+          ],
+          "pagination": {
+            "page_param": "cursor",
+            "results_key": "results"
+          }
+        }
+      },
+      "fetch": {
+        "use_browser": false
+      }
+    }
+  }
+}

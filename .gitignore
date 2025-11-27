@@ -1,0 +1,21 @@
+# foiacquire-related local files
+/share/
+/foiacquire.json
+
+# Rust build artifacts
+/target/*
+*.bk
+*.pdb
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+*.db
+*.swp
+*.swo
+*~
+
+# Non-git hidden file patterns
+.*
+!.git*

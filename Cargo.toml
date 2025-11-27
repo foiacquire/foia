@@ -1,0 +1,129 @@
+[package]
+name = "foiacquire"
+version = "0.1.0"
+edition = "2021"
+authors = ["monokrome"]
+description = "FOIA document acquisition and research system"
+license = "MIT"
+repository = "https://github.com/monokrome/foiacquire"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "brotli"] }
+
+# HTML parsing
+scraper = "0.20"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Configuration management
+prefer = "0.2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# Base64 encoding/decoding
+base64 = "0.22"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Async traits
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Progress display and TUI
+indicatif = "0.17"
+console = "0.15"
+crossterm = "0.28"
+
+# URL handling
+url = "2"
+urlencoding = "2"
+
+# Regex
+regex = "1"
+
+# Web server
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+mime_guess = "2"
+
+# Temporary directories
+tempfile = "3"
+
+# Archive handling
+zip = "2"
+
+# Email parsing
+mail-parser = "0.9"
+
+# OCR - Tesseract is always available (uses system binary)
+# image crate needed for optional OCR backends
+image = { version = "0.25", optional = true }
+
+# OCRS - pure Rust OCR (optional, models auto-download)
+ocrs = { version = "0.11", optional = true }
+rten = { version = "0.22", optional = true }
+rten-imageproc = { version = "0.22", optional = true }
+
+# PaddleOCR - CNN-based OCR via ONNX (optional, models auto-download)
+paddle-ocr-rs = { version = "0.6", optional = true }
+
+# UUID generation
+uuid = { version = "1", features = ["v4"] }
+
+# Path expansion
+shellexpand = "3"
+
+# Home directory
+dirs = "5"
+
+# Browser automation (optional, for JS-heavy sites)
+# Using git version for compatibility with newer Chrome versions (fixes WS message parsing)
+chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "6f2392f", optional = true, features = ["tokio-runtime"] }
+futures = "0.3"
+
+# Redis client (optional, for distributed rate limiting)
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+
+# RabbitMQ client (optional, for distributed job queue)
+lapin = { version = "2", optional = true }
+
+[features]
+default = ["browser"]
+browser = ["chromiumoxide"]
+redis-backend = ["redis"]
+amqp-broker = ["lapin"]
+ocr-ocrs = ["ocrs", "rten", "rten-imageproc", "image"]
+ocr-paddle = ["paddle-ocr-rs", "image"]
+ocr-all = ["ocr-ocrs", "ocr-paddle"]
+
+[[bin]]
+name = "foiacquire"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

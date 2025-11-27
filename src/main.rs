@@ -1,0 +1,37 @@
+//! FOIAcquire - FOIA document acquisition and research system.
+//!
+//! A tool for acquiring, storing, and researching Freedom of Information Act
+//! documents from various government sources.
+
+mod cli;
+mod config;
+mod llm;
+mod models;
+mod ocr;
+mod repository;
+mod scrapers;
+mod server;
+mod services;
+
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialize logging based on verbosity
+    let default_filter = if cli::is_verbose() {
+        "foiacquire=info"
+    } else {
+        "foiacquire=warn"
+    };
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter.into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Run CLI
+    cli::run().await
+}

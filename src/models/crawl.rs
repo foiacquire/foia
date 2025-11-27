@@ -1,0 +1,512 @@
+//! Crawl state models for tracking discovery paths and request history.
+//!
+//! These models enable automatic resume of interrupted crawls by tracking
+//! the full path taken through a source's URL structure.
+
+#![allow(dead_code)]
+
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Status of a discovered URL in the crawl.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlStatus {
+    /// Found but not yet fetched.
+    Discovered,
+    /// Currently being fetched.
+    Fetching,
+    /// Successfully downloaded.
+    Fetched,
+    /// Skipped (duplicate content, excluded, etc.).
+    Skipped,
+    /// Fetch failed (will retry).
+    Failed,
+    /// Max retries reached.
+    Exhausted,
+}
+
+impl UrlStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Discovered => "discovered",
+            Self::Fetching => "fetching",
+            Self::Fetched => "fetched",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+            Self::Exhausted => "exhausted",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "discovered" => Some(Self::Discovered),
+            "fetching" => Some(Self::Fetching),
+            "fetched" => Some(Self::Fetched),
+            "skipped" => Some(Self::Skipped),
+            "failed" => Some(Self::Failed),
+            "exhausted" => Some(Self::Exhausted),
+            _ => None,
+        }
+    }
+}
+
+/// How a URL was discovered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryMethod {
+    /// Initial start URL from config.
+    Seed,
+    /// Found in HTML page via selector.
+    HtmlLink,
+    /// Found via pagination (next page).
+    Pagination,
+    /// Found in API response.
+    ApiResult,
+    /// Found in nested API call.
+    ApiNested,
+    /// HTTP redirect from another URL.
+    Redirect,
+    /// Extracted from document via OCR/text analysis.
+    OcrExtraction,
+}
+
+impl DiscoveryMethod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Seed => "seed",
+            Self::HtmlLink => "html_link",
+            Self::Pagination => "pagination",
+            Self::ApiResult => "api_result",
+            Self::ApiNested => "api_nested",
+            Self::Redirect => "redirect",
+            Self::OcrExtraction => "ocr_extraction",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "seed" => Some(Self::Seed),
+            "html_link" => Some(Self::HtmlLink),
+            "pagination" => Some(Self::Pagination),
+            "api_result" => Some(Self::ApiResult),
+            "api_nested" => Some(Self::ApiNested),
+            "redirect" => Some(Self::Redirect),
+            "ocr_extraction" => Some(Self::OcrExtraction),
+            _ => None,
+        }
+    }
+}
+
+/// A URL discovered during crawling with its discovery context.
+///
+/// Tracks how the URL was found, its relationship to parent URLs,
+/// and its current processing status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrawlUrl {
+    pub url: String,
+    pub source_id: String,
+    pub status: UrlStatus,
+
+    // Discovery context - how we found this URL
+    pub discovery_method: DiscoveryMethod,
+    /// URL of page where this was discovered.
+    pub parent_url: Option<String>,
+    /// Context includes: selector used, API endpoint, pagination params, etc.
+    pub discovery_context: HashMap<String, serde_json::Value>,
+
+    // Crawl tree position
+    /// How many hops from seed URL.
+    pub depth: u32,
+
+    // Timing
+    pub discovered_at: DateTime<Utc>,
+    pub fetched_at: Option<DateTime<Utc>>,
+
+    // Retry tracking
+    pub retry_count: u32,
+    pub last_error: Option<String>,
+    pub next_retry_at: Option<DateTime<Utc>>,
+
+    // HTTP caching headers for conditional requests
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+
+    // Content info (populated after fetch)
+    pub content_hash: Option<String>,
+    /// Link to Document if this is a document URL.
+    pub document_id: Option<String>,
+}
+
+impl CrawlUrl {
+    /// Create a new discovered URL.
+    pub fn new(
+        url: String,
+        source_id: String,
+        discovery_method: DiscoveryMethod,
+        parent_url: Option<String>,
+        depth: u32,
+    ) -> Self {
+        Self {
+            url,
+            source_id,
+            status: UrlStatus::Discovered,
+            discovery_method,
+            parent_url,
+            discovery_context: HashMap::new(),
+            depth,
+            discovered_at: Utc::now(),
+            fetched_at: None,
+            retry_count: 0,
+            last_error: None,
+            next_retry_at: None,
+            etag: None,
+            last_modified: None,
+            content_hash: None,
+            document_id: None,
+        }
+    }
+
+    /// Mark URL as currently being fetched.
+    pub fn mark_fetching(&mut self) {
+        self.status = UrlStatus::Fetching;
+    }
+
+    /// Mark URL as successfully fetched.
+    pub fn mark_fetched(
+        &mut self,
+        content_hash: Option<String>,
+        document_id: Option<String>,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    ) {
+        self.status = UrlStatus::Fetched;
+        self.fetched_at = Some(Utc::now());
+        self.content_hash = content_hash;
+        self.document_id = document_id;
+        self.etag = etag;
+        self.last_modified = last_modified;
+    }
+
+    /// Mark URL as skipped.
+    pub fn mark_skipped(&mut self, reason: &str) {
+        self.status = UrlStatus::Skipped;
+        self.fetched_at = Some(Utc::now());
+        self.last_error = Some(reason.to_string());
+    }
+
+    /// Mark URL as failed, calculate next retry time.
+    pub fn mark_failed(&mut self, error: &str, max_retries: u32) {
+        self.retry_count += 1;
+        self.last_error = Some(error.to_string());
+
+        if self.retry_count >= max_retries {
+            self.status = UrlStatus::Exhausted;
+        } else {
+            self.status = UrlStatus::Failed;
+            // Exponential backoff: 1min, 5min, 25min, etc.
+            let backoff_minutes = 5_i64.pow(self.retry_count);
+            self.next_retry_at = Some(Utc::now() + Duration::minutes(backoff_minutes));
+        }
+    }
+}
+
+/// Record of an HTTP request made during crawling.
+///
+/// Provides complete audit trail of all requests for debugging
+/// and analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrawlRequest {
+    pub id: Option<i64>,
+    pub source_id: String,
+    pub url: String,
+    pub method: String,
+
+    // Request info
+    pub request_headers: HashMap<String, String>,
+    pub request_at: DateTime<Utc>,
+
+    // Response info
+    pub response_status: Option<u16>,
+    pub response_headers: HashMap<String, String>,
+    pub response_at: Option<DateTime<Utc>>,
+    pub response_size: Option<u64>,
+
+    // Timing
+    pub duration_ms: Option<u64>,
+
+    // Error tracking
+    pub error: Option<String>,
+
+    // Conditional request tracking
+    /// Did we send If-None-Match/If-Modified-Since?
+    pub was_conditional: bool,
+    /// Did we get 304 Not Modified?
+    pub was_not_modified: bool,
+}
+
+impl CrawlRequest {
+    /// Create a new request log entry.
+    pub fn new(source_id: String, url: String, method: String) -> Self {
+        Self {
+            id: None,
+            source_id,
+            url,
+            method,
+            request_headers: HashMap::new(),
+            request_at: Utc::now(),
+            response_status: None,
+            response_headers: HashMap::new(),
+            response_at: None,
+            response_size: None,
+            duration_ms: None,
+            error: None,
+            was_conditional: false,
+            was_not_modified: false,
+        }
+    }
+}
+
+/// Aggregate state of a crawl for a source.
+///
+/// Used to determine whether a crawl needs to resume and what
+/// work remains to be done.
+#[derive(Debug, Clone, Default)]
+pub struct CrawlState {
+    pub source_id: String,
+    pub last_crawl_started: Option<DateTime<Utc>>,
+    pub last_crawl_completed: Option<DateTime<Utc>>,
+
+    // Counts
+    pub urls_discovered: u64,
+    pub urls_fetched: u64,
+    pub urls_failed: u64,
+    pub urls_pending: u64,
+
+    // Resume info
+    pub has_pending_urls: bool,
+    pub has_unexplored_branches: bool,
+    pub oldest_pending_url: Option<DateTime<Utc>>,
+}
+
+impl CrawlState {
+    /// Check if this crawl should be resumed.
+    pub fn needs_resume(&self) -> bool {
+        self.has_pending_urls || self.has_unexplored_branches
+    }
+
+    /// Check if crawl completed successfully.
+    pub fn is_complete(&self) -> bool {
+        self.last_crawl_completed.is_some()
+            && !self.has_pending_urls
+            && !self.has_unexplored_branches
+    }
+}
+
+/// Request statistics for a source.
+#[derive(Debug, Clone, Default)]
+pub struct RequestStats {
+    pub total_requests: u64,
+    pub success_200: u64,
+    pub not_modified_304: u64,
+    pub errors: u64,
+    pub conditional_requests: u64,
+    pub avg_duration_ms: f64,
+    pub total_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_status_roundtrip() {
+        let statuses = [
+            UrlStatus::Discovered,
+            UrlStatus::Fetching,
+            UrlStatus::Fetched,
+            UrlStatus::Skipped,
+            UrlStatus::Failed,
+            UrlStatus::Exhausted,
+        ];
+
+        for status in statuses {
+            let s = status.as_str();
+            assert_eq!(UrlStatus::from_str(s), Some(status));
+        }
+
+        assert_eq!(UrlStatus::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_discovery_method_roundtrip() {
+        let methods = [
+            DiscoveryMethod::Seed,
+            DiscoveryMethod::HtmlLink,
+            DiscoveryMethod::Pagination,
+            DiscoveryMethod::ApiResult,
+            DiscoveryMethod::ApiNested,
+            DiscoveryMethod::Redirect,
+            DiscoveryMethod::OcrExtraction,
+        ];
+
+        for method in methods {
+            let s = method.as_str();
+            assert_eq!(DiscoveryMethod::from_str(s), Some(method));
+        }
+
+        assert_eq!(DiscoveryMethod::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_crawl_url_new() {
+        let url = CrawlUrl::new(
+            "https://example.com/doc.pdf".to_string(),
+            "source1".to_string(),
+            DiscoveryMethod::HtmlLink,
+            Some("https://example.com/index".to_string()),
+            2,
+        );
+
+        assert_eq!(url.url, "https://example.com/doc.pdf");
+        assert_eq!(url.source_id, "source1");
+        assert_eq!(url.status, UrlStatus::Discovered);
+        assert_eq!(url.discovery_method, DiscoveryMethod::HtmlLink);
+        assert_eq!(
+            url.parent_url,
+            Some("https://example.com/index".to_string())
+        );
+        assert_eq!(url.depth, 2);
+        assert_eq!(url.retry_count, 0);
+        assert!(url.document_id.is_none());
+    }
+
+    #[test]
+    fn test_crawl_url_mark_fetching() {
+        let mut url = CrawlUrl::new(
+            "https://example.com/doc.pdf".to_string(),
+            "source1".to_string(),
+            DiscoveryMethod::Seed,
+            None,
+            0,
+        );
+
+        url.mark_fetching();
+        assert_eq!(url.status, UrlStatus::Fetching);
+    }
+
+    #[test]
+    fn test_crawl_url_mark_fetched() {
+        let mut url = CrawlUrl::new(
+            "https://example.com/doc.pdf".to_string(),
+            "source1".to_string(),
+            DiscoveryMethod::Seed,
+            None,
+            0,
+        );
+
+        url.mark_fetched(
+            Some("abc123".to_string()),
+            Some("doc-uuid".to_string()),
+            Some("\"etag-value\"".to_string()),
+            Some("Mon, 01 Jan 2024 00:00:00 GMT".to_string()),
+        );
+
+        assert_eq!(url.status, UrlStatus::Fetched);
+        assert!(url.fetched_at.is_some());
+        assert_eq!(url.content_hash, Some("abc123".to_string()));
+        assert_eq!(url.document_id, Some("doc-uuid".to_string()));
+        assert_eq!(url.etag, Some("\"etag-value\"".to_string()));
+    }
+
+    #[test]
+    fn test_crawl_url_mark_skipped() {
+        let mut url = CrawlUrl::new(
+            "https://example.com/doc.pdf".to_string(),
+            "source1".to_string(),
+            DiscoveryMethod::Seed,
+            None,
+            0,
+        );
+
+        url.mark_skipped("duplicate content");
+        assert_eq!(url.status, UrlStatus::Skipped);
+        assert_eq!(url.last_error, Some("duplicate content".to_string()));
+        assert!(url.fetched_at.is_some());
+    }
+
+    #[test]
+    fn test_crawl_url_mark_failed_with_retry() {
+        let mut url = CrawlUrl::new(
+            "https://example.com/doc.pdf".to_string(),
+            "source1".to_string(),
+            DiscoveryMethod::Seed,
+            None,
+            0,
+        );
+
+        // First failure - should retry
+        url.mark_failed("connection timeout", 3);
+        assert_eq!(url.status, UrlStatus::Failed);
+        assert_eq!(url.retry_count, 1);
+        assert!(url.next_retry_at.is_some());
+        assert_eq!(url.last_error, Some("connection timeout".to_string()));
+
+        // Second failure - should still retry
+        url.mark_failed("connection timeout", 3);
+        assert_eq!(url.status, UrlStatus::Failed);
+        assert_eq!(url.retry_count, 2);
+
+        // Third failure - should be exhausted
+        url.mark_failed("connection timeout", 3);
+        assert_eq!(url.status, UrlStatus::Exhausted);
+        assert_eq!(url.retry_count, 3);
+    }
+
+    #[test]
+    fn test_crawl_state_needs_resume() {
+        let mut state = CrawlState::default();
+        assert!(!state.needs_resume());
+
+        state.has_pending_urls = true;
+        assert!(state.needs_resume());
+
+        state.has_pending_urls = false;
+        state.has_unexplored_branches = true;
+        assert!(state.needs_resume());
+    }
+
+    #[test]
+    fn test_crawl_state_is_complete() {
+        let mut state = CrawlState::default();
+        assert!(!state.is_complete()); // No completion time
+
+        state.last_crawl_completed = Some(Utc::now());
+        assert!(state.is_complete());
+
+        state.has_pending_urls = true;
+        assert!(!state.is_complete());
+
+        state.has_pending_urls = false;
+        state.has_unexplored_branches = true;
+        assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn test_crawl_request_new() {
+        let req = CrawlRequest::new(
+            "source1".to_string(),
+            "https://example.com".to_string(),
+            "GET".to_string(),
+        );
+
+        assert_eq!(req.source_id, "source1");
+        assert_eq!(req.url, "https://example.com");
+        assert_eq!(req.method, "GET");
+        assert!(req.id.is_none());
+        assert!(req.response_status.is_none());
+        assert!(!req.was_conditional);
+        assert!(!req.was_not_modified);
+    }
+}

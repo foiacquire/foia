@@ -1,0 +1,248 @@
+//! DeepSeek OCR backend implementation.
+//!
+//! Uses DeepSeek-OCR.rs via subprocess for LLM-based OCR.
+//! This provides the highest accuracy for complex documents
+//! but requires more resources (6-13GB RAM, GPU recommended).
+//!
+//! Install deepseek-ocr.rs from:
+//! https://github.com/TimmyOVO/deepseek-ocr.rs
+
+#![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Instant;
+use tempfile::TempDir;
+
+use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
+
+/// DeepSeek OCR backend using subprocess.
+pub struct DeepSeekBackend {
+    config: OcrConfig,
+    /// Path to the deepseek-ocr binary.
+    binary_path: PathBuf,
+    /// Device to use (cpu, metal, cuda).
+    device: String,
+    /// Data type (f32, f16, bf16).
+    dtype: String,
+    /// Model to use (deepseek-ocr, paddleocr-vl, dots-ocr).
+    model: String,
+}
+
+impl DeepSeekBackend {
+    /// Create a new DeepSeek backend with default configuration.
+    pub fn new() -> Self {
+        Self {
+            config: OcrConfig::default(),
+            binary_path: PathBuf::from("deepseek-ocr"),
+            device: "cpu".to_string(),
+            dtype: "f32".to_string(),
+            model: "deepseek-ocr".to_string(),
+        }
+    }
+
+    /// Create a new DeepSeek backend with custom configuration.
+    pub fn with_config(config: OcrConfig) -> Self {
+        let device = if config.use_gpu { "cuda" } else { "cpu" };
+        let dtype = if config.use_gpu { "f16" } else { "f32" };
+
+        Self {
+            config,
+            binary_path: PathBuf::from("deepseek-ocr"),
+            device: device.to_string(),
+            dtype: dtype.to_string(),
+            model: "deepseek-ocr".to_string(),
+        }
+    }
+
+    /// Set the path to the deepseek-ocr binary.
+    pub fn with_binary_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.binary_path = path.into();
+        self
+    }
+
+    /// Set the device (cpu, metal, cuda).
+    pub fn with_device(mut self, device: impl Into<String>) -> Self {
+        self.device = device.into();
+        self
+    }
+
+    /// Set the data type (f32, f16, bf16).
+    pub fn with_dtype(mut self, dtype: impl Into<String>) -> Self {
+        self.dtype = dtype.into();
+        self
+    }
+
+    /// Set the model (deepseek-ocr, paddleocr-vl, dots-ocr).
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    /// Check if the deepseek-ocr binary is available.
+    fn check_binary(&self) -> bool {
+        // First check if it's in PATH
+        if Command::new("which")
+            .arg(&self.binary_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        // Check if it's a direct path that exists
+        self.binary_path.exists()
+    }
+
+    /// Run DeepSeek OCR on an image.
+    fn run_deepseek(&self, image_path: &Path) -> Result<String, OcrError> {
+        // DeepSeek-OCR uses a prompt with <image> placeholder
+        let prompt = "Extract all text from this image. Return only the extracted text, nothing else. <image>";
+
+        let output = Command::new(&self.binary_path)
+            .args(["--prompt", prompt])
+            .args(["--image", &image_path.to_string_lossy()])
+            .args(["--device", &self.device])
+            .args(["--dtype", &self.dtype])
+            .args(["--model", &self.model])
+            .args(["--max-new-tokens", "4096"])
+            .output();
+
+        match output {
+            Ok(output) => {
+                if output.status.success() {
+                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(OcrError::OcrFailed(format!("deepseek-ocr failed: {}", stderr)))
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(OcrError::BackendNotAvailable(
+                    "deepseek-ocr not found. Install from: https://github.com/TimmyOVO/deepseek-ocr.rs".to_string(),
+                ))
+            }
+            Err(e) => Err(OcrError::Io(e)),
+        }
+    }
+
+    /// Check if pdftoppm is installed (for PDF conversion).
+    fn check_pdftoppm() -> bool {
+        Command::new("which")
+            .arg("pdftoppm")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Convert a PDF page to an image.
+    fn pdf_page_to_image(
+        &self,
+        pdf_path: &Path,
+        page: u32,
+        output_dir: &Path,
+    ) -> Result<PathBuf, OcrError> {
+        let page_str = page.to_string();
+        let output_prefix = output_dir.join("page");
+
+        let status = Command::new("pdftoppm")
+            .args(["-png", "-r", "300", "-f", &page_str, "-l", &page_str])
+            .arg(pdf_path)
+            .arg(&output_prefix)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => self.find_page_image(output_dir, page).ok_or_else(|| {
+                OcrError::OcrFailed(format!("No image generated for page {}", page))
+            }),
+            Ok(_) => Err(OcrError::OcrFailed(
+                "pdftoppm failed to convert PDF page".to_string(),
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(OcrError::BackendNotAvailable(
+                    "pdftoppm not found (install poppler-utils)".to_string(),
+                ))
+            }
+            Err(e) => Err(OcrError::Io(e)),
+        }
+    }
+
+    /// Find the image file for a specific page number.
+    fn find_page_image(&self, temp_path: &Path, page_num: u32) -> Option<PathBuf> {
+        for digits in [2, 3, 4] {
+            let filename = format!("page-{:0width$}.png", page_num, width = digits);
+            let path = temp_path.join(&filename);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        None
+    }
+}
+
+impl Default for DeepSeekBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OcrBackend for DeepSeekBackend {
+    fn backend_type(&self) -> OcrBackendType {
+        OcrBackendType::DeepSeek
+    }
+
+    fn is_available(&self) -> bool {
+        self.check_binary()
+    }
+
+    fn availability_hint(&self) -> String {
+        if !self.check_binary() {
+            format!(
+                "DeepSeek-OCR not found at '{}'. Install from: https://github.com/TimmyOVO/deepseek-ocr.rs\n\
+                 Build with: cargo build -p deepseek-ocr-cli --release\n\
+                 For GPU: add --features cuda (NVIDIA) or --features metal (Apple)",
+                self.binary_path.display()
+            )
+        } else if !Self::check_pdftoppm() {
+            "pdftoppm not installed. Install with: apt install poppler-utils".to_string()
+        } else {
+            format!(
+                "DeepSeek-OCR is available (device: {}, model: {})",
+                self.device, self.model
+            )
+        }
+    }
+
+    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
+        let start = Instant::now();
+        let text = self.run_deepseek(image_path)?;
+        let elapsed = start.elapsed();
+
+        Ok(OcrResult {
+            text,
+            confidence: None, // DeepSeek doesn't provide confidence scores directly
+            backend: OcrBackendType::DeepSeek,
+            processing_time_ms: elapsed.as_millis() as u64,
+        })
+    }
+
+    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError> {
+        let start = Instant::now();
+
+        // Create temp directory for the image
+        let temp_dir = TempDir::new()?;
+        let image_path = self.pdf_page_to_image(pdf_path, page, temp_dir.path())?;
+
+        // Run OCR on the image
+        let text = self.run_deepseek(&image_path)?;
+        let elapsed = start.elapsed();
+
+        Ok(OcrResult {
+            text,
+            confidence: None,
+            backend: OcrBackendType::DeepSeek,
+            processing_time_ms: elapsed.as_millis() as u64,
+        })
+    }
+}

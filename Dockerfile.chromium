@@ -1,0 +1,21 @@
+# Lightweight Chromium container for browser automation
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-liberation \
+    socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run as non-root
+RUN useradd -m chrome
+USER chrome
+
+EXPOSE 9222
+
+# Use a shell script to launch both chromium and socat
+# Chromium binds to 127.0.0.1 (ignores --remote-debugging-address on Debian)
+# socat forwards 0.0.0.0:9222 -> 127.0.0.1:9223
+COPY --chown=chrome:chrome bin/entrypoint.sh /opt/entrypoint.sh
+
+ENTRYPOINT ["/opt/entrypoint.sh"]
