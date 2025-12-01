@@ -11,8 +11,8 @@ repository = "https://github.com/monokrome/foiacquire"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP client
-reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "brotli"] }
+# HTTP client (using rustls for cross-platform builds without OpenSSL)
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "gzip", "brotli", "rustls-tls"] }
 
 # HTML parsing
 scraper = "0.20"
@@ -106,6 +106,9 @@ futures = "0.3"
 
 # Redis client (optional, for distributed rate limiting)
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+
+# WARC archive parsing (for importing web archives)
+warc = { version = "0.4", features = ["gzip"] }
 
 # RabbitMQ client (optional, for distributed job queue)
 lapin = { version = "2", optional = true }

@@ -68,13 +68,10 @@ impl OcrsBackend {
             Some(PathBuf::from("./models/ocrs")),
         ];
 
-        candidates
-            .into_iter()
-            .flatten()
-            .find(|candidate| {
-                candidate.join("text-detection.rten").exists()
-                    && candidate.join("text-recognition.rten").exists()
-            })
+        candidates.into_iter().flatten().find(|candidate| {
+            candidate.join("text-detection.rten").exists()
+                && candidate.join("text-recognition.rten").exists()
+        })
     }
 
     /// Ensure models are downloaded, downloading them if necessary.
