@@ -46,7 +46,7 @@ cmd_start() {
     docker run -d --rm \
         --name "$CONTAINER_NAME" \
         --shm-size=2g \
-        -p "$PORT:9222" \
+        --network host \
         "$IMAGE_NAME"
 
     echo "Stealth browser running. Connect with: ws://localhost:$PORT"
@@ -63,7 +63,7 @@ cmd_stop() {
 }
 
 cmd_restart() {
-    cmd_stop
+    cmd_stop && sleep 2
     cmd_start
 }
 
