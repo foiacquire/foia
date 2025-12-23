@@ -847,19 +847,11 @@ impl ConfigurableScraper {
                             consecutive_browser_failures += 1;
                             total_browser_failures += 1;
 
-                            // Log as warning after a few failures, error if it looks like a connection issue
-                            let err_str = e.to_string();
-                            if err_str.contains("connect") || err_str.contains("Connection") {
-                                warn!("Browser connection failed for {}: {} (failure #{} consecutive)",
-                                      current_url, e, consecutive_browser_failures);
-                            } else if consecutive_browser_failures > 3 {
-                                warn!(
-                                    "Browser fetch failed for {}: {} (failure #{} consecutive)",
-                                    current_url, e, consecutive_browser_failures
-                                );
-                            } else {
-                                debug!("Browser fetch failed for {}: {}", current_url, e);
-                            }
+                            // Always log browser failures as warnings for visibility
+                            warn!(
+                                "Browser fetch failed for {}: {} (failure #{}/{})",
+                                current_url, e, consecutive_browser_failures, total_browser_failures
+                            );
                             continue;
                         }
                     }

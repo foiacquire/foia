@@ -18,6 +18,9 @@ chromium \
     --metrics-recording-only \
     --no-first-run \
     --no-default-browser-check \
+    --autoplay-policy=no-user-gesture-required \
+    --disable-features=site-per-process \
+    --disable-site-isolation-trials \
     --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
     --remote-debugging-port=9223 &
 

@@ -353,7 +353,7 @@ impl BrowserFetcher {
 
     /// Connect to a remote Chrome instance.
     async fn connect_remote(&mut self, url: &str) -> Result<()> {
-        info!("Connecting to remote browser at {}", url);
+        info!("Connecting to remote browser at {} (timeout: {}s)", url, self.config.timeout);
 
         // Get WebSocket URL from the /json/version endpoint
         let http_url = url
@@ -378,7 +378,13 @@ impl BrowserFetcher {
 
         info!("Connecting to WebSocket: {}", ws_url);
 
-        let (browser, mut handler) = Browser::connect(ws_url)
+        // Configure browser with custom request timeout
+        let handler_config = chromiumoxide::handler::HandlerConfig {
+            request_timeout: Duration::from_secs(self.config.timeout),
+            ..Default::default()
+        };
+
+        let (browser, mut handler) = Browser::connect_with_config(ws_url, handler_config)
             .await
             .context("Failed to connect to remote browser")?;
 
@@ -408,6 +414,15 @@ impl BrowserFetcher {
         let browser = self.browser.as_ref().unwrap().lock().await;
         let page = browser.new_page("about:blank").await?;
 
+        // Use inner function to ensure page is always closed
+        let result = self.fetch_inner(&page, url).await;
+        let _ = page.close().await;
+        result
+    }
+
+    /// Inner fetch logic - page cleanup handled by caller.
+    async fn fetch_inner(&self, page: &Page, url: &str) -> Result<BrowserFetchResponse> {
+
         // Set realistic user agent first (before any navigation)
         let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         page.execute(SetUserAgentOverrideParams::new(user_agent.to_string()))
@@ -420,14 +435,18 @@ impl BrowserFetcher {
             }
         }
 
-        // Navigate to URL first
+        // Navigate to URL with timeout
         info!("Navigating to {}", url);
         let nav_params = NavigateParams::builder()
             .url(url)
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid URL: {}", e))?;
 
-        page.execute(nav_params).await?;
+        let nav_timeout = Duration::from_secs(self.config.timeout);
+        tokio::time::timeout(nav_timeout, page.execute(nav_params))
+            .await
+            .map_err(|_| anyhow::anyhow!("Navigation timed out after {}s for {}", self.config.timeout, url))?
+            .map_err(|e| anyhow::anyhow!("Navigation failed for {}: {}", url, e))?;
 
         // Wait for page to be ready before applying stealth scripts
         // This uses document.readyState instead of a fixed timeout
@@ -534,9 +553,6 @@ impl BrowserFetcher {
                 url
             );
         }
-
-        // Close the page to prevent tab accumulation
-        let _ = page.close().await;
 
         Ok(BrowserFetchResponse {
             url: url.to_string(),
@@ -758,6 +774,14 @@ impl BrowserFetcher {
             browser.new_page("about:blank").await?
         };
 
+        // Use inner function to ensure page is always closed
+        let result = self.fetch_binary_inner(&page, url).await;
+        let _ = page.close().await;
+        result
+    }
+
+    /// Inner binary fetch logic - page cleanup handled by caller.
+    async fn fetch_binary_inner(&self, page: &Page, url: &str) -> Result<BinaryFetchResponse> {
         info!("Fetching binary from {}", url);
 
         // Use JavaScript fetch to download the file
@@ -841,9 +865,6 @@ impl BrowserFetcher {
             data.len(),
             content_type
         );
-
-        // Close the page to prevent tab accumulation
-        let _ = page.close().await;
 
         Ok(BinaryFetchResponse {
             url: url.to_string(),
