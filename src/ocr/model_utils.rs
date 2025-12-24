@@ -113,10 +113,7 @@ pub fn download_file(url: &str, dest: &Path) -> Result<(), OcrError> {
 pub fn ensure_model_file(spec: &ModelSpec, model_dir: &Path) -> Result<(), OcrError> {
     let dest = model_dir.join(spec.filename);
     if !dest.exists() {
-        eprintln!(
-            "Downloading {} (~{})...",
-            spec.filename, spec.size_hint
-        );
+        eprintln!("Downloading {} (~{})...", spec.filename, spec.size_hint);
         download_file(spec.url, &dest)?;
         eprintln!("  ✓ Downloaded {}", spec.filename);
     }

@@ -66,9 +66,15 @@ pub struct DateEstimate {
 static DATE_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
         // ISO format with various separators: 2024-01-15, 2024_01_15, 2024/01/15
-        (Regex::new(r"(\d{4})[-_/](\d{2})[-_/](\d{2})").unwrap(), "ymd"),
+        (
+            Regex::new(r"(\d{4})[-_/](\d{2})[-_/](\d{2})").unwrap(),
+            "ymd",
+        ),
         // US format: 01-15-2024, 01_15_2024, 01/15/2024
-        (Regex::new(r"(\d{2})[-_/](\d{2})[-_/](\d{4})").unwrap(), "mdy"),
+        (
+            Regex::new(r"(\d{2})[-_/](\d{2})[-_/](\d{4})").unwrap(),
+            "mdy",
+        ),
         // Compact: 20240115
         (Regex::new(r"(\d{4})(\d{2})(\d{2})").unwrap(), "ymd_compact"),
         // Year-month only: 2024-01, 2024/01, 202401

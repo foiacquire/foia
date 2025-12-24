@@ -1,6 +1,9 @@
 //! Router configuration for the web server.
 
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use tower_http::cors::CorsLayer;
 
 use super::handlers;

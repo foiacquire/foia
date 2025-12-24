@@ -518,22 +518,10 @@ impl DocumentRepository {
         // Add date estimation and annotations for version 8
         if current_version < 8 {
             // Add estimated date columns to documents
-            let _ = conn.execute(
-                "ALTER TABLE documents ADD COLUMN estimated_date TEXT",
-                [],
-            );
-            let _ = conn.execute(
-                "ALTER TABLE documents ADD COLUMN date_confidence TEXT",
-                [],
-            );
-            let _ = conn.execute(
-                "ALTER TABLE documents ADD COLUMN date_source TEXT",
-                [],
-            );
-            let _ = conn.execute(
-                "ALTER TABLE documents ADD COLUMN manual_date TEXT",
-                [],
-            );
+            let _ = conn.execute("ALTER TABLE documents ADD COLUMN estimated_date TEXT", []);
+            let _ = conn.execute("ALTER TABLE documents ADD COLUMN date_confidence TEXT", []);
+            let _ = conn.execute("ALTER TABLE documents ADD COLUMN date_source TEXT", []);
+            let _ = conn.execute("ALTER TABLE documents ADD COLUMN manual_date TEXT", []);
             info!("Added date estimation columns to documents");
 
             // Create document_annotations table
@@ -1920,7 +1908,9 @@ impl DocumentRepository {
                     acquired_at: parse_datetime(&row.get::<_, String>(13)?),
                     source_url: None,
                     original_filename: row.get(14)?,
-                    server_date: row.get::<_, Option<String>>(15)?.map(|s| parse_datetime(&s)),
+                    server_date: row
+                        .get::<_, Option<String>>(15)?
+                        .map(|s| parse_datetime(&s)),
                     page_count: None,
                 }],
                 discovery_method: row.get(17)?,
@@ -3166,7 +3156,11 @@ impl DocumentRepository {
         let conn = self.connect()?;
         conn.execute(
             "UPDATE documents SET manual_date = ?, updated_at = ? WHERE id = ?",
-            params![manual_date.to_rfc3339(), Utc::now().to_rfc3339(), document_id],
+            params![
+                manual_date.to_rfc3339(),
+                Utc::now().to_rfc3339(),
+                document_id
+            ],
         )?;
         Ok(())
     }
@@ -3180,7 +3174,15 @@ impl DocumentRepository {
         &self,
         source_id: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<(String, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, Option<String>)>> {
+    ) -> Result<
+        Vec<(
+            String,
+            Option<String>,
+            Option<DateTime<Utc>>,
+            DateTime<Utc>,
+            Option<String>,
+        )>,
+    > {
         let conn = self.connect()?;
 
         let base_query = r#"
@@ -3205,7 +3207,8 @@ impl DocumentRepository {
         };
 
         let mut stmt = conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
             .query_map(params_refs.as_slice(), |row| {
@@ -3214,9 +3217,10 @@ impl DocumentRepository {
                     .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| dt.with_timezone(&Utc));
 
-                let acquired_at = DateTime::parse_from_rfc3339(&row.get::<_, String>("acquired_at")?)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let acquired_at =
+                    DateTime::parse_from_rfc3339(&row.get::<_, String>("acquired_at")?)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
 
                 Ok((
                     row.get::<_, String>("id")?,
@@ -3339,7 +3343,8 @@ impl DocumentRepository {
         };
 
         let mut stmt = conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
 
         let ids = stmt
             .query_map(params_refs.as_slice(), |row| row.get(0))?
@@ -3416,8 +3421,9 @@ impl DocumentRepository {
     pub fn get_pages_ocr_results_bulk(
         &self,
         page_ids: &[i64],
-    ) -> Result<std::collections::HashMap<i64, Vec<(String, Option<String>, Option<f64>, Option<i64>)>>>
-    {
+    ) -> Result<
+        std::collections::HashMap<i64, Vec<(String, Option<String>, Option<f64>, Option<i64>)>>,
+    > {
         if page_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -3439,8 +3445,10 @@ impl DocumentRepository {
         let mut stmt = conn.prepare(&query)?;
 
         // Convert page_ids to params
-        let params: Vec<&dyn rusqlite::ToSql> =
-            page_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let params: Vec<&dyn rusqlite::ToSql> = page_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
 
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok((
@@ -3459,10 +3467,12 @@ impl DocumentRepository {
 
         for row in rows {
             let (page_id, backend, ocr_text, confidence, processing_time_ms) = row?;
-            results
-                .entry(page_id)
-                .or_default()
-                .push((backend, ocr_text, confidence, processing_time_ms));
+            results.entry(page_id).or_default().push((
+                backend,
+                ocr_text,
+                confidence,
+                processing_time_ms,
+            ));
         }
 
         Ok(results)

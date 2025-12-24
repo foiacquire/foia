@@ -353,7 +353,10 @@ impl BrowserFetcher {
 
     /// Connect to a remote Chrome instance.
     async fn connect_remote(&mut self, url: &str) -> Result<()> {
-        info!("Connecting to remote browser at {} (timeout: {}s)", url, self.config.timeout);
+        info!(
+            "Connecting to remote browser at {} (timeout: {}s)",
+            url, self.config.timeout
+        );
 
         // Get WebSocket URL from the /json/version endpoint
         let http_url = url
@@ -422,7 +425,6 @@ impl BrowserFetcher {
 
     /// Inner fetch logic - page cleanup handled by caller.
     async fn fetch_inner(&self, page: &Page, url: &str) -> Result<BrowserFetchResponse> {
-
         // Set realistic user agent first (before any navigation)
         let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         page.execute(SetUserAgentOverrideParams::new(user_agent.to_string()))
@@ -445,7 +447,13 @@ impl BrowserFetcher {
         let nav_timeout = Duration::from_secs(self.config.timeout);
         tokio::time::timeout(nav_timeout, page.execute(nav_params))
             .await
-            .map_err(|_| anyhow::anyhow!("Navigation timed out after {}s for {}", self.config.timeout, url))?
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Navigation timed out after {}s for {}",
+                    self.config.timeout,
+                    url
+                )
+            })?
             .map_err(|e| anyhow::anyhow!("Navigation failed for {}: {}", url, e))?;
 
         // Wait for page to be ready before applying stealth scripts

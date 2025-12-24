@@ -72,12 +72,7 @@ impl ConfigHistoryRepository {
 
     /// Insert a new configuration entry if the hash doesn't already exist.
     /// Returns true if inserted, false if hash already exists.
-    pub fn insert_if_new(
-        &self,
-        data: &str,
-        format: &str,
-        hash: &str,
-    ) -> Result<bool> {
+    pub fn insert_if_new(&self, data: &str, format: &str, hash: &str) -> Result<bool> {
         if self.hash_exists(hash)? {
             return Ok(false);
         }

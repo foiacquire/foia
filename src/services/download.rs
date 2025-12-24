@@ -304,7 +304,8 @@ impl DownloadService {
 
                     let content_path = documents_dir.join(&content_hash[..2]).join(&filename);
 
-                    if let Err(e) = tokio::fs::create_dir_all(content_path.parent().unwrap()).await {
+                    if let Err(e) = tokio::fs::create_dir_all(content_path.parent().unwrap()).await
+                    {
                         failed.fetch_add(1, Ordering::Relaxed);
                         let _ = event_tx
                             .send(DownloadEvent::Failed {
@@ -463,11 +464,7 @@ async fn download_youtube_video(
             let server_date = yt_result.metadata.upload_date.as_ref().and_then(|d| {
                 chrono::NaiveDate::parse_from_str(d, "%Y%m%d")
                     .ok()
-                    .map(|nd| {
-                        nd.and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .and_utc()
-                    })
+                    .map(|nd| nd.and_hms_opt(0, 0, 0).unwrap().and_utc())
             });
 
             let version = DocumentVersion::new_with_metadata(

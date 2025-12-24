@@ -558,7 +558,6 @@ fn render_pdf_page_to_base64(pdf_path: &std::path::Path, page_number: u32) -> Op
     None
 }
 
-
 /// Serve a document file.
 pub async fn serve_file(State(state): State<AppState>, Path(path): Path<String>) -> Response {
     // Security: canonicalize documents_dir first, then validate the requested path
@@ -566,7 +565,11 @@ pub async fn serve_file(State(state): State<AppState>, Path(path): Path<String>)
     let canonical_docs_dir = match state.documents_dir.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server configuration error",
+            )
+                .into_response();
         }
     };
 
@@ -1425,7 +1428,10 @@ pub async fn browse_documents(
     // Always load type_stats - it's now O(1) from file_categories table
     let state_types = state.clone();
     let type_stats_handle = tokio::task::spawn_blocking(move || {
-        state_types.doc_repo.get_category_stats(None).unwrap_or_default()
+        state_types
+            .doc_repo
+            .get_category_stats(None)
+            .unwrap_or_default()
     });
 
     // Only load tags and sources when no filters (they're slower and less needed when filtering)
@@ -1439,7 +1445,10 @@ pub async fn browse_documents(
 
         let state_sources = state.clone();
         let sources_handle = Some(tokio::task::spawn_blocking(move || {
-            let counts = state_sources.doc_repo.get_all_source_counts().unwrap_or_default();
+            let counts = state_sources
+                .doc_repo
+                .get_all_source_counts()
+                .unwrap_or_default();
             let sources = state_sources.source_repo.get_all().unwrap_or_default();
             sources
                 .into_iter()
@@ -1507,14 +1516,19 @@ pub async fn browse_documents(
         tokio::spawn(async move {
             // Compute count in blocking task
             if let Ok(count) = tokio::task::spawn_blocking(move || {
-                state_for_count
-                    .doc_repo
-                    .browse_count(&types_bg, &tags_bg, source_bg.as_deref(), q_bg.as_deref())
+                state_for_count.doc_repo.browse_count(
+                    &types_bg,
+                    &tags_bg,
+                    source_bg.as_deref(),
+                    q_bg.as_deref(),
+                )
             })
             .await
             {
                 if let Ok(count) = count {
-                    state_for_cache.stats_cache.set_browse_count(cache_key, count);
+                    state_for_cache
+                        .stats_cache
+                        .set_browse_count(cache_key, count);
                 }
             }
         });
@@ -1686,7 +1700,10 @@ pub async fn api_reocr_document(
                     status: "busy".to_string(),
                     message: Some(format!(
                         "DeepSeek OCR is already running on document '{}' ({}/{} pages)",
-                        job_status.document_id.as_ref().unwrap_or(&"unknown".to_string()),
+                        job_status
+                            .document_id
+                            .as_ref()
+                            .unwrap_or(&"unknown".to_string()),
                         job_status.pages_processed,
                         job_status.total_pages
                     )),
@@ -1870,9 +1887,9 @@ pub async fn api_reocr_document(
                 Ok(Err(e)) => {
                     tracing::error!("OCR failed for page {}: {:?}", page_number, e);
                     // Store error as null text
-                    let _ = job_state.doc_repo.store_page_ocr_result(
-                        page_id, "deepseek", None, None, None,
-                    );
+                    let _ = job_state
+                        .doc_repo
+                        .store_page_ocr_result(page_id, "deepseek", None, None, None);
                 }
                 Err(e) => {
                     tracing::error!("Task panic for page {}: {:?}", page_number, e);
@@ -1924,9 +1941,15 @@ pub async fn api_reocr_status(State(state): State<AppState>) -> impl IntoRespons
     let (status, document_id) = if job_status.document_id.is_none() {
         ("idle".to_string(), String::new())
     } else if job_status.completed {
-        ("complete".to_string(), job_status.document_id.clone().unwrap_or_default())
+        (
+            "complete".to_string(),
+            job_status.document_id.clone().unwrap_or_default(),
+        )
     } else {
-        ("running".to_string(), job_status.document_id.clone().unwrap_or_default())
+        (
+            "running".to_string(),
+            job_status.document_id.clone().unwrap_or_default(),
+        )
     };
 
     axum::Json(ReOcrResponse {

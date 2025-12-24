@@ -850,7 +850,10 @@ impl ConfigurableScraper {
                             // Always log browser failures as warnings for visibility
                             warn!(
                                 "Browser fetch failed for {}: {} (failure #{}/{})",
-                                current_url, e, consecutive_browser_failures, total_browser_failures
+                                current_url,
+                                e,
+                                consecutive_browser_failures,
+                                total_browser_failures
                             );
                             continue;
                         }
@@ -999,24 +1002,22 @@ impl ConfigurableScraper {
                         // Enumerate the Google Drive folder
                         info!("Detected Google Drive folder: {}", url);
                         match DriveFolder::from_url(&url, client.clone()) {
-                            Ok(folder) => {
-                                match folder.list_files_recursive().await {
-                                    Ok(files) => {
-                                        info!(
-                                            "Enumerated {} files from Google Drive folder",
-                                            files.len()
-                                        );
-                                        for file in files {
-                                            if file.is_downloadable() {
-                                                gdrive_doc_urls.push(file.download_url);
-                                            }
+                            Ok(folder) => match folder.list_files_recursive().await {
+                                Ok(files) => {
+                                    info!(
+                                        "Enumerated {} files from Google Drive folder",
+                                        files.len()
+                                    );
+                                    for file in files {
+                                        if file.is_downloadable() {
+                                            gdrive_doc_urls.push(file.download_url);
                                         }
                                     }
-                                    Err(e) => {
-                                        warn!("Failed to enumerate Google Drive folder: {}", e);
-                                    }
                                 }
-                            }
+                                Err(e) => {
+                                    warn!("Failed to enumerate Google Drive folder: {}", e);
+                                }
+                            },
                             Err(e) => {
                                 warn!("Invalid Google Drive folder URL {}: {}", url, e);
                             }

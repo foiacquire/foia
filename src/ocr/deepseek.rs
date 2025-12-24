@@ -130,7 +130,6 @@ impl DeepSeekBackend {
         }
     }
 
-
     /// Convert a PDF page to an image.
     fn pdf_page_to_image(
         &self,

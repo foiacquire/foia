@@ -169,7 +169,15 @@ impl Document {
         version: DocumentVersion,
         metadata: serde_json::Value,
     ) -> Self {
-        Self::with_discovery_method(id, source_id, title, source_url, version, metadata, "import".to_string())
+        Self::with_discovery_method(
+            id,
+            source_id,
+            title,
+            source_url,
+            version,
+            metadata,
+            "import".to_string(),
+        )
     }
 
     /// Create a new document with explicit discovery method.

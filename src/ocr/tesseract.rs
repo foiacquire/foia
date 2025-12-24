@@ -31,7 +31,6 @@ impl TesseractBackend {
         Self { config }
     }
 
-
     /// Run Tesseract on an image file.
     fn run_tesseract(&self, image_path: &Path) -> Result<String, OcrError> {
         let output = Command::new("tesseract")

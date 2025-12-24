@@ -192,7 +192,9 @@ impl Config {
     /// Get the base directory for resolving relative paths.
     /// Returns the config file's parent directory if available, otherwise None.
     pub fn base_dir(&self) -> Option<PathBuf> {
-        self.source_path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        self.source_path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
     }
 
     /// Resolve a path that may be relative to the config file.
@@ -435,7 +437,10 @@ fn find_config_next_to_db(data_dir: &Path) -> Option<PathBuf> {
 /// Returns (Settings, Config) tuple.
 pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Config) {
     // If target is specified, resolve it first
-    let resolved_target = options.target.as_ref().map(|t| ResolvedTarget::from_path(t));
+    let resolved_target = options
+        .target
+        .as_ref()
+        .map(|t| ResolvedTarget::from_path(t));
 
     // Determine config loading order when --target is specified:
     // 1. Explicit --config flag
@@ -444,12 +449,16 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
     // 4. Auto-discover via prefer
     let config = if let Some(ref config_path) = options.config_path {
         // Explicit config path takes priority
-        Config::load_from_path(config_path).await.unwrap_or_default()
+        Config::load_from_path(config_path)
+            .await
+            .unwrap_or_default()
     } else if let Some(ref resolved) = resolved_target {
         // Check for config file next to database
         if let Some(config_path) = find_config_next_to_db(&resolved.data_dir) {
             tracing::debug!("Found config next to database: {}", config_path.display());
-            Config::load_from_path(&config_path).await.unwrap_or_default()
+            Config::load_from_path(&config_path)
+                .await
+                .unwrap_or_default()
         } else if resolved.database_path.exists() {
             // Try to load from database history
             tracing::debug!(
@@ -475,9 +484,9 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
     let base_dir = if options.use_cwd {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {
-        config.base_dir().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        })
+        config
+            .base_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     };
 
     config.apply_to_settings(&mut settings, &base_dir);

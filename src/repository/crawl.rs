@@ -422,9 +422,10 @@ impl CrawlRepository {
         )?;
 
         let urls = stmt
-            .query_map(params![source_id, now_str, exhausted_cutoff, limit], |row| {
-                self.row_to_crawl_url(row)
-            })?
+            .query_map(
+                params![source_id, now_str, exhausted_cutoff, limit],
+                |row| self.row_to_crawl_url(row),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(urls)
@@ -801,8 +802,10 @@ impl CrawlRepository {
         }
 
         // Bulk query 2: Get timing info for all sources
-        let mut timing_by_source: HashMap<String, (Option<String>, Option<String>, Option<String>)> =
-            HashMap::new();
+        let mut timing_by_source: HashMap<
+            String,
+            (Option<String>, Option<String>, Option<String>),
+        > = HashMap::new();
         {
             let mut stmt = conn.prepare(
                 r#"

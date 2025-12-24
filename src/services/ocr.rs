@@ -376,7 +376,9 @@ impl OcrService {
         _event_tx: mpsc::Sender<OcrEvent>,
     ) -> anyhow::Result<()> {
         // Get the document
-        let doc = self.doc_repo.get(doc_id)?
+        let doc = self
+            .doc_repo
+            .get(doc_id)?
             .ok_or_else(|| anyhow::anyhow!("Document not found: {}", doc_id))?;
 
         println!("  {} Processing: {}", console::style("→").cyan(), doc.title);
@@ -384,7 +386,11 @@ impl OcrService {
         // Extract text per-page
         match extract_document_text_per_page(&doc, &self.doc_repo) {
             Ok(pages) => {
-                println!("  {} Extracted {} pages", console::style("✓").green(), pages);
+                println!(
+                    "  {} Extracted {} pages",
+                    console::style("✓").green(),
+                    pages
+                );
             }
             Err(e) => {
                 println!("  {} Failed: {}", console::style("✗").red(), e);

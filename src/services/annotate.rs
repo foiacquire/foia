@@ -231,7 +231,9 @@ impl AnnotationService {
         event_tx: mpsc::Sender<AnnotationEvent>,
     ) -> anyhow::Result<()> {
         // Get the document
-        let doc = self.doc_repo.get(doc_id)?
+        let doc = self
+            .doc_repo
+            .get(doc_id)?
             .ok_or_else(|| anyhow::anyhow!("Document not found: {}", doc_id))?;
 
         let _ = event_tx
@@ -263,7 +265,10 @@ impl AnnotationService {
         let text = match self.doc_repo.get_combined_page_text(doc_id, version_id) {
             Ok(Some(t)) if !t.is_empty() => t,
             _ => {
-                println!("  {} No text available for annotation", console::style("!").yellow());
+                println!(
+                    "  {} No text available for annotation",
+                    console::style("!").yellow()
+                );
                 let _ = event_tx
                     .send(AnnotationEvent::DocumentSkipped {
                         document_id: doc.id.clone(),
@@ -273,7 +278,11 @@ impl AnnotationService {
             }
         };
 
-        println!("  {} Generating annotation for: {}", console::style("→").cyan(), doc.title);
+        println!(
+            "  {} Generating annotation for: {}",
+            console::style("→").cyan(),
+            doc.title
+        );
 
         // Generate annotation
         match self.llm_client.summarize(&text, &doc.title).await {
@@ -287,10 +296,17 @@ impl AnnotationService {
 
                 self.doc_repo.save(&updated_doc)?;
 
-                println!("  {} Synopsis: {}", console::style("✓").green(),
-                    result.synopsis.chars().take(100).collect::<String>());
+                println!(
+                    "  {} Synopsis: {}",
+                    console::style("✓").green(),
+                    result.synopsis.chars().take(100).collect::<String>()
+                );
                 if !result.tags.is_empty() {
-                    println!("  {} Tags: {}", console::style("✓").green(), result.tags.join(", "));
+                    println!(
+                        "  {} Tags: {}",
+                        console::style("✓").green(),
+                        result.tags.join(", ")
+                    );
                 }
 
                 let _ = event_tx

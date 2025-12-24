@@ -459,7 +459,16 @@ pub async fn run() -> anyhow::Result<()> {
             workers,
             limit,
             ..
-        } => cmd_ocr(&settings, source_id.as_deref(), doc_id.as_deref(), workers, limit).await,
+        } => {
+            cmd_ocr(
+                &settings,
+                source_id.as_deref(),
+                doc_id.as_deref(),
+                workers,
+                limit,
+            )
+            .await
+        }
         Commands::OcrCheck => cmd_ocr_check().await,
         Commands::OcrCompare {
             file,
@@ -474,8 +483,22 @@ pub async fn run() -> anyhow::Result<()> {
             limit,
             force,
         } => cmd_refresh(&settings, source_id.as_deref(), workers, limit, force).await,
-        Commands::Annotate { source_id, doc_id, limit, endpoint, model } => {
-            cmd_annotate(&settings, source_id.as_deref(), doc_id.as_deref(), limit, endpoint, model).await
+        Commands::Annotate {
+            source_id,
+            doc_id,
+            limit,
+            endpoint,
+            model,
+        } => {
+            cmd_annotate(
+                &settings,
+                source_id.as_deref(),
+                doc_id.as_deref(),
+                limit,
+                endpoint,
+                model,
+            )
+            .await
         }
         Commands::DetectDates {
             source_id,
@@ -521,7 +544,20 @@ pub async fn run() -> anyhow::Result<()> {
             dry_run,
             no_resume,
             checkpoint_interval,
-        } => cmd_import(&settings, &files, source.as_deref(), filter.as_deref(), limit, scan_limit, dry_run, !no_resume, checkpoint_interval).await,
+        } => {
+            cmd_import(
+                &settings,
+                &files,
+                source.as_deref(),
+                filter.as_deref(),
+                limit,
+                scan_limit,
+                dry_run,
+                !no_resume,
+                checkpoint_interval,
+            )
+            .await
+        }
         Commands::Discover {
             source_id,
             limit,
@@ -653,11 +689,7 @@ async fn cmd_source_rename(
     // Check old source exists
     let old_source = source_repo.get(old_id)?;
     if old_source.is_none() {
-        println!(
-            "{} Source '{}' not found",
-            style("✗").red(),
-            old_id
-        );
+        println!("{} Source '{}' not found", style("✗").red(), old_id);
         return Ok(());
     }
 
@@ -754,20 +786,27 @@ async fn cmd_crawl_status(settings: &Settings, source_id: Option<String>) -> any
 
     // Use bulk queries when loading all sources (avoids N+1)
     let (all_states, all_stats) = if source_id.is_none() {
-        (crawl_repo.get_all_stats()?, crawl_repo.get_all_request_stats()?)
+        (
+            crawl_repo.get_all_stats()?,
+            crawl_repo.get_all_request_stats()?,
+        )
     } else {
-        (std::collections::HashMap::new(), std::collections::HashMap::new())
+        (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        )
     };
 
     for source in sources {
         // Use bulk-loaded data when available, otherwise fetch individually
         let state = if source_id.is_none() {
-            all_states.get(&source.id).cloned().unwrap_or_else(|| {
-                crate::models::CrawlState {
+            all_states
+                .get(&source.id)
+                .cloned()
+                .unwrap_or_else(|| crate::models::CrawlState {
                     source_id: source.id.clone(),
                     ..Default::default()
-                }
-            })
+                })
         } else {
             crawl_repo.get_crawl_state(&source.id)?
         };
@@ -1649,9 +1688,15 @@ async fn cmd_ocr_check() -> anyhow::Result<()> {
     if tesseract.is_available() {
         println!("  {} Tesseract (used for all sources)", style("→").green());
     } else {
-        println!("  {} None available - install tesseract-ocr", style("!").yellow());
+        println!(
+            "  {} None available - install tesseract-ocr",
+            style("!").yellow()
+        );
     }
-    println!("  {}", style("Note: Per-source OCR backend config not yet available").dim());
+    println!(
+        "  {}",
+        style("Note: Per-source OCR backend config not yet available").dim()
+    );
 
     println!();
 
@@ -1776,10 +1821,7 @@ fn parse_backend_configs(backends_str: &str) -> Result<Vec<BackendConfig>, Strin
             }
             Some("cpu") => false,
             Some(other) => {
-                return Err(format!(
-                    "Unknown device '{}'. Use :gpu or :cpu",
-                    other
-                ));
+                return Err(format!("Unknown device '{}'. Use :gpu or :cpu", other));
             }
             None => {
                 // Defaults: deepseek -> GPU (CPU is impractically slow), others -> CPU
@@ -1836,8 +1878,8 @@ async fn cmd_ocr_compare(
     };
 
     // Parse requested backends with their configurations
-    let backend_configs = parse_backend_configs(backends_str)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let backend_configs =
+        parse_backend_configs(backends_str).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     if backend_configs.is_empty() {
         anyhow::bail!("No valid backends specified");
@@ -2147,7 +2189,9 @@ async fn cmd_ocr(
         }
         println!();
         println!("Install the missing tools, then run: foiacquire ocr-check");
-        return Err(anyhow::anyhow!("Missing required tools. Run 'foiacquire ocr-check' for install instructions."));
+        return Err(anyhow::anyhow!(
+            "Missing required tools. Run 'foiacquire ocr-check' for install instructions."
+        ));
     }
 
     let db_path = settings.database_path();
@@ -2941,7 +2985,11 @@ async fn cmd_detect_dates(
         return Ok(());
     }
 
-    let effective_limit = if limit > 0 { limit } else { total_count as usize };
+    let effective_limit = if limit > 0 {
+        limit
+    } else {
+        total_count as usize
+    };
 
     if dry_run {
         println!(
@@ -3980,7 +4028,10 @@ async fn cmd_import(
 
     // Pre-load all existing URLs into a HashSet for O(1) duplicate detection.
     // This is much faster than querying the DB for each WARC record.
-    println!("{} Loading existing URLs for duplicate detection...", style("→").cyan());
+    println!(
+        "{} Loading existing URLs for duplicate detection...",
+        style("→").cyan()
+    );
     let mut existing_urls: HashSet<String> = doc_repo.get_all_urls_set().unwrap_or_default();
     println!("  {} existing URLs loaded", existing_urls.len());
 
@@ -4028,7 +4079,10 @@ async fn cmd_import(
     };
 
     if dry_run {
-        println!("{} Dry run mode - no changes will be made", style("!").yellow());
+        println!(
+            "{} Dry run mode - no changes will be made",
+            style("!").yellow()
+        );
     }
 
     let mut total_imported = 0;
@@ -4046,7 +4100,11 @@ async fn cmd_import(
         );
 
         if !warc_path.exists() {
-            println!("{} File not found: {}", style("✗").red(), warc_path.display());
+            println!(
+                "{} File not found: {}",
+                style("✗").red(),
+                warc_path.display()
+            );
             total_errors += 1;
             continue;
         }
@@ -4060,12 +4118,8 @@ async fn cmd_import(
         );
 
         // Detect if gzipped (needed before parsing progress)
-        let is_gzip = warc_path
-            .extension()
-            .is_some_and(|ext| ext == "gz")
-            || warc_path
-                .to_string_lossy()
-                .contains(".warc.gz");
+        let is_gzip = warc_path.extension().is_some_and(|ext| ext == "gz")
+            || warc_path.to_string_lossy().contains(".warc.gz");
 
         // Read previous progress if resuming
         // Format: "done", "offset:12345" (byte offset for uncompressed), or "error:message"
@@ -4076,10 +4130,7 @@ async fn cmd_import(
             if let Ok(progress_str) = std::fs::read_to_string(&progress_path) {
                 let progress_str = progress_str.trim();
                 if progress_str == "done" {
-                    println!(
-                        "  {} Already fully processed, skipping",
-                        style("✓").green()
-                    );
+                    println!("  {} Already fully processed, skipping", style("✓").green());
                     file_fully_processed = true;
                 } else if let Some(error_msg) = progress_str.strip_prefix("error:") {
                     println!(
@@ -4137,14 +4188,20 @@ async fn cmd_import(
 
                     // Check import limit
                     if limit > 0 && total_imported >= limit {
-                        pb.finish_with_message(format!("Import limit reached ({} documents)", limit));
+                        pb.finish_with_message(format!(
+                            "Import limit reached ({} documents)",
+                            limit
+                        ));
                         file_completed = false;
                         break;
                     }
 
                     // Check scan limit
                     if scan_limit > 0 && total_scanned >= scan_limit {
-                        pb.finish_with_message(format!("Scan limit reached ({} records)", scan_limit));
+                        pb.finish_with_message(format!(
+                            "Scan limit reached ({} records)",
+                            scan_limit
+                        ));
                         file_completed = false;
                         break;
                     }
@@ -4152,7 +4209,10 @@ async fn cmd_import(
                     total_scanned += 1;
 
                     // Write checkpoint at intervals (uncompressed files only)
-                    if $can_checkpoint && resume && !dry_run && checkpoint_interval > 0
+                    if $can_checkpoint
+                        && resume
+                        && !dry_run
+                        && checkpoint_interval > 0
                         && file_records_processed % checkpoint_interval == 0
                     {
                         if let Some(ref tracker) = $position_tracker {
@@ -4392,9 +4452,7 @@ async fn cmd_import(
 fn parse_http_response(data: &[u8]) -> Option<(HttpResponseHeaders, &[u8])> {
     // Find header/body separator (double CRLF)
     let separator = b"\r\n\r\n";
-    let sep_pos = data
-        .windows(separator.len())
-        .position(|w| w == separator)?;
+    let sep_pos = data.windows(separator.len()).position(|w| w == separator)?;
 
     let header_bytes = &data[..sep_pos];
     let body = &data[sep_pos + separator.len()..];
@@ -4415,14 +4473,7 @@ fn parse_http_response(data: &[u8]) -> Option<(HttpResponseHeaders, &[u8])> {
             let value = value.trim();
             if key == "content-type" {
                 // Extract just the MIME type, not charset etc.
-                content_type = Some(
-                    value
-                        .split(';')
-                        .next()
-                        .unwrap_or(value)
-                        .trim()
-                        .to_string(),
-                );
+                content_type = Some(value.split(';').next().unwrap_or(value).trim().to_string());
             }
         }
     }
@@ -4491,7 +4542,11 @@ async fn cmd_discover(
     // Get just the URLs for this source (lightweight query)
     let urls = doc_repo.get_urls_by_source(source_id)?;
     if urls.is_empty() {
-        println!("{} No documents found for source {}", style("!").yellow(), source_id);
+        println!(
+            "{} No documents found for source {}",
+            style("!").yellow(),
+            source_id
+        );
         return Ok(());
     }
 
@@ -4509,8 +4564,15 @@ async fn cmd_discover(
     // Sample URLs if there are too many (parent dirs converge quickly)
     let sample_size = 10000.min(urls.len());
     let sample_urls: Vec<_> = if urls.len() > sample_size {
-        println!("  Sampling {} of {} URLs for directory analysis", sample_size, urls.len());
-        urls.iter().step_by(urls.len() / sample_size).take(sample_size).collect()
+        println!(
+            "  Sampling {} of {} URLs for directory analysis",
+            sample_size,
+            urls.len()
+        );
+        urls.iter()
+            .step_by(urls.len() / sample_size)
+            .take(sample_size)
+            .collect()
     } else {
         urls.iter().collect()
     };
@@ -4552,10 +4614,7 @@ async fn cmd_discover(
         }
     }
 
-    println!(
-        "  Found {} unique parent directories",
-        parent_dirs.len()
-    );
+    println!("  Found {} unique parent directories", parent_dirs.len());
 
     // === PHASE 2: Numeric Pattern Enumeration ===
     println!(
@@ -4751,16 +4810,16 @@ async fn cmd_discover(
         .filter(|u| !existing_urls.contains(u) && !queued_urls.contains(u))
         .collect();
 
-    println!(
-        "\n{} Summary:",
-        style("📊").cyan()
-    );
+    println!("\n{} Summary:", style("📊").cyan());
     println!("  {} parent directories to explore", new_parent_dirs.len());
     println!("  {} candidate URLs from patterns", new_urls.len());
 
     let total_new = new_parent_dirs.len() + new_urls.len();
     if total_new == 0 {
-        println!("\n{} No new URLs to discover (all already queued or fetched)", style("!").yellow());
+        println!(
+            "\n{} No new URLs to discover (all already queued or fetched)",
+            style("!").yellow()
+        );
         return Ok(());
     }
 
@@ -4772,7 +4831,10 @@ async fn cmd_discover(
             println!("    {}", url);
         }
         if new_parent_dirs.len() > 10 {
-            println!("    ... and {} more directories", new_parent_dirs.len() - 10);
+            println!(
+                "    ... and {} more directories",
+                new_parent_dirs.len() - 10
+            );
         }
 
         println!("\n  Pattern-enumerated URLs:");
@@ -4821,11 +4883,7 @@ async fn cmd_discover(
             }
         }
 
-        println!(
-            "{} Added {} URLs to crawl queue",
-            style("✓").green(),
-            added
-        );
+        println!("{} Added {} URLs to crawl queue", style("✓").green(), added);
         println!(
             "  Run {} to crawl discovered URLs",
             style(format!("foiacquire crawl {}", source_id)).cyan()
@@ -4889,12 +4947,7 @@ async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyhow::R
         };
         scrapers.insert(source.id.clone(), scraper_config);
 
-        eprintln!(
-            "  {} {} ({})",
-            style("→").dim(),
-            source.id,
-            source.base_url
-        );
+        eprintln!("  {} {} ({})", style("→").dim(), source.id, source.base_url);
     }
 
     // Build the config
@@ -4931,10 +4984,7 @@ async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyhow::R
             "{} This is a skeleton config. Discovery/fetch rules must be added manually.",
             style("Note:").yellow().bold()
         );
-        eprintln!(
-            "  See {} for examples.",
-            style("etc/example.json").cyan()
-        );
+        eprintln!("  See {} for examples.", style("etc/example.json").cyan());
     }
 
     Ok(())
@@ -4956,9 +5006,9 @@ async fn cmd_config_restore(settings: &Settings, output: Option<&Path>) -> anyho
         .ok_or_else(|| anyhow::anyhow!("No configuration history found in database"))?;
 
     // Determine output path
-    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        settings.data_dir.join("foiacquire.json")
-    });
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| settings.data_dir.join("foiacquire.json"));
 
     // Write the config
     let mut file = std::fs::File::create(&output_path)?;

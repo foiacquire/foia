@@ -110,8 +110,8 @@ pub struct DriveFolder {
 impl DriveFolder {
     /// Create a new folder enumerator from a folder URL.
     pub fn from_url(url: &str, client: HttpClient) -> Result<Self, GoogleDriveError> {
-        let folder_id = extract_folder_id(url)
-            .ok_or_else(|| GoogleDriveError::InvalidUrl(url.to_string()))?;
+        let folder_id =
+            extract_folder_id(url).ok_or_else(|| GoogleDriveError::InvalidUrl(url.to_string()))?;
 
         Ok(Self { folder_id, client })
     }
@@ -194,10 +194,7 @@ impl DriveFolder {
                 "https://drive.google.com/drive/folders/{}?pageToken={}",
                 self.folder_id, token
             ),
-            None => format!(
-                "https://drive.google.com/drive/folders/{}",
-                self.folder_id
-            ),
+            None => format!("https://drive.google.com/drive/folders/{}", self.folder_id),
         };
 
         let response = self
@@ -210,10 +207,7 @@ impl DriveFolder {
             if response.status == 429 {
                 return Err(GoogleDriveError::RateLimited);
             }
-            return Err(GoogleDriveError::Http(format!(
-                "HTTP {}",
-                response.status
-            )));
+            return Err(GoogleDriveError::Http(format!("HTTP {}", response.status)));
         }
 
         let html = response
@@ -525,9 +519,14 @@ mod tests {
     fn test_guess_mime_type() {
         assert_eq!(guess_mime_type_from_name("document.pdf"), "application/pdf");
         assert_eq!(guess_mime_type_from_name("DOCUMENT.PDF"), "application/pdf");
-        assert_eq!(guess_mime_type_from_name("file.docx"),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        assert_eq!(
+            guess_mime_type_from_name("file.docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
         assert_eq!(guess_mime_type_from_name("image.jpg"), "image/jpeg");
-        assert_eq!(guess_mime_type_from_name("unknown"), "application/octet-stream");
+        assert_eq!(
+            guess_mime_type_from_name("unknown"),
+            "application/octet-stream"
+        );
     }
 }

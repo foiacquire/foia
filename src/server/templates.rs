@@ -1206,7 +1206,8 @@ pub fn browse_page(
 
     // Build type toggle switches - show loading placeholder if empty
     let type_toggles = if type_stats.is_empty() {
-        r#"<span class="loading-placeholder" id="types-loading">Loading types...</span>"#.to_string()
+        r#"<span class="loading-placeholder" id="types-loading">Loading types...</span>"#
+            .to_string()
     } else {
         let mut toggles = String::new();
         for (cat_id, cat_name) in TYPE_CATEGORIES {
@@ -1216,11 +1217,12 @@ pub fn browse_page(
                 .map(|(_, n)| *n)
                 .unwrap_or(0);
             if count > 0 {
-                let checked = if active_types.is_empty() || active_types.iter().any(|t| t == *cat_id) {
-                    "checked"
-                } else {
-                    ""
-                };
+                let checked =
+                    if active_types.is_empty() || active_types.iter().any(|t| t == *cat_id) {
+                        "checked"
+                    } else {
+                        ""
+                    };
                 toggles.push_str(&format!(
                     r#"<label class="type-toggle">
                         <input type="checkbox" name="type" value="{}" {} data-count="{}">
@@ -1265,9 +1267,18 @@ pub fn browse_page(
     // Build source dropdown options - show loading if empty
     let source_options = if sources.is_empty() {
         let active_opt = active_source
-            .map(|s| format!(r#"<option value="{}" selected>{}</option>"#, html_escape(s), html_escape(s)))
+            .map(|s| {
+                format!(
+                    r#"<option value="{}" selected>{}</option>"#,
+                    html_escape(s),
+                    html_escape(s)
+                )
+            })
             .unwrap_or_default();
-        format!(r#"<option value="">Loading sources...</option>{}"#, active_opt)
+        format!(
+            r#"<option value="">Loading sources...</option>{}"#,
+            active_opt
+        )
     } else {
         let mut opts = String::from(r#"<option value="">All Sources</option>"#);
         for (source_id, source_name, count) in sources {
