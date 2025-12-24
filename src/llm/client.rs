@@ -119,6 +119,51 @@ impl LlmConfig {
         *self == Self::default()
     }
 
+    /// Apply environment variable overrides.
+    ///
+    /// Supported env vars:
+    /// - `LLM_ENABLED`: "true" or "false"
+    /// - `LLM_ENDPOINT`: Ollama API endpoint
+    /// - `LLM_MODEL`: Model name
+    /// - `LLM_MAX_TOKENS`: Maximum tokens in response
+    /// - `LLM_TEMPERATURE`: Generation temperature (0.0-1.0)
+    /// - `LLM_MAX_CONTENT_CHARS`: Max document chars to send
+    /// - `LLM_SYNOPSIS_PROMPT`: Custom synopsis prompt
+    /// - `LLM_TAGS_PROMPT`: Custom tags prompt
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Ok(val) = std::env::var("LLM_ENABLED") {
+            self.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("LLM_ENDPOINT") {
+            self.endpoint = val;
+        }
+        if let Ok(val) = std::env::var("LLM_MODEL") {
+            self.model = val;
+        }
+        if let Ok(val) = std::env::var("LLM_MAX_TOKENS") {
+            if let Ok(n) = val.parse() {
+                self.max_tokens = n;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_TEMPERATURE") {
+            if let Ok(t) = val.parse() {
+                self.temperature = t;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MAX_CONTENT_CHARS") {
+            if let Ok(n) = val.parse() {
+                self.max_content_chars = n;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_SYNOPSIS_PROMPT") {
+            self.synopsis_prompt = Some(val);
+        }
+        if let Ok(val) = std::env::var("LLM_TAGS_PROMPT") {
+            self.tags_prompt = Some(val);
+        }
+        self
+    }
+
     pub fn with_endpoint(mut self, endpoint: &str) -> Self {
         self.endpoint = endpoint.to_string();
         self

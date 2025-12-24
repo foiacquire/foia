@@ -1,0 +1,192 @@
+name: Docker
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'Dockerfile*'
+      - 'bin/entrypoint.sh'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+
+jobs:
+  chromium:
+    name: Build Chromium Image
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: monokrome
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: monokrome/chromium
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.chromium
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chromium-stealth:
+    name: Build Chromium Stealth Image
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: monokrome
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Create stealth entrypoint
+        run: |
+          cat > bin/entrypoint-stealth.sh << 'EOF'
+          #!/bin/sh
+          chromium-browser \
+              --headless \
+              --no-sandbox \
+              --disable-gpu \
+              --disable-dev-shm-usage \
+              --disable-software-rasterizer \
+              --disable-blink-features=AutomationControlled \
+              --disable-infobars \
+              --disable-background-networking \
+              --disable-sync \
+              --disable-translate \
+              --no-first-run \
+              --no-default-browser-check \
+              --remote-debugging-port=9223 \
+              "$@" &
+          sleep 2
+          exec socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223
+          EOF
+          chmod +x bin/entrypoint-stealth.sh
+
+      - name: Create stealth Dockerfile
+        run: |
+          cat > Dockerfile.chromium-stealth << 'EOF'
+          FROM alpine:latest
+          RUN apk add --no-cache chromium font-noto socat
+          RUN adduser -D chrome
+          USER chrome
+          EXPOSE 9222
+          COPY --chown=chrome:chrome bin/entrypoint-stealth.sh /entrypoint.sh
+          ENTRYPOINT ["/entrypoint.sh"]
+          CMD []
+          EOF
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: monokrome/chromium
+          tags: |
+            type=raw,value=stealth,enable={{is_default_branch}}
+            type=raw,value=stealth-{{tag}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.chromium-stealth
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  foiacquire:
+    name: Build FOIAcquire Image
+    runs-on: ubuntu-latest
+    environment: release
+    strategy:
+      matrix:
+        include:
+          - tag: latest
+            features: browser
+            tesseract: "false"
+          - tag: tesseract
+            features: browser
+            tesseract: "true"
+          - tag: ocrs
+            features: browser,ocr-ocrs
+            tesseract: "false"
+          - tag: paddle
+            features: browser,ocr-paddle
+            tesseract: "false"
+          - tag: redis
+            features: browser,redis-backend
+            tesseract: "false"
+          - tag: annotate
+            features: browser
+            tesseract: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: monokrome
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: monokrome/foiacquire
+          tags: |
+            type=raw,value=${{ matrix.tag }},enable={{is_default_branch}}
+            type=raw,value=${{ matrix.tag }}-{{tag}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            FEATURES=${{ matrix.features }}
+            WITH_TESSERACT=${{ matrix.tesseract }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

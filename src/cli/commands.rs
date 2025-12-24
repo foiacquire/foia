@@ -187,6 +187,12 @@ enum Commands {
         /// Limit number of documents to process (0 = unlimited)
         #[arg(short, long, default_value = "0")]
         limit: usize,
+        /// LLM API endpoint (e.g., http://localhost:11434)
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// LLM model name (e.g., dolphin-llama3:8b)
+        #[arg(long)]
+        model: Option<String>,
     },
 
     /// Detect and estimate publication dates for documents
@@ -468,8 +474,8 @@ pub async fn run() -> anyhow::Result<()> {
             limit,
             force,
         } => cmd_refresh(&settings, source_id.as_deref(), workers, limit, force).await,
-        Commands::Annotate { source_id, doc_id, limit } => {
-            cmd_annotate(&settings, source_id.as_deref(), doc_id.as_deref(), limit).await
+        Commands::Annotate { source_id, doc_id, limit, endpoint, model } => {
+            cmd_annotate(&settings, source_id.as_deref(), doc_id.as_deref(), limit, endpoint, model).await
         }
         Commands::DetectDates {
             source_id,
@@ -2756,6 +2762,8 @@ async fn cmd_annotate(
     source_id: Option<&str>,
     doc_id: Option<&str>,
     limit: usize,
+    endpoint: Option<String>,
+    model: Option<String>,
 ) -> anyhow::Result<()> {
     use crate::services::{AnnotationEvent, AnnotationService};
     use tokio::sync::mpsc;
@@ -2766,7 +2774,16 @@ async fn cmd_annotate(
     // Load config for LLM settings
     let config = Config::load().await;
 
-    if !config.llm.enabled {
+    // Apply CLI overrides
+    let mut llm_config = config.llm.clone();
+    if let Some(ep) = endpoint {
+        llm_config.endpoint = ep;
+    }
+    if let Some(m) = model {
+        llm_config.model = m;
+    }
+
+    if !llm_config.enabled {
         println!(
             "{} LLM annotation is disabled in configuration",
             style("!").yellow()
@@ -2776,14 +2793,14 @@ async fn cmd_annotate(
     }
 
     // Create service
-    let service = AnnotationService::new(doc_repo, config.llm.clone());
+    let service = AnnotationService::new(doc_repo, llm_config.clone());
 
     // Check if LLM service is available
     if !service.is_available().await {
         println!(
             "{} LLM service not available at {}",
             style("✗").red(),
-            config.llm.endpoint
+            llm_config.endpoint
         );
         println!("  Make sure Ollama is running: ollama serve");
         return Ok(());
@@ -2792,8 +2809,8 @@ async fn cmd_annotate(
     println!(
         "{} Connected to LLM at {} (model: {})",
         style("✓").green(),
-        config.llm.endpoint,
-        config.llm.model
+        llm_config.endpoint,
+        llm_config.model
     );
 
     // If specific doc_id provided, process just that document

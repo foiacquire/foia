@@ -145,7 +145,11 @@ impl Config {
                     pref_config.get("default_refresh_ttl_days").await.ok();
                 let scrapers: HashMap<String, ScraperConfig> =
                     pref_config.get("scrapers").await.unwrap_or_default();
-                let llm: LlmConfig = pref_config.get("llm").await.unwrap_or_default();
+                let llm: LlmConfig = pref_config
+                    .get::<LlmConfig>("llm")
+                    .await
+                    .unwrap_or_default()
+                    .with_env_overrides();
 
                 // Get the source path from prefer
                 let source_path = pref_config.source_path().cloned();
@@ -181,6 +185,7 @@ impl Config {
             .map_err(|e| format!("Failed to parse config file: {}", e))?;
 
         config.source_path = Some(path.to_path_buf());
+        config.llm = config.llm.with_env_overrides();
         Ok(config)
     }
 
