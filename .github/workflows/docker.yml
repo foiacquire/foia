@@ -18,8 +18,29 @@ env:
   REGISTRY: docker.io
 
 jobs:
+  lint:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --all-features -- -D warnings
+
   chromium:
     name: Build Chromium Image
+    needs: lint
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -58,6 +79,7 @@ jobs:
 
   chromium-stealth:
     name: Build Chromium Stealth Image
+    needs: lint
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -132,6 +154,7 @@ jobs:
 
   foiacquire:
     name: Build FOIAcquire Image
+    needs: lint
     runs-on: ubuntu-latest
     environment: release
     strategy:
