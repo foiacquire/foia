@@ -1803,6 +1803,7 @@ impl DocumentRepository {
     ///
     /// If `cached_total` is provided, it will be used instead of computing the count.
     /// This allows the caller to provide a cached count for better performance.
+    #[allow(clippy::too_many_arguments)]
     pub fn browse(
         &self,
         types: &[String],
@@ -3170,6 +3171,7 @@ impl DocumentRepository {
     /// - estimated_date is NULL
     /// - manual_date is NULL
     /// - No "date_detection" annotation exists (hasn't been processed yet)
+    #[allow(clippy::type_complexity)]
     pub fn get_documents_needing_date_estimation(
         &self,
         source_id: Option<&str>,
@@ -3388,6 +3390,7 @@ impl DocumentRepository {
     }
 
     /// Get all OCR results for a page (including alternative backends).
+    #[allow(clippy::type_complexity)]
     pub fn get_page_ocr_results(
         &self,
         page_id: i64,
@@ -3418,6 +3421,7 @@ impl DocumentRepository {
 
     /// Get OCR results for multiple pages in a single query (avoids N+1).
     /// Returns a HashMap of page_id -> Vec<(backend, ocr_text, confidence, processing_time_ms)>.
+    #[allow(clippy::type_complexity)]
     pub fn get_pages_ocr_results_bulk(
         &self,
         page_ids: &[i64],
@@ -3460,6 +3464,7 @@ impl DocumentRepository {
             ))
         })?;
 
+        #[allow(clippy::type_complexity)]
         let mut results: std::collections::HashMap<
             i64,
             Vec<(String, Option<String>, Option<f64>, Option<i64>)>,

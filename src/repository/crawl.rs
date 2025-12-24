@@ -802,6 +802,7 @@ impl CrawlRepository {
         }
 
         // Bulk query 2: Get timing info for all sources
+        #[allow(clippy::type_complexity)]
         let mut timing_by_source: HashMap<
             String,
             (Option<String>, Option<String>, Option<String>),

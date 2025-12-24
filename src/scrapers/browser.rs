@@ -433,7 +433,7 @@ impl BrowserFetcher {
         // Load cookies if configured (before navigation)
         if let Some(ref cookies_file) = self.config.cookies_file {
             if cookies_file.exists() {
-                self.load_cookies(&page, cookies_file).await?;
+                self.load_cookies(page, cookies_file).await?;
             }
         }
 
@@ -500,7 +500,7 @@ impl BrowserFetcher {
 
         // Apply stealth scripts AFTER page is ready (they need a real page context)
         if self.config.engine == BrowserEngineType::Stealth {
-            self.apply_stealth(&page).await?;
+            self.apply_stealth(page).await?;
         }
 
         // Additional wait for dynamic content to render

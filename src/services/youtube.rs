@@ -17,12 +17,13 @@ pub fn is_youtube_url(url: &str) -> bool {
 }
 
 /// Extract video ID from YouTube URL.
+#[allow(dead_code)]
 pub fn extract_video_id(url: &str) -> Option<String> {
     // youtube.com/watch?v=VIDEO_ID
     if let Some(pos) = url.find("v=") {
         let start = pos + 2;
         let end = url[start..]
-            .find(|c: char| c == '&' || c == '#')
+            .find(['&', '#'])
             .map(|i| start + i)
             .unwrap_or(url.len());
         return Some(url[start..end].to_string());
@@ -33,7 +34,7 @@ pub fn extract_video_id(url: &str) -> Option<String> {
         if let Some(pos) = url.find(prefix) {
             let start = pos + prefix.len();
             let end = url[start..]
-                .find(|c: char| c == '?' || c == '&' || c == '#' || c == '/')
+                .find(['?', '&', '#', '/'])
                 .map(|i| start + i)
                 .unwrap_or(url.len());
             return Some(url[start..end].to_string());
@@ -45,6 +46,7 @@ pub fn extract_video_id(url: &str) -> Option<String> {
 
 /// Metadata returned by yt-dlp.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct VideoMetadata {
     pub id: String,
     pub title: String,

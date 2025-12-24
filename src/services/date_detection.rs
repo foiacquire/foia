@@ -147,7 +147,7 @@ fn extract_date_from_filename(
     source_url: Option<&str>,
 ) -> Option<DateEstimate> {
     // Try filename first, then URL path
-    let candidates = [filename, source_url.map(extract_path_from_url).flatten()];
+    let candidates = [filename, source_url.and_then(extract_path_from_url)];
 
     for candidate in candidates.into_iter().flatten() {
         for (pattern, format) in DATE_PATTERNS.iter() {

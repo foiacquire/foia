@@ -1515,7 +1515,7 @@ pub async fn browse_documents(
 
         tokio::spawn(async move {
             // Compute count in blocking task
-            if let Ok(count) = tokio::task::spawn_blocking(move || {
+            if let Ok(Ok(count)) = tokio::task::spawn_blocking(move || {
                 state_for_count.doc_repo.browse_count(
                     &types_bg,
                     &tags_bg,
@@ -1525,11 +1525,9 @@ pub async fn browse_documents(
             })
             .await
             {
-                if let Ok(count) = count {
-                    state_for_cache
-                        .stats_cache
-                        .set_browse_count(cache_key, count);
-                }
+                state_for_cache
+                    .stats_cache
+                    .set_browse_count(cache_key, count);
             }
         });
     }

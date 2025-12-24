@@ -3965,6 +3965,7 @@ async fn cmd_browser_test(
 }
 
 /// Import documents from WARC archive files.
+#[allow(clippy::too_many_arguments)]
 async fn cmd_import(
     settings: &Settings,
     files: &[PathBuf],
@@ -4409,12 +4410,10 @@ async fn cmd_import(
         if resume && !dry_run {
             let progress_content = if file_completed {
                 Some("done".to_string())
-            } else if let Some(offset) = final_position {
-                // Uncompressed file: save byte offset for true resume
-                Some(format!("offset:{}", offset))
             } else {
+                // Uncompressed file: save byte offset for true resume
                 // Gzip file: can't resume mid-file, don't write checkpoint
-                None
+                final_position.map(|offset| format!("offset:{}", offset))
             };
             if let Some(content) = progress_content {
                 if let Err(e) = std::fs::write(&progress_path, content) {

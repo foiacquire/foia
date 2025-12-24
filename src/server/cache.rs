@@ -41,6 +41,7 @@ impl<T: Clone> CacheEntry<T> {
 }
 
 /// Cache for document statistics.
+#[allow(clippy::type_complexity)]
 pub struct StatsCache {
     /// Type stats: category -> count
     type_stats: RwLock<Option<CacheEntry<Vec<(String, u64)>>>>,

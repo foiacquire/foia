@@ -59,6 +59,7 @@ impl Default for Settings {
 
 impl Settings {
     /// Create settings with a custom data directory.
+    #[allow(dead_code)]
     pub fn with_data_dir(data_dir: PathBuf) -> Self {
         Self {
             documents_dir: data_dir.join("documents"),
