@@ -3,7 +3,7 @@ FROM rust:alpine AS builder
 
 ARG FEATURES="browser"
 
-RUN apk add --no-cache musl-dev sqlite-dev openssl-dev pkgconfig cmake make g++
+RUN apk add --no-cache musl-dev sqlite-dev openssl-dev openssl-libs-static pkgconfig cmake make g++
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
