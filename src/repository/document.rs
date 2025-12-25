@@ -2818,12 +2818,27 @@ impl DocumentRepository {
         Ok(page)
     }
 
-    /// Get pages needing OCR (status = 'text_extracted' and sparse text).
+    /// Get pages needing OCR (status = 'text_extracted').
+    /// Pages with little/no PDF text are prioritized; pages with significant
+    /// existing text are deferred (processed last) to allow comparison.
     pub fn get_pages_needing_ocr(&self, limit: usize) -> Result<Vec<DocumentPage>> {
         let conn = self.connect()?;
 
+        // Prioritize pages by PDF text content:
+        // 0 = no text (process first)
+        // 1 = minimal text <100 chars
+        // 2 = significant text (deferred)
         let mut stmt = conn.prepare(&format!(
-            "SELECT * FROM document_pages WHERE ocr_status = 'text_extracted' LIMIT {}",
+            "SELECT * FROM document_pages
+             WHERE ocr_status = 'text_extracted'
+             ORDER BY
+                 CASE
+                     WHEN pdf_text IS NULL OR pdf_text = '' THEN 0
+                     WHEN LENGTH(pdf_text) < 100 THEN 1
+                     ELSE 2
+                 END,
+                 created_at ASC
+             LIMIT {}",
             limit.max(1)
         ))?;
 

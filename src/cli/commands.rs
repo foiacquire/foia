@@ -983,16 +983,13 @@ async fn cmd_scrape(
     interval: u64,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
+    use crate::repository::ConfigHistoryRepository;
+
     // Set up config watcher for stop-process and inplace modes
+    // Try file watching first, fall back to DB polling if no config file
     let mut config_watcher =
         if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            match prefer::watch("foiacquire").await {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
-                    None
-                }
-            }
+            prefer::watch("foiacquire").await.ok()
         } else {
             None
         };
@@ -1006,6 +1003,7 @@ async fn cmd_scrape(
 
     // Initial config load for source list
     let config = Config::load().await;
+    let mut current_config_hash = config.hash();
 
     // Determine initial sources to scrape
     let mut sources_to_scrape: Vec<String> = if all {
@@ -1206,6 +1204,34 @@ async fn cmd_scrape(
                                     style("↻").cyan()
                                 );
                                 // Config will be reloaded at start of next iteration
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            // DB-based config polling (no config file available)
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+            // Check if config changed in DB
+            if let Ok(repo) = ConfigHistoryRepository::new(&db_path) {
+                if let Ok(Some(latest_hash)) = repo.get_latest_hash() {
+                    if latest_hash != current_config_hash {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config changed in database, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config changed in database, reloading...",
+                                    style("↻").cyan()
+                                );
+                                current_config_hash = latest_hash;
                             }
                             ReloadMode::NextRun => {}
                         }
@@ -2334,6 +2360,7 @@ async fn cmd_ocr(
     interval: u64,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
+    use crate::repository::ConfigHistoryRepository;
     use crate::services::{OcrEvent, OcrService};
     use tokio::sync::mpsc;
 
@@ -2354,21 +2381,20 @@ async fn cmd_ocr(
     }
 
     // Set up config watcher for stop-process and inplace modes
+    // Try file watching first, fall back to DB polling if no config file
     let mut config_watcher =
         if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            match prefer::watch("foiacquire").await {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
-                    None
-                }
-            }
+            prefer::watch("foiacquire").await.ok()
         } else {
             None
         };
 
     let db_path = settings.database_path();
     let doc_repo = Arc::new(DocumentRepository::new(&db_path, &settings.documents_dir)?);
+
+    // Track config hash for DB-based change detection
+    let config = Config::load().await;
+    let mut current_config_hash = config.hash();
 
     let service = OcrService::new(doc_repo);
 
@@ -2565,6 +2591,7 @@ async fn cmd_ocr(
         );
 
         if let Some(ref mut watcher) = config_watcher {
+            // File-based config watching
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
                 result = watcher.recv() => {
@@ -2583,6 +2610,34 @@ async fn cmd_ocr(
                                     style("↻").cyan()
                                 );
                                 // OCR doesn't use config, so just continue
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            // DB-based config polling (no config file available)
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+            // Check if config changed in DB
+            if let Ok(repo) = ConfigHistoryRepository::new(&db_path) {
+                if let Ok(Some(latest_hash)) = repo.get_latest_hash() {
+                    if latest_hash != current_config_hash {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config changed in database, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config changed in database, continuing...",
+                                    style("↻").cyan()
+                                );
+                                current_config_hash = latest_hash;
                             }
                             ReloadMode::NextRun => {}
                         }
@@ -3049,6 +3104,7 @@ async fn cmd_annotate(
     interval: u64,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
+    use crate::repository::ConfigHistoryRepository;
     use crate::services::{AnnotationEvent, AnnotationService};
     use tokio::sync::mpsc;
 
@@ -3056,21 +3112,17 @@ async fn cmd_annotate(
     let doc_repo = Arc::new(DocumentRepository::new(&db_path, &settings.documents_dir)?);
 
     // Set up config watcher for stop-process and inplace modes
+    // Try file watching first, fall back to DB polling if no config file
     let mut config_watcher =
         if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            match prefer::watch("foiacquire").await {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
-                    None
-                }
-            }
+            prefer::watch("foiacquire").await.ok()
         } else {
             None
         };
 
     // Initial config load
     let config = Config::load().await;
+    let mut current_config_hash = config.hash();
     let mut llm_config = config.llm.clone();
     if let Some(ref ep) = endpoint {
         llm_config.endpoint = ep.clone();
@@ -3147,6 +3199,7 @@ async fn cmd_annotate(
                     new_llm_config.model
                 );
                 llm_config = new_llm_config;
+                current_config_hash = fresh_config.hash();
                 service = AnnotationService::new(doc_repo.clone(), llm_config.clone());
             }
         }
@@ -3272,6 +3325,7 @@ async fn cmd_annotate(
         );
 
         if let Some(ref mut watcher) = config_watcher {
+            // File-based config watching
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
                 result = watcher.recv() => {
@@ -3289,6 +3343,35 @@ async fn cmd_annotate(
                                     "{} Config file changed, reloading...",
                                     style("↻").cyan()
                                 );
+                                // Config will be reloaded at start of next iteration
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            // DB-based config polling (no config file available)
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+            // Check if config changed in DB
+            if let Ok(repo) = ConfigHistoryRepository::new(&db_path) {
+                if let Ok(Some(latest_hash)) = repo.get_latest_hash() {
+                    if latest_hash != current_config_hash {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config changed in database, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config changed in database, reloading...",
+                                    style("↻").cyan()
+                                );
+                                current_config_hash = latest_hash;
                                 // Config will be reloaded at start of next iteration
                             }
                             ReloadMode::NextRun => {}

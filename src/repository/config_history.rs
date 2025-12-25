@@ -146,6 +146,23 @@ impl ConfigHistoryRepository {
         Ok(entries)
     }
 
+    /// Get just the hash of the most recent configuration entry.
+    /// Useful for quick change detection without loading the full config.
+    pub fn get_latest_hash(&self) -> Result<Option<String>> {
+        let conn = self.connect()?;
+        let result = conn.query_row(
+            "SELECT hash FROM configuration_history ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(hash) => Ok(Some(hash)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Prune old entries to keep only the last MAX_HISTORY_ENTRIES.
     fn prune_old_entries(&self, conn: &Connection) -> Result<()> {
         conn.execute(

@@ -99,21 +99,16 @@ impl DocumentPage {
     }
 
     /// Compute final text by choosing the best result.
-    /// Prefers OCR if it has significantly more content.
+    /// Prefers OCR over extracted PDF text (unless OCR is empty).
     pub fn compute_final_text(&mut self) {
-        let pdf_chars = self
-            .pdf_text
-            .as_ref()
-            .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
-            .unwrap_or(0);
         let ocr_chars = self
             .ocr_text
             .as_ref()
             .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
             .unwrap_or(0);
 
-        // Use OCR if it has >20% more content
-        self.final_text = if ocr_chars > pdf_chars + (pdf_chars / 5) {
+        // Prefer OCR over extracted text (unless OCR is empty)
+        self.final_text = if ocr_chars > 0 {
             self.ocr_text.clone()
         } else {
             self.pdf_text.clone()

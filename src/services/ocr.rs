@@ -462,10 +462,22 @@ fn extract_document_text_per_page(
             .unwrap_or_default();
 
         let mut page = DocumentPage::new(doc.id.clone(), version.id, page_num);
-        page.pdf_text = Some(pdf_text);
+        page.pdf_text = Some(pdf_text.clone());
         page.ocr_status = PageOcrStatus::TextExtracted;
 
-        doc_repo.save_page(&page)?;
+        let page_id = doc_repo.save_page(&page)?;
+
+        // Store pdftotext result in page_ocr_results for comparison
+        if !pdf_text.is_empty() {
+            let _ = doc_repo.store_page_ocr_result(
+                page_id,
+                "pdftotext",
+                Some(&pdf_text),
+                None, // no confidence score for pdftotext
+                None, // no processing time tracked
+            );
+        }
+
         pages_created += 1;
     }
 
@@ -514,16 +526,27 @@ fn ocr_document_page(
                 .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
                 .unwrap_or(0);
 
-            // OCR is better if it has >20% more content
+            // Track if OCR provided more content (for reporting)
             improved = ocr_chars > pdf_chars + (pdf_chars / 5);
 
             updated_page.ocr_text = Some(ocr_text.clone());
             updated_page.ocr_status = PageOcrStatus::OcrComplete;
-            updated_page.final_text = if improved {
-                Some(ocr_text)
+
+            // Prefer OCR over extracted text (unless OCR is empty)
+            updated_page.final_text = if ocr_chars > 0 {
+                Some(ocr_text.clone())
             } else {
                 page.pdf_text.clone()
             };
+
+            // Store tesseract result in page_ocr_results for comparison
+            let _ = doc_repo.store_page_ocr_result(
+                page.id,
+                "tesseract",
+                Some(&ocr_text),
+                None, // TODO: could extract confidence from tesseract
+                None, // TODO: could track processing time
+            );
         }
         Err(e) => {
             tracing::debug!(
