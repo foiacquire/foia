@@ -9,8 +9,22 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::Mutex;
 
+use clap::ValueEnum;
+
 use crate::config::{load_settings_with_options, Config, LoadOptions, Settings};
 use crate::llm::LlmClient;
+
+/// Config reload behavior for daemon mode.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum ReloadMode {
+    /// Reload config at the start of each daemon cycle
+    #[default]
+    NextRun,
+    /// Exit process when config file changes (for process manager restart)
+    StopProcess,
+    /// Watch config file and reload immediately when it changes
+    Inplace,
+}
 use crate::models::{Document, DocumentStatus, DocumentVersion, Source, SourceType};
 use crate::ocr::TextExtractor;
 use crate::repository::{CrawlRepository, DocumentRepository, SourceRepository};
@@ -120,6 +134,9 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 300)
         #[arg(long, default_value = "300")]
         interval: u64,
+        /// Config reload behavior in daemon mode
+        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        reload: ReloadMode,
     },
 
     /// Show system status
@@ -147,6 +164,9 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 60)
         #[arg(long, default_value = "60")]
         interval: u64,
+        /// Config reload behavior in daemon mode
+        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        reload: ReloadMode,
     },
 
     /// Check if required OCR tools are installed
@@ -211,6 +231,9 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 60)
         #[arg(long, default_value = "60")]
         interval: u64,
+        /// Config reload behavior in daemon mode
+        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        reload: ReloadMode,
     },
 
     /// Detect and estimate publication dates for documents
@@ -471,6 +494,7 @@ pub async fn run() -> anyhow::Result<()> {
             progress,
             daemon,
             interval,
+            reload,
         } => {
             cmd_scrape(
                 &settings,
@@ -481,6 +505,7 @@ pub async fn run() -> anyhow::Result<()> {
                 progress,
                 daemon,
                 interval,
+                reload,
             )
             .await
         }
@@ -492,6 +517,7 @@ pub async fn run() -> anyhow::Result<()> {
             limit,
             daemon,
             interval,
+            reload,
             ..
         } => {
             cmd_ocr(
@@ -502,6 +528,7 @@ pub async fn run() -> anyhow::Result<()> {
                 limit,
                 daemon,
                 interval,
+                reload,
             )
             .await
         }
@@ -527,6 +554,7 @@ pub async fn run() -> anyhow::Result<()> {
             model,
             daemon,
             interval,
+            reload,
         } => {
             cmd_annotate(
                 &settings,
@@ -537,6 +565,7 @@ pub async fn run() -> anyhow::Result<()> {
                 model,
                 daemon,
                 interval,
+                reload,
             )
             .await
         }
@@ -952,8 +981,21 @@ async fn cmd_scrape(
     show_progress: bool,
     daemon: bool,
     interval: u64,
+    reload: ReloadMode,
 ) -> anyhow::Result<()> {
-    let config = Config::load().await;
+    // Set up config watcher for stop-process and inplace modes
+    let mut config_watcher =
+        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            match prefer::watch("foiacquire").await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
     // Create shared rate limiter and load persisted state
     let rate_limiter = Arc::new(RateLimiter::new());
@@ -962,8 +1004,11 @@ async fn cmd_scrape(
         tracing::warn!("Failed to load rate limit state: {}", e);
     }
 
-    // Determine which sources to scrape
-    let sources_to_scrape: Vec<String> = if all {
+    // Initial config load for source list
+    let config = Config::load().await;
+
+    // Determine initial sources to scrape
+    let mut sources_to_scrape: Vec<String> = if all {
         config.scrapers.keys().cloned().collect()
     } else if source_ids.is_empty() {
         println!(
@@ -986,13 +1031,27 @@ async fn cmd_scrape(
 
     if daemon {
         println!(
-            "{} Running in daemon mode (interval: {}s)",
+            "{} Running in daemon mode (interval: {}s, reload: {:?})",
             style("→").cyan(),
-            interval
+            interval,
+            reload
         );
     }
 
     loop {
+        // For next-run and inplace modes, reload config to get updated source list
+        if daemon && all && matches!(reload, ReloadMode::NextRun | ReloadMode::Inplace) {
+            let new_config = Config::load().await;
+            let new_sources: Vec<String> = new_config.scrapers.keys().cloned().collect();
+            if new_sources != sources_to_scrape {
+                println!(
+                    "{} Config reloaded ({} sources)",
+                    style("↻").cyan(),
+                    new_sources.len()
+                );
+                sources_to_scrape = new_sources;
+            }
+        }
         // Initialize TUI with fixed status pane at top (1 header + 1 line per source)
         let num_status_lines = (sources_to_scrape.len() + 1).min(10) as u16; // Cap at 10 lines
         let tui_guard = crate::cli::tui::TuiGuard::new(num_status_lines)?;
@@ -1121,12 +1180,41 @@ async fn cmd_scrape(
             break;
         }
 
+        // Sleep with config watching for stop-process and inplace modes
         println!(
             "{} Sleeping for {}s before next check...",
             style("→").dim(),
             interval
         );
-        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+        if let Some(ref mut watcher) = config_watcher {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
+                result = watcher.recv() => {
+                    if result.is_some() {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config file changed, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config file changed, reloading...",
+                                    style("↻").cyan()
+                                );
+                                // Config will be reloaded at start of next iteration
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
     }
 
     Ok(())
@@ -2244,6 +2332,7 @@ async fn cmd_ocr(
     limit: usize,
     daemon: bool,
     interval: u64,
+    reload: ReloadMode,
 ) -> anyhow::Result<()> {
     use crate::services::{OcrEvent, OcrService};
     use tokio::sync::mpsc;
@@ -2264,6 +2353,20 @@ async fn cmd_ocr(
         ));
     }
 
+    // Set up config watcher for stop-process and inplace modes
+    let mut config_watcher =
+        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            match prefer::watch("foiacquire").await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
     let db_path = settings.database_path();
     let doc_repo = Arc::new(DocumentRepository::new(&db_path, &settings.documents_dir)?);
 
@@ -2278,9 +2381,10 @@ async fn cmd_ocr(
 
     if daemon {
         println!(
-            "{} Running in daemon mode (interval: {}s)",
+            "{} Running in daemon mode (interval: {}s, reload: {:?})",
             style("→").cyan(),
-            interval
+            interval,
+            reload
         );
     }
 
@@ -2453,12 +2557,41 @@ async fn cmd_ocr(
             break;
         }
 
+        // Sleep with config watching for stop-process and inplace modes
         println!(
             "{} Sleeping for {}s before next check...",
             style("→").dim(),
             interval
         );
-        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+        if let Some(ref mut watcher) = config_watcher {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
+                result = watcher.recv() => {
+                    if result.is_some() {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config file changed, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config file changed, continuing...",
+                                    style("↻").cyan()
+                                );
+                                // OCR doesn't use config, so just continue
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
     }
 
     Ok(())
@@ -2914,6 +3047,7 @@ async fn cmd_annotate(
     model: Option<String>,
     daemon: bool,
     interval: u64,
+    reload: ReloadMode,
 ) -> anyhow::Result<()> {
     use crate::services::{AnnotationEvent, AnnotationService};
     use tokio::sync::mpsc;
@@ -2921,10 +3055,22 @@ async fn cmd_annotate(
     let db_path = settings.database_path();
     let doc_repo = Arc::new(DocumentRepository::new(&db_path, &settings.documents_dir)?);
 
-    // Load config for LLM settings
-    let config = Config::load().await;
+    // Set up config watcher for stop-process and inplace modes
+    let mut config_watcher =
+        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
+            match prefer::watch("foiacquire").await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    println!("{} Could not watch config file: {}", style("!").yellow(), e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-    // Apply CLI overrides
+    // Initial config load
+    let config = Config::load().await;
     let mut llm_config = config.llm.clone();
     if let Some(ref ep) = endpoint {
         llm_config.endpoint = ep.clone();
@@ -2942,8 +3088,8 @@ async fn cmd_annotate(
         return Ok(());
     }
 
-    // Create service
-    let service = AnnotationService::new(doc_repo, llm_config.clone());
+    // Create initial service
+    let mut service = AnnotationService::new(doc_repo.clone(), llm_config.clone());
 
     // Check if LLM service is available
     if !service.is_available().await {
@@ -2972,13 +3118,39 @@ async fn cmd_annotate(
 
     if daemon {
         println!(
-            "{} Running in daemon mode (interval: {}s)",
+            "{} Running in daemon mode (interval: {}s, reload: {:?})",
             style("→").cyan(),
-            interval
+            interval,
+            reload
         );
     }
 
     loop {
+        // For next-run and inplace modes, reload config at start of each cycle
+        if daemon && matches!(reload, ReloadMode::NextRun | ReloadMode::Inplace) {
+            let fresh_config = Config::load().await;
+            let mut new_llm_config = fresh_config.llm.clone();
+            if let Some(ref ep) = endpoint {
+                new_llm_config.endpoint = ep.clone();
+            }
+            if let Some(ref m) = model {
+                new_llm_config.model = m.clone();
+            }
+
+            if new_llm_config.endpoint != llm_config.endpoint
+                || new_llm_config.model != llm_config.model
+                || new_llm_config.enabled != llm_config.enabled
+            {
+                println!(
+                    "{} Config reloaded (model: {})",
+                    style("↻").cyan(),
+                    new_llm_config.model
+                );
+                llm_config = new_llm_config;
+                service = AnnotationService::new(doc_repo.clone(), llm_config.clone());
+            }
+        }
+
         // Check if there's work to do
         let total_count = service.count_needing_annotation(source_id)?;
 
@@ -3092,12 +3264,41 @@ async fn cmd_annotate(
             break;
         }
 
+        // Sleep with config watching for stop-process and inplace modes
         println!(
             "{} Sleeping for {}s before next check...",
             style("→").dim(),
             interval
         );
-        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+
+        if let Some(ref mut watcher) = config_watcher {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
+                result = watcher.recv() => {
+                    if result.is_some() {
+                        match reload {
+                            ReloadMode::StopProcess => {
+                                println!(
+                                    "{} Config file changed, exiting for restart...",
+                                    style("↻").cyan()
+                                );
+                                return Ok(());
+                            }
+                            ReloadMode::Inplace => {
+                                println!(
+                                    "{} Config file changed, reloading...",
+                                    style("↻").cyan()
+                                );
+                                // Config will be reloaded at start of next iteration
+                            }
+                            ReloadMode::NextRun => {}
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
     }
 
     Ok(())
