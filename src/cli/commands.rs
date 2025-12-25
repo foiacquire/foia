@@ -108,12 +108,18 @@ enum Commands {
         /// Number of download workers (default: 4)
         #[arg(short, long, default_value = "4")]
         workers: usize,
-        /// Limit number of documents to download per source (0 = unlimited)
+        /// Limit number of documents to download per source per cycle (0 = unlimited)
         #[arg(short, long, default_value = "0")]
         limit: usize,
         /// Show detailed progress for each file
         #[arg(short = 'P', long)]
         progress: bool,
+        /// Run continuously, checking for new work
+        #[arg(long)]
+        daemon: bool,
+        /// Seconds to wait between checks in daemon mode (default: 300)
+        #[arg(long, default_value = "300")]
+        interval: u64,
     },
 
     /// Show system status
@@ -129,12 +135,18 @@ enum Commands {
         /// Number of workers (default: 2)
         #[arg(short, long, default_value = "2")]
         workers: usize,
-        /// Limit number of documents to process (0 = unlimited)
+        /// Limit number of documents to process per cycle (0 = unlimited)
         #[arg(short, long, default_value = "0")]
         limit: usize,
         /// Extract URLs from documents and add to crawl queue
         #[arg(long)]
         extract_urls: bool,
+        /// Run continuously, checking for new work
+        #[arg(long)]
+        daemon: bool,
+        /// Seconds to wait between checks in daemon mode (default: 60)
+        #[arg(long, default_value = "60")]
+        interval: u64,
     },
 
     /// Check if required OCR tools are installed
@@ -184,7 +196,7 @@ enum Commands {
         /// Specific document ID to process
         #[arg(long)]
         doc_id: Option<String>,
-        /// Limit number of documents to process (0 = unlimited)
+        /// Limit number of documents to process per cycle (0 = unlimited)
         #[arg(short, long, default_value = "0")]
         limit: usize,
         /// LLM API endpoint (e.g., http://localhost:11434)
@@ -193,6 +205,12 @@ enum Commands {
         /// LLM model name (e.g., dolphin-llama3:8b)
         #[arg(long)]
         model: Option<String>,
+        /// Run continuously, checking for new work
+        #[arg(short, long)]
+        daemon: bool,
+        /// Seconds to wait between checks in daemon mode (default: 60)
+        #[arg(long, default_value = "60")]
+        interval: u64,
     },
 
     /// Detect and estimate publication dates for documents
@@ -451,13 +469,29 @@ pub async fn run() -> anyhow::Result<()> {
             workers,
             limit,
             progress,
-        } => cmd_scrape(&settings, &source_ids, all, workers, limit, progress).await,
+            daemon,
+            interval,
+        } => {
+            cmd_scrape(
+                &settings,
+                &source_ids,
+                all,
+                workers,
+                limit,
+                progress,
+                daemon,
+                interval,
+            )
+            .await
+        }
         Commands::Status => cmd_status(&settings).await,
         Commands::Ocr {
             source_id,
             doc_id,
             workers,
             limit,
+            daemon,
+            interval,
             ..
         } => {
             cmd_ocr(
@@ -466,6 +500,8 @@ pub async fn run() -> anyhow::Result<()> {
                 doc_id.as_deref(),
                 workers,
                 limit,
+                daemon,
+                interval,
             )
             .await
         }
@@ -489,6 +525,8 @@ pub async fn run() -> anyhow::Result<()> {
             limit,
             endpoint,
             model,
+            daemon,
+            interval,
         } => {
             cmd_annotate(
                 &settings,
@@ -497,6 +535,8 @@ pub async fn run() -> anyhow::Result<()> {
                 limit,
                 endpoint,
                 model,
+                daemon,
+                interval,
             )
             .await
         }
@@ -902,6 +942,7 @@ async fn cmd_crawl_clear(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_scrape(
     settings: &Settings,
     source_ids: &[String],
@@ -909,6 +950,8 @@ async fn cmd_scrape(
     workers: usize,
     limit: usize,
     show_progress: bool,
+    daemon: bool,
+    interval: u64,
 ) -> anyhow::Result<()> {
     let config = Config::load().await;
 
@@ -941,126 +984,150 @@ async fn cmd_scrape(
         source_ids.to_vec()
     };
 
-    // Initialize TUI with fixed status pane at top (1 header + 1 line per source)
-    let num_status_lines = (sources_to_scrape.len() + 1).min(10) as u16; // Cap at 10 lines
-    let tui_guard = crate::cli::tui::TuiGuard::new(num_status_lines)?;
-
-    // Set header
-    let _ = crate::cli::tui::set_status(
-        0,
-        &format!(
-            "{} Scraping {} source{}...",
+    if daemon {
+        println!(
+            "{} Running in daemon mode (interval: {}s)",
             style("→").cyan(),
-            sources_to_scrape.len(),
-            if sources_to_scrape.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        ),
-    );
-
-    // Initialize status lines for each source
-    let source_lines: std::collections::HashMap<String, u16> = sources_to_scrape
-        .iter()
-        .enumerate()
-        .take(9) // Only show first 9 sources in status (line 0 is header)
-        .map(|(i, s)| (s.clone(), (i + 1) as u16))
-        .collect();
-
-    for (source_id, line) in &source_lines {
-        let _ = crate::cli::tui::set_status(
-            *line,
-            &format!("  {} {} waiting...", style("○").dim(), source_id),
+            interval
         );
     }
 
-    if sources_to_scrape.len() == 1 {
-        // Single source - run directly
-        let source_id = &sources_to_scrape[0];
-        let line = source_lines.get(source_id).copied();
-        cmd_scrape_single_tui(
-            settings,
-            source_id,
-            workers,
-            limit,
-            show_progress,
-            line,
-            tui_guard.is_active(),
-            Some(rate_limiter.clone()),
-        )
-        .await?;
-    } else {
-        // Multiple sources - run in parallel
-        let mut handles = Vec::new();
-        for source_id in &sources_to_scrape {
-            let settings = settings.clone();
-            let source_id_clone = source_id.clone();
+    loop {
+        // Initialize TUI with fixed status pane at top (1 header + 1 line per source)
+        let num_status_lines = (sources_to_scrape.len() + 1).min(10) as u16; // Cap at 10 lines
+        let tui_guard = crate::cli::tui::TuiGuard::new(num_status_lines)?;
+
+        // Set header
+        let _ = crate::cli::tui::set_status(
+            0,
+            &format!(
+                "{} Scraping {} source{}...",
+                style("→").cyan(),
+                sources_to_scrape.len(),
+                if sources_to_scrape.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+        );
+
+        // Initialize status lines for each source
+        let source_lines: std::collections::HashMap<String, u16> = sources_to_scrape
+            .iter()
+            .enumerate()
+            .take(9) // Only show first 9 sources in status (line 0 is header)
+            .map(|(i, s)| (s.clone(), (i + 1) as u16))
+            .collect();
+
+        for (source_id, line) in &source_lines {
+            let _ = crate::cli::tui::set_status(
+                *line,
+                &format!("  {} {} waiting...", style("○").dim(), source_id),
+            );
+        }
+
+        if sources_to_scrape.len() == 1 {
+            // Single source - run directly
+            let source_id = &sources_to_scrape[0];
             let line = source_lines.get(source_id).copied();
-            let tui_active = tui_guard.is_active();
-            let rate_limiter_clone = rate_limiter.clone();
-            let handle = tokio::spawn(async move {
-                cmd_scrape_single_tui(
-                    &settings,
-                    &source_id_clone,
-                    workers,
-                    limit,
-                    show_progress,
-                    line,
-                    tui_active,
-                    Some(rate_limiter_clone),
-                )
-                .await
-            });
-            handles.push((source_id.clone(), handle));
-        }
+            cmd_scrape_single_tui(
+                settings,
+                source_id,
+                workers,
+                limit,
+                show_progress,
+                line,
+                tui_guard.is_active(),
+                Some(rate_limiter.clone()),
+            )
+            .await?;
+        } else {
+            // Multiple sources - run in parallel
+            let mut handles = Vec::new();
+            for source_id in &sources_to_scrape {
+                let settings = settings.clone();
+                let source_id_clone = source_id.clone();
+                let line = source_lines.get(source_id).copied();
+                let tui_active = tui_guard.is_active();
+                let rate_limiter_clone = rate_limiter.clone();
+                let handle = tokio::spawn(async move {
+                    cmd_scrape_single_tui(
+                        &settings,
+                        &source_id_clone,
+                        workers,
+                        limit,
+                        show_progress,
+                        line,
+                        tui_active,
+                        Some(rate_limiter_clone),
+                    )
+                    .await
+                });
+                handles.push((source_id.clone(), handle));
+            }
 
-        // Wait for all to complete
-        let mut errors = Vec::new();
-        for (source_id, handle) in handles {
-            match handle.await {
-                Ok(Ok(())) => {
-                    if let Some(&line) = source_lines.get(&source_id) {
-                        let _ = crate::cli::tui::set_status(
-                            line,
-                            &format!("  {} {} done", style("✓").green(), source_id),
-                        );
+            // Wait for all to complete
+            let mut errors = Vec::new();
+            for (source_id, handle) in handles {
+                match handle.await {
+                    Ok(Ok(())) => {
+                        if let Some(&line) = source_lines.get(&source_id) {
+                            let _ = crate::cli::tui::set_status(
+                                line,
+                                &format!("  {} {} done", style("✓").green(), source_id),
+                            );
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        if let Some(&line) = source_lines.get(&source_id) {
+                            let _ = crate::cli::tui::set_status(
+                                line,
+                                &format!("  {} {} error", style("✗").red(), source_id),
+                            );
+                        }
+                        errors.push(format!("{}: {}", source_id, e));
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: task panicked: {}", source_id, e));
                     }
                 }
-                Ok(Err(e)) => {
-                    if let Some(&line) = source_lines.get(&source_id) {
-                        let _ = crate::cli::tui::set_status(
-                            line,
-                            &format!("  {} {} error", style("✗").red(), source_id),
-                        );
-                    }
-                    errors.push(format!("{}: {}", source_id, e));
-                }
-                Err(e) => {
-                    errors.push(format!("{}: task panicked: {}", source_id, e));
+            }
+
+            if !errors.is_empty() {
+                let _ = crate::cli::tui::log(&format!(
+                    "\n{} Some scrapers failed:",
+                    style("!").yellow()
+                ));
+                for err in &errors {
+                    let _ = crate::cli::tui::log(&format!("  - {}", err));
                 }
             }
         }
 
-        if !errors.is_empty() {
-            let _ =
-                crate::cli::tui::log(&format!("\n{} Some scrapers failed:", style("!").yellow()));
-            for err in &errors {
-                let _ = crate::cli::tui::log(&format!("  - {}", err));
-            }
+        // Update header to show complete
+        let _ =
+            crate::cli::tui::set_status(0, &format!("{} Scraping complete", style("✓").green()));
+
+        // Save rate limit state to database
+        if let Err(e) = save_rate_limit_state(&rate_limiter, &db_path).await {
+            tracing::warn!("Failed to save rate limit state: {}", e);
         }
+
+        // TUI cleanup happens automatically when tui_guard is dropped
+        drop(tui_guard);
+
+        if !daemon {
+            break;
+        }
+
+        println!(
+            "{} Sleeping for {}s before next check...",
+            style("→").dim(),
+            interval
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
     }
-
-    // Update header to show complete
-    let _ = crate::cli::tui::set_status(0, &format!("{} Scraping complete", style("✓").green()));
-
-    // Save rate limit state to database
-    if let Err(e) = save_rate_limit_state(&rate_limiter, &db_path).await {
-        tracing::warn!("Failed to save rate limit state: {}", e);
-    }
-
-    // TUI cleanup happens automatically when tui_guard is dropped
-    drop(tui_guard);
 
     Ok(())
 }
@@ -2168,12 +2235,15 @@ async fn cmd_ocr_compare(
 }
 
 /// Process documents with OCR.
+#[allow(clippy::too_many_arguments)]
 async fn cmd_ocr(
     settings: &Settings,
     source_id: Option<&str>,
     doc_id: Option<&str>,
     workers: usize,
     limit: usize,
+    daemon: bool,
+    interval: u64,
 ) -> anyhow::Result<()> {
     use crate::services::{OcrEvent, OcrService};
     use tokio::sync::mpsc;
@@ -2199,164 +2269,197 @@ async fn cmd_ocr(
 
     let service = OcrService::new(doc_repo);
 
-    // If specific doc_id provided, process just that document
+    // If specific doc_id provided, process just that document (no daemon mode)
     if let Some(id) = doc_id {
         println!("{} Processing single document: {}", style("→").cyan(), id);
         let (event_tx, _event_rx) = mpsc::channel::<OcrEvent>(100);
         return service.process_single(id, event_tx).await;
     }
 
-    // Check if there's work to do
-    let (docs_count, pages_count) = service.count_needing_processing(source_id)?;
-    if docs_count == 0 && pages_count == 0 {
-        println!("{} No documents need OCR processing", style("!").yellow());
-        return Ok(());
+    if daemon {
+        println!(
+            "{} Running in daemon mode (interval: {}s)",
+            style("→").cyan(),
+            interval
+        );
     }
 
-    // Create event channel for progress tracking
-    let (event_tx, mut event_rx) = mpsc::channel::<OcrEvent>(100);
-
-    // State for progress bar
-    let pb = Arc::new(tokio::sync::Mutex::new(None::<ProgressBar>));
-    let pb_clone = pb.clone();
-
-    // Spawn event handler for UI
-    let event_handler = tokio::spawn(async move {
-        let mut phase1_succeeded = 0;
-        let mut phase1_failed = 0;
-        let mut phase1_pages = 0;
-        let mut phase2_improved = 0;
-        let mut phase2_skipped = 0;
-        let mut phase2_failed = 0;
-        let mut docs_finalized_incremental = 0;
-
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                OcrEvent::Phase1Started { total_documents } => {
-                    println!(
-                        "{} Phase 1: Extracting text from {} documents",
-                        style("→").cyan(),
-                        total_documents
-                    );
-                    let progress = ProgressBar::new(total_documents as u64);
-                    progress.set_style(
-                        ProgressStyle::default_bar()
-                            .template(
-                                "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
-                            )
-                            .unwrap()
-                            .progress_chars("█▓░"),
-                    );
-                    progress.set_message("Extracting text...");
-                    *pb_clone.lock().await = Some(progress);
-                }
-                OcrEvent::DocumentCompleted {
-                    pages_extracted, ..
-                } => {
-                    phase1_succeeded += 1;
-                    phase1_pages += pages_extracted;
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.inc(1);
-                    }
-                }
-                OcrEvent::DocumentFailed { .. } => {
-                    phase1_failed += 1;
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.inc(1);
-                    }
-                }
-                OcrEvent::Phase1Complete { .. } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.finish_and_clear();
-                    }
-                    *pb_clone.lock().await = None;
-                    println!(
-                        "{} Phase 1 complete: {} documents processed, {} pages extracted",
-                        style("✓").green(),
-                        phase1_succeeded,
-                        phase1_pages
-                    );
-                    if phase1_failed > 0 {
-                        println!(
-                            "  {} {} documents failed",
-                            style("!").yellow(),
-                            phase1_failed
-                        );
-                    }
-                }
-                OcrEvent::Phase2Started { total_pages } => {
-                    println!(
-                        "{} Phase 2: Running OCR on {} pages",
-                        style("→").cyan(),
-                        total_pages
-                    );
-                    let progress = ProgressBar::new(total_pages as u64);
-                    progress.set_style(
-                        ProgressStyle::default_bar()
-                            .template(
-                                "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
-                            )
-                            .unwrap()
-                            .progress_chars("█▓░"),
-                    );
-                    progress.set_message("Running OCR...");
-                    *pb_clone.lock().await = Some(progress);
-                }
-                OcrEvent::PageOcrCompleted { improved, .. } => {
-                    if improved {
-                        phase2_improved += 1;
-                    } else {
-                        phase2_skipped += 1;
-                    }
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.inc(1);
-                    }
-                }
-                OcrEvent::PageOcrFailed { .. } => {
-                    phase2_failed += 1;
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.inc(1);
-                    }
-                }
-                OcrEvent::DocumentFinalized { .. } => {
-                    docs_finalized_incremental += 1;
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress
-                            .set_message(format!("{} docs complete", docs_finalized_incremental));
-                    }
-                }
-                OcrEvent::Phase2Complete { .. } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.finish_and_clear();
-                    }
-                    *pb_clone.lock().await = None;
-                    let mut msg = format!(
-                        "{} Phase 2 complete: {} pages improved by OCR, {} kept PDF text",
-                        style("✓").green(),
-                        phase2_improved,
-                        phase2_skipped
-                    );
-                    if phase2_failed > 0 {
-                        msg.push_str(&format!(", {} failed", phase2_failed));
-                    }
-                    if docs_finalized_incremental > 0 {
-                        msg.push_str(&format!(
-                            ", {} documents finalized",
-                            docs_finalized_incremental
-                        ));
-                    }
-                    println!("{}", msg);
-                }
-                _ => {}
+    loop {
+        // Check if there's work to do
+        let (docs_count, pages_count) = service.count_needing_processing(source_id)?;
+        if docs_count == 0 && pages_count == 0 {
+            if daemon {
+                println!(
+                    "{} No documents need OCR processing, sleeping for {}s...",
+                    style("→").dim(),
+                    interval
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                continue;
+            } else {
+                println!("{} No documents need OCR processing", style("!").yellow());
+                return Ok(());
             }
         }
-    });
 
-    // Run service
-    let _result = service.process(source_id, workers, limit, event_tx).await?;
+        // Create event channel for progress tracking
+        let (event_tx, mut event_rx) = mpsc::channel::<OcrEvent>(100);
 
-    // Wait for event handler to finish
-    let _ = event_handler.await;
+        // State for progress bar
+        let pb = Arc::new(tokio::sync::Mutex::new(None::<ProgressBar>));
+        let pb_clone = pb.clone();
+
+        // Spawn event handler for UI
+        let event_handler = tokio::spawn(async move {
+            let mut phase1_succeeded = 0;
+            let mut phase1_failed = 0;
+            let mut phase1_pages = 0;
+            let mut phase2_improved = 0;
+            let mut phase2_skipped = 0;
+            let mut phase2_failed = 0;
+            let mut docs_finalized_incremental = 0;
+
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    OcrEvent::Phase1Started { total_documents } => {
+                        println!(
+                            "{} Phase 1: Extracting text from {} documents",
+                            style("→").cyan(),
+                            total_documents
+                        );
+                        let progress = ProgressBar::new(total_documents as u64);
+                        progress.set_style(
+                            ProgressStyle::default_bar()
+                                .template(
+                                    "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
+                                )
+                                .unwrap()
+                                .progress_chars("█▓░"),
+                        );
+                        progress.set_message("Extracting text...");
+                        *pb_clone.lock().await = Some(progress);
+                    }
+                    OcrEvent::DocumentCompleted {
+                        pages_extracted, ..
+                    } => {
+                        phase1_succeeded += 1;
+                        phase1_pages += pages_extracted;
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.inc(1);
+                        }
+                    }
+                    OcrEvent::DocumentFailed { .. } => {
+                        phase1_failed += 1;
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.inc(1);
+                        }
+                    }
+                    OcrEvent::Phase1Complete { .. } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.finish_and_clear();
+                        }
+                        *pb_clone.lock().await = None;
+                        println!(
+                            "{} Phase 1 complete: {} documents processed, {} pages extracted",
+                            style("✓").green(),
+                            phase1_succeeded,
+                            phase1_pages
+                        );
+                        if phase1_failed > 0 {
+                            println!(
+                                "  {} {} documents failed",
+                                style("!").yellow(),
+                                phase1_failed
+                            );
+                        }
+                    }
+                    OcrEvent::Phase2Started { total_pages } => {
+                        println!(
+                            "{} Phase 2: Running OCR on {} pages",
+                            style("→").cyan(),
+                            total_pages
+                        );
+                        let progress = ProgressBar::new(total_pages as u64);
+                        progress.set_style(
+                            ProgressStyle::default_bar()
+                                .template(
+                                    "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
+                                )
+                                .unwrap()
+                                .progress_chars("█▓░"),
+                        );
+                        progress.set_message("Running OCR...");
+                        *pb_clone.lock().await = Some(progress);
+                    }
+                    OcrEvent::PageOcrCompleted { improved, .. } => {
+                        if improved {
+                            phase2_improved += 1;
+                        } else {
+                            phase2_skipped += 1;
+                        }
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.inc(1);
+                        }
+                    }
+                    OcrEvent::PageOcrFailed { .. } => {
+                        phase2_failed += 1;
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.inc(1);
+                        }
+                    }
+                    OcrEvent::DocumentFinalized { .. } => {
+                        docs_finalized_incremental += 1;
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.set_message(format!(
+                                "{} docs complete",
+                                docs_finalized_incremental
+                            ));
+                        }
+                    }
+                    OcrEvent::Phase2Complete { .. } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.finish_and_clear();
+                        }
+                        *pb_clone.lock().await = None;
+                        let mut msg = format!(
+                            "{} Phase 2 complete: {} pages improved by OCR, {} kept PDF text",
+                            style("✓").green(),
+                            phase2_improved,
+                            phase2_skipped
+                        );
+                        if phase2_failed > 0 {
+                            msg.push_str(&format!(", {} failed", phase2_failed));
+                        }
+                        if docs_finalized_incremental > 0 {
+                            msg.push_str(&format!(
+                                ", {} documents finalized",
+                                docs_finalized_incremental
+                            ));
+                        }
+                        println!("{}", msg);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Run service
+        let _result = service.process(source_id, workers, limit, event_tx).await?;
+
+        // Wait for event handler to finish
+        let _ = event_handler.await;
+
+        if !daemon {
+            break;
+        }
+
+        println!(
+            "{} Sleeping for {}s before next check...",
+            style("→").dim(),
+            interval
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+    }
 
     Ok(())
 }
@@ -2801,6 +2904,7 @@ fn mime_to_extension(mime: &str) -> &str {
 }
 
 /// Annotate documents using local LLM (generates synopsis and tags).
+#[allow(clippy::too_many_arguments)]
 async fn cmd_annotate(
     settings: &Settings,
     source_id: Option<&str>,
@@ -2808,6 +2912,8 @@ async fn cmd_annotate(
     limit: usize,
     endpoint: Option<String>,
     model: Option<String>,
+    daemon: bool,
+    interval: u64,
 ) -> anyhow::Result<()> {
     use crate::services::{AnnotationEvent, AnnotationService};
     use tokio::sync::mpsc;
@@ -2820,11 +2926,11 @@ async fn cmd_annotate(
 
     // Apply CLI overrides
     let mut llm_config = config.llm.clone();
-    if let Some(ep) = endpoint {
-        llm_config.endpoint = ep;
+    if let Some(ref ep) = endpoint {
+        llm_config.endpoint = ep.clone();
     }
-    if let Some(m) = model {
-        llm_config.model = m;
+    if let Some(ref m) = model {
+        llm_config.model = m.clone();
     }
 
     if !llm_config.enabled {
@@ -2857,109 +2963,142 @@ async fn cmd_annotate(
         llm_config.model
     );
 
-    // If specific doc_id provided, process just that document
+    // If specific doc_id provided, process just that document (no daemon mode)
     if let Some(id) = doc_id {
         println!("{} Processing single document: {}", style("→").cyan(), id);
         let (event_tx, _event_rx) = mpsc::channel::<AnnotationEvent>(100);
         return service.process_single(id, event_tx).await;
     }
 
-    // Check if there's work to do
-    let total_count = service.count_needing_annotation(source_id)?;
-
-    if total_count == 0 {
-        println!("{} No documents need annotation", style("!").yellow());
-        println!("  Documents need OCR complete status with extracted text to be annotated");
-        return Ok(());
+    if daemon {
+        println!(
+            "{} Running in daemon mode (interval: {}s)",
+            style("→").cyan(),
+            interval
+        );
     }
 
-    let effective_limit = if limit > 0 {
-        limit
-    } else {
-        total_count as usize
-    };
+    loop {
+        // Check if there's work to do
+        let total_count = service.count_needing_annotation(source_id)?;
 
-    println!(
-        "{} Annotating up to {} documents (running sequentially to manage memory)",
-        style("→").cyan(),
-        effective_limit
-    );
+        if total_count == 0 {
+            if daemon {
+                println!(
+                    "{} No documents need annotation, sleeping for {}s...",
+                    style("→").dim(),
+                    interval
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                continue;
+            } else {
+                println!("{} No documents need annotation", style("!").yellow());
+                println!(
+                    "  Documents need OCR complete status with extracted text to be annotated"
+                );
+                return Ok(());
+            }
+        }
 
-    // Create event channel for progress tracking
-    let (event_tx, mut event_rx) = mpsc::channel::<AnnotationEvent>(100);
+        let effective_limit = if limit > 0 {
+            limit
+        } else {
+            total_count as usize
+        };
 
-    // State for progress bar
-    let pb = Arc::new(tokio::sync::Mutex::new(None::<ProgressBar>));
-    let pb_clone = pb.clone();
+        println!(
+            "{} Annotating up to {} documents (running sequentially to manage memory)",
+            style("→").cyan(),
+            effective_limit
+        );
 
-    // Spawn event handler for UI
-    let event_handler = tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                AnnotationEvent::Started { total_documents } => {
-                    let progress = ProgressBar::new(total_documents as u64);
-                    progress.set_style(
-                        ProgressStyle::default_bar()
-                            .template(
-                                "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
-                            )
-                            .unwrap()
-                            .progress_chars("█▓░"),
-                    );
-                    progress.set_message("Annotating...");
-                    *pb_clone.lock().await = Some(progress);
-                }
-                AnnotationEvent::DocumentStarted { title, .. } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.set_message(truncate(&title, 40));
-                    }
-                }
-                AnnotationEvent::DocumentCompleted { .. }
-                | AnnotationEvent::DocumentSkipped { .. } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.inc(1);
-                    }
-                }
-                AnnotationEvent::DocumentFailed { error, .. } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.println(format!("{} {}", style("✗").red(), error));
-                        progress.inc(1);
-                    }
-                }
-                AnnotationEvent::Complete {
-                    succeeded,
-                    failed,
-                    remaining,
-                } => {
-                    if let Some(ref progress) = *pb_clone.lock().await {
-                        progress.finish_and_clear();
-                    }
-                    *pb_clone.lock().await = None;
+        // Create event channel for progress tracking
+        let (event_tx, mut event_rx) = mpsc::channel::<AnnotationEvent>(100);
 
-                    println!(
-                        "{} Annotation complete: {} succeeded, {} failed",
-                        style("✓").green(),
-                        succeeded,
-                        failed
-                    );
+        // State for progress bar
+        let pb = Arc::new(tokio::sync::Mutex::new(None::<ProgressBar>));
+        let pb_clone = pb.clone();
 
-                    if remaining > 0 {
-                        println!(
-                            "  {} {} documents still need annotation",
-                            style("→").dim(),
-                            remaining
+        // Spawn event handler for UI
+        let event_handler = tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    AnnotationEvent::Started { total_documents } => {
+                        let progress = ProgressBar::new(total_documents as u64);
+                        progress.set_style(
+                            ProgressStyle::default_bar()
+                                .template(
+                                    "{spinner:.green} [{bar:30.cyan/blue}] {pos}/{len} {wide_msg}",
+                                )
+                                .unwrap()
+                                .progress_chars("█▓░"),
                         );
+                        progress.set_message("Annotating...");
+                        *pb_clone.lock().await = Some(progress);
+                    }
+                    AnnotationEvent::DocumentStarted { title, .. } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.set_message(truncate(&title, 40));
+                        }
+                    }
+                    AnnotationEvent::DocumentCompleted { .. }
+                    | AnnotationEvent::DocumentSkipped { .. } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.inc(1);
+                        }
+                    }
+                    AnnotationEvent::DocumentFailed { error, .. } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.println(format!("{} {}", style("✗").red(), error));
+                            progress.inc(1);
+                        }
+                    }
+                    AnnotationEvent::Complete {
+                        succeeded,
+                        failed,
+                        remaining,
+                    } => {
+                        if let Some(ref progress) = *pb_clone.lock().await {
+                            progress.finish_and_clear();
+                        }
+                        *pb_clone.lock().await = None;
+
+                        println!(
+                            "{} Annotation complete: {} succeeded, {} failed",
+                            style("✓").green(),
+                            succeeded,
+                            failed
+                        );
+
+                        if remaining > 0 {
+                            println!(
+                                "  {} {} documents still need annotation",
+                                style("→").dim(),
+                                remaining
+                            );
+                        }
                     }
                 }
             }
+        });
+
+        // Run service
+        let _result = service.annotate(source_id, limit, event_tx).await?;
+
+        // Wait for event handler to finish
+        let _ = event_handler.await;
+
+        if !daemon {
+            break;
         }
-    });
 
-    // Run service
-    let _result = service.annotate(source_id, limit, event_tx).await?;
-
-    // Wait for event handler to finish
-    let _ = event_handler.await;
+        println!(
+            "{} Sleeping for {}s before next check...",
+            style("→").dim(),
+            interval
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+    }
 
     Ok(())
 }
