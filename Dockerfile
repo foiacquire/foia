@@ -11,6 +11,7 @@ RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/a
 
 ENV ORT_LIB_LOCATION=/usr/lib
 ENV ORT_SKIP_DOWNLOAD=1
+ENV ORT_PREFER_DYNAMIC_LINK=1
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
