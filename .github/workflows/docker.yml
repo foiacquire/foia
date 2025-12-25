@@ -166,18 +166,14 @@ jobs:
           - tag: tesseract
             features: browser
             tesseract: "true"
-          - tag: ocrs
-            features: browser,ocr-ocrs
-            tesseract: "false"
-          - tag: paddle
-            features: browser,ocr-paddle
-            tesseract: "false"
           - tag: redis
             features: browser,redis-backend
             tesseract: "false"
           - tag: annotate
             features: browser
             tesseract: "false"
+          # Note: ocrs and paddle tags disabled - ONNX Runtime doesn't support musl/Alpine
+          # TODO: Add Debian-based builds for these variants
     steps:
       - uses: actions/checkout@v4
 
