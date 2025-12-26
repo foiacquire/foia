@@ -71,7 +71,7 @@ jobs:
 
       - name: Build amd64
         run: |
-          cargo build --release --features "${{ matrix.features }}" --target x86_64-unknown-linux-musl
+          cross build --release --features "${{ matrix.features }}" --target x86_64-unknown-linux-musl
           mkdir -p dist/amd64
           cp target/x86_64-unknown-linux-musl/release/foiacquire dist/amd64/
 
