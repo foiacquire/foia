@@ -25,4 +25,4 @@ COPY dist/${TARGETARCH}/foiacquire /usr/local/bin/foiacquire
 COPY --chmod=755 bin/foiacquire-entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["status"]
+CMD ["--help"]
