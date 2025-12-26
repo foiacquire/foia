@@ -9,7 +9,9 @@ use tokio::sync::Mutex;
 
 use crate::config::{Config, Settings};
 use crate::models::{Source, SourceType};
-use crate::repository::{CrawlRepository, SourceRepository};
+use crate::repository::{
+    create_pool, AsyncCrawlRepository, AsyncSourceRepository, CrawlRepository, SourceRepository,
+};
 use crate::scrapers::ConfigurableScraper;
 
 use super::helpers::format_bytes;
@@ -19,12 +21,13 @@ pub async fn cmd_crawl_status(
     settings: &Settings,
     source_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let source_repo = SourceRepository::new(&settings.database_path())?;
-    let crawl_repo = CrawlRepository::new(&settings.database_path())?;
+    let pool = create_pool(&settings.database_path()).await?;
+    let source_repo = AsyncSourceRepository::new(pool.clone());
+    let crawl_repo = AsyncCrawlRepository::new(pool);
 
     let sources = match &source_id {
-        Some(id) => source_repo.get(id)?.into_iter().collect(),
-        None => source_repo.get_all()?,
+        Some(id) => source_repo.get(id).await?.into_iter().collect(),
+        None => source_repo.get_all().await?,
     };
 
     if sources.is_empty() {
@@ -35,8 +38,8 @@ pub async fn cmd_crawl_status(
     // Use bulk queries when loading all sources (avoids N+1)
     let (all_states, all_stats) = if source_id.is_none() {
         (
-            crawl_repo.get_all_stats()?,
-            crawl_repo.get_all_request_stats()?,
+            crawl_repo.get_all_stats().await?,
+            crawl_repo.get_all_request_stats().await?,
         )
     } else {
         (
@@ -56,13 +59,13 @@ pub async fn cmd_crawl_status(
                     ..Default::default()
                 })
         } else {
-            crawl_repo.get_crawl_state(&source.id)?
+            crawl_repo.get_crawl_state(&source.id).await?
         };
 
         let stats = if source_id.is_none() {
             all_stats.get(&source.id).cloned().unwrap_or_default()
         } else {
-            crawl_repo.get_request_stats(&source.id)?
+            crawl_repo.get_request_stats(&source.id).await?
         };
 
         println!(
@@ -139,8 +142,9 @@ pub async fn cmd_crawl_clear(
         return Ok(());
     }
 
-    let crawl_repo = CrawlRepository::new(&settings.database_path())?;
-    crawl_repo.clear_source_all(source_id)?;
+    let pool = create_pool(&settings.database_path()).await?;
+    let crawl_repo = AsyncCrawlRepository::new(pool);
+    crawl_repo.clear_source_all(source_id).await?;
 
     println!(
         "{} Cleared all crawl state for '{}'",

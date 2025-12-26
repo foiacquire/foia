@@ -3,14 +3,17 @@
 use console::style;
 
 use crate::config::Settings;
-use crate::repository::{CrawlRepository, DocumentRepository, SourceRepository};
+use crate::repository::{
+    create_pool, AsyncCrawlRepository, AsyncDocumentRepository, AsyncSourceRepository,
+};
 
 use super::helpers::truncate;
 
 /// List configured sources.
 pub async fn cmd_source_list(settings: &Settings) -> anyhow::Result<()> {
-    let source_repo = SourceRepository::new(&settings.database_path())?;
-    let sources = source_repo.get_all()?;
+    let pool = create_pool(&settings.database_path()).await?;
+    let source_repo = AsyncSourceRepository::new(pool);
+    let sources = source_repo.get_all().await?;
 
     if sources.is_empty() {
         println!(
@@ -53,19 +56,20 @@ pub async fn cmd_source_rename(
     use std::io::{self, Write};
 
     let db_path = settings.database_path();
-    let source_repo = SourceRepository::new(&db_path)?;
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
-    let crawl_repo = CrawlRepository::new(&db_path)?;
+    let pool = create_pool(&db_path).await?;
+    let source_repo = AsyncSourceRepository::new(pool.clone());
+    let doc_repo = AsyncDocumentRepository::new(pool.clone(), settings.documents_dir.clone());
+    let crawl_repo = AsyncCrawlRepository::new(pool.clone());
 
     // Check old source exists
-    let old_source = source_repo.get(old_id)?;
+    let old_source = source_repo.get(old_id).await?;
     if old_source.is_none() {
         println!("{} Source '{}' not found", style("✗").red(), old_id);
         return Ok(());
     }
 
     // Check new source doesn't exist
-    if source_repo.get(new_id)?.is_some() {
+    if source_repo.get(new_id).await?.is_some() {
         println!(
             "{} Source '{}' already exists. Use a different name or delete it first.",
             style("✗").red(),
@@ -75,8 +79,8 @@ pub async fn cmd_source_rename(
     }
 
     // Count affected documents
-    let doc_count = doc_repo.count_by_source(old_id)?;
-    let crawl_count = crawl_repo.count_by_source(old_id)?;
+    let doc_count = doc_repo.count_by_source(old_id).await?;
+    let crawl_count = crawl_repo.count_by_source(old_id).await?;
 
     println!(
         "\n{} Rename source '{}' → '{}'",
@@ -99,35 +103,44 @@ pub async fn cmd_source_rename(
         }
     }
 
-    // Perform the rename using direct SQL for atomicity
-    let conn = rusqlite::Connection::open(&db_path)?;
-    conn.execute("BEGIN TRANSACTION", [])?;
+    // Perform the rename using sqlx transaction for atomicity
+    let mut tx = pool.begin().await?;
 
     // Update documents
-    let docs_updated = conn.execute(
+    let docs_result = sqlx::query!(
         "UPDATE documents SET source_id = ?1 WHERE source_id = ?2",
-        rusqlite::params![new_id, old_id],
-    )?;
+        new_id,
+        old_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    let docs_updated = docs_result.rows_affected();
 
     // Update crawl_urls
-    let crawls_updated = conn.execute(
+    let crawls_result = sqlx::query!(
         "UPDATE crawl_urls SET source_id = ?1 WHERE source_id = ?2",
-        rusqlite::params![new_id, old_id],
-    )?;
+        new_id,
+        old_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    let crawls_updated = crawls_result.rows_affected();
 
-    // Update crawl_state
-    conn.execute(
-        "UPDATE crawl_state SET source_id = ?1 WHERE source_id = ?2",
-        rusqlite::params![new_id, old_id],
-    )?;
+    // Update crawl_config
+    sqlx::query!(
+        "UPDATE crawl_config SET source_id = ?1 WHERE source_id = ?2",
+        new_id,
+        old_id
+    )
+    .execute(&mut *tx)
+    .await?;
 
     // Update source itself
-    conn.execute(
-        "UPDATE sources SET id = ?1 WHERE id = ?2",
-        rusqlite::params![new_id, old_id],
-    )?;
+    sqlx::query!("UPDATE sources SET id = ?1 WHERE id = ?2", new_id, old_id)
+        .execute(&mut *tx)
+        .await?;
 
-    conn.execute("COMMIT", [])?;
+    tx.commit().await?;
 
     println!(
         "\n{} Renamed '{}' → '{}'",

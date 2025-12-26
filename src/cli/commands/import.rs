@@ -7,7 +7,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::config::Settings;
-use crate::repository::{DocumentRepository, SourceRepository};
+use crate::repository::{create_pool, AsyncDocumentRepository, AsyncSourceRepository};
 
 /// Import documents from WARC archive files.
 #[allow(clippy::too_many_arguments)]
@@ -69,8 +69,9 @@ pub async fn cmd_import(
 
     let db_path = settings.database_path();
     let documents_dir = settings.documents_dir.clone();
-    let doc_repo = DocumentRepository::new(&db_path, &documents_dir)?;
-    let source_repo = SourceRepository::new(&db_path)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool.clone(), documents_dir.clone());
+    let source_repo = AsyncSourceRepository::new(pool);
 
     // Pre-load all existing URLs into a HashSet for O(1) duplicate detection.
     // This is much faster than querying the DB for each WARC record.
@@ -78,11 +79,11 @@ pub async fn cmd_import(
         "{} Loading existing URLs for duplicate detection...",
         style("→").cyan()
     );
-    let mut existing_urls: HashSet<String> = doc_repo.get_all_urls_set().unwrap_or_default();
+    let mut existing_urls: HashSet<String> = doc_repo.get_all_urls_set().await.unwrap_or_default();
     println!("  {} existing URLs loaded", existing_urls.len());
 
     // Load all sources for URL matching
-    let all_sources = source_repo.get_all()?;
+    let all_sources = source_repo.get_all().await?;
 
     // Build URL prefix -> source_id map for auto-detection
     let source_map: HashMap<String, String> = all_sources
@@ -92,7 +93,7 @@ pub async fn cmd_import(
 
     // If source_id provided, verify it exists
     if let Some(sid) = source_id {
-        if source_repo.get(sid)?.is_none() {
+        if source_repo.get(sid).await?.is_none() {
             println!(
                 "{} Source '{}' not found. Use 'source list' to see available sources.",
                 style("✗").red(),
@@ -371,14 +372,16 @@ pub async fn cmd_import(
                             mime_type,
                         );
 
-                        // Save using existing helper
-                        match crate::cli::helpers::save_scraped_document(
+                        // Save using async helper
+                        match crate::cli::helpers::save_scraped_document_async(
                             &doc_repo,
                             content,
                             &result,
                             effective_source_id,
                             &documents_dir,
-                        ) {
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 // Add to URL cache to avoid re-importing in same session
                                 existing_urls.insert(target_uri.clone());

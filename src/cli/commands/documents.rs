@@ -7,7 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::config::Settings;
 use crate::models::Document;
-use crate::repository::DocumentRepository;
+use crate::repository::{create_pool, AsyncDocumentRepository};
 
 use super::helpers::{format_bytes, mime_short, truncate};
 
@@ -89,9 +89,9 @@ fn extract_and_ocr_from_email(
 }
 
 /// Process a single archive document.
-fn process_archive(
+async fn process_archive(
     doc: &Document,
-    doc_repo: &DocumentRepository,
+    doc_repo: &AsyncDocumentRepository,
     run_ocr: bool,
     text_extractor: &crate::ocr::TextExtractor,
 ) -> Option<(usize, usize)> {
@@ -99,7 +99,7 @@ fn process_archive(
     use crate::ocr::ArchiveExtractor;
 
     let version = doc.current_version()?;
-    let version_id = doc_repo.get_current_version_id(&doc.id).ok()??;
+    let version_id = doc_repo.get_current_version_id(&doc.id).await.ok()??;
 
     let entries = match ArchiveExtractor::list_zip_contents(&version.file_path) {
         Ok(e) => e,
@@ -140,7 +140,7 @@ fn process_archive(
         vf.extracted_text = text;
         vf.status = status;
 
-        if let Err(e) = doc_repo.insert_virtual_file(&vf) {
+        if let Err(e) = doc_repo.insert_virtual_file(&vf).await {
             tracing::warn!("Failed to save virtual file {}: {}", entry.path, e);
         }
     }
@@ -149,9 +149,9 @@ fn process_archive(
 }
 
 /// Process a single email document.
-fn process_email(
+async fn process_email(
     doc: &Document,
-    doc_repo: &DocumentRepository,
+    doc_repo: &AsyncDocumentRepository,
     run_ocr: bool,
     text_extractor: &crate::ocr::TextExtractor,
 ) -> Option<(usize, usize)> {
@@ -159,7 +159,7 @@ fn process_email(
     use crate::ocr::EmailExtractor;
 
     let version = doc.current_version()?;
-    let version_id = doc_repo.get_current_version_id(&doc.id).ok()??;
+    let version_id = doc_repo.get_current_version_id(&doc.id).await.ok()??;
 
     let parsed = match EmailExtractor::parse_email(&version.file_path) {
         Ok(p) => p,
@@ -200,7 +200,7 @@ fn process_email(
         vf.extracted_text = text;
         vf.status = status;
 
-        if let Err(e) = doc_repo.insert_virtual_file(&vf) {
+        if let Err(e) = doc_repo.insert_virtual_file(&vf).await {
             tracing::warn!("Failed to save virtual file {}: {}", attachment.filename, e);
         }
     }
@@ -219,7 +219,7 @@ fn process_email(
                 .map(|s| s.len() as u64)
                 .unwrap_or(0),
         );
-        let _ = doc_repo.insert_virtual_file(&placeholder);
+        let _ = doc_repo.insert_virtual_file(&placeholder).await;
     }
 
     Some((files_discovered, files_extracted))
@@ -235,10 +235,11 @@ pub async fn cmd_archive(
     use crate::ocr::TextExtractor;
 
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool, settings.documents_dir.clone());
 
-    let archive_count = doc_repo.count_unprocessed_archives(source_id)?;
-    let email_count = doc_repo.count_unprocessed_emails(source_id)?;
+    let archive_count = doc_repo.count_unprocessed_archives(source_id).await?;
+    let email_count = doc_repo.count_unprocessed_emails(source_id).await?;
     let total_count = archive_count + email_count;
 
     if total_count == 0 {
@@ -274,10 +275,13 @@ pub async fn cmd_archive(
     // Process zip archives first
     let archive_limit = effective_limit.min(archive_count as usize);
     if archive_limit > 0 {
-        for doc in doc_repo.get_unprocessed_archives(source_id, archive_limit)? {
+        for doc in doc_repo
+            .get_unprocessed_archives(source_id, archive_limit)
+            .await?
+        {
             pb.set_message(truncate(&doc.title, 40));
             if let Some((discovered, extracted)) =
-                process_archive(&doc, &doc_repo, run_ocr, &text_extractor)
+                process_archive(&doc, &doc_repo, run_ocr, &text_extractor).await
             {
                 stats.files_discovered += discovered;
                 stats.files_extracted += extracted;
@@ -290,10 +294,13 @@ pub async fn cmd_archive(
     // Process emails with remaining limit
     let remaining_limit = effective_limit.saturating_sub(stats.containers_processed);
     if remaining_limit > 0 && email_count > 0 {
-        for doc in doc_repo.get_unprocessed_emails(source_id, remaining_limit)? {
+        for doc in doc_repo
+            .get_unprocessed_emails(source_id, remaining_limit)
+            .await?
+        {
             pb.set_message(truncate(&doc.title, 40));
             if let Some((discovered, extracted)) =
-                process_email(&doc, &doc_repo, run_ocr, &text_extractor)
+                process_email(&doc, &doc_repo, run_ocr, &text_extractor).await
             {
                 stats.files_discovered += discovered;
                 stats.files_extracted += extracted;
@@ -325,21 +332,24 @@ pub async fn cmd_ls(
     format: &str,
 ) -> anyhow::Result<()> {
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool, settings.documents_dir.clone());
 
     // Get documents based on filters
     let documents: Vec<Document> = if let Some(tag_name) = tag {
         // Filter by tag
-        doc_repo.get_by_tag(tag_name, source_id)?
+        doc_repo.get_by_tag(tag_name, source_id).await?
     } else if let Some(type_name) = type_filter {
         // Filter by type
-        doc_repo.get_by_type_category(type_name, source_id, limit)?
+        doc_repo
+            .get_by_type_category(type_name, source_id, limit)
+            .await?
     } else if let Some(sid) = source_id {
         // Filter by source
-        doc_repo.get_by_source(sid)?
+        doc_repo.get_by_source(sid).await?
     } else {
         // Get all
-        doc_repo.get_all()?
+        doc_repo.get_all().await?
     };
 
     // Apply limit
@@ -417,14 +427,15 @@ pub async fn cmd_ls(
 /// Show document info/metadata.
 pub async fn cmd_info(settings: &Settings, doc_id: &str) -> anyhow::Result<()> {
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool, settings.documents_dir.clone());
 
     // Try to find document by ID
-    let doc = match doc_repo.get(doc_id)? {
+    let doc = match doc_repo.get(doc_id).await? {
         Some(d) => d,
         None => {
             // Try to find by partial ID or title search
-            let all_docs = doc_repo.get_all()?;
+            let all_docs = doc_repo.get_all().await?;
             let matches: Vec<_> = all_docs
                 .into_iter()
                 .filter(|d| {
@@ -532,14 +543,15 @@ pub async fn cmd_info(settings: &Settings, doc_id: &str) -> anyhow::Result<()> {
 /// Output document content to stdout.
 pub async fn cmd_read(settings: &Settings, doc_id: &str, text_only: bool) -> anyhow::Result<()> {
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool, settings.documents_dir.clone());
 
     // Find document
-    let doc = match doc_repo.get(doc_id)? {
+    let doc = match doc_repo.get(doc_id).await? {
         Some(d) => d,
         None => {
             // Try partial match
-            let all_docs = doc_repo.get_all()?;
+            let all_docs = doc_repo.get_all().await?;
             let matches: Vec<_> = all_docs
                 .into_iter()
                 .filter(|d| d.id.starts_with(doc_id))
@@ -597,15 +609,16 @@ pub async fn cmd_search(
     limit: usize,
 ) -> anyhow::Result<()> {
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool, settings.documents_dir.clone());
 
     let query_lower = query.to_lowercase();
 
     // Get all documents and filter
     let documents: Vec<Document> = if let Some(sid) = source_id {
-        doc_repo.get_by_source(sid)?
+        doc_repo.get_by_source(sid).await?
     } else {
-        doc_repo.get_all()?
+        doc_repo.get_all().await?
     };
 
     // Search in title, synopsis, tags, and extracted text

@@ -7,7 +7,7 @@ use std::path::Path;
 use console::style;
 
 use crate::config::{Config, Settings};
-use crate::repository::{ConfigHistoryRepository, SourceRepository};
+use crate::repository::{create_pool, AsyncConfigHistoryRepository, AsyncSourceRepository};
 use crate::scrapers::ScraperConfig;
 
 /// Recover a skeleton config from an existing database.
@@ -28,8 +28,9 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
         .ok_or_else(|| anyhow::anyhow!("Could not determine database filename"))?;
 
     // Open database and query sources
-    let source_repo = SourceRepository::new(database)?;
-    let sources = source_repo.get_all()?;
+    let pool = create_pool(database).await?;
+    let source_repo = AsyncSourceRepository::new(pool);
+    let sources = source_repo.get_all().await?;
 
     if sources.is_empty() {
         eprintln!(
@@ -104,9 +105,11 @@ pub async fn cmd_config_restore(settings: &Settings, output: Option<&Path>) -> a
         anyhow::bail!("Database not found: {}", db_path.display());
     }
 
-    let repo = ConfigHistoryRepository::new(&db_path)?;
+    let pool = create_pool(&db_path).await?;
+    let repo = AsyncConfigHistoryRepository::new(pool);
     let entry = repo
-        .get_latest()?
+        .get_latest()
+        .await?
         .ok_or_else(|| anyhow::anyhow!("No configuration history found in database"))?;
 
     // Determine output path
@@ -140,8 +143,9 @@ pub async fn cmd_config_history(settings: &Settings, full: bool) -> anyhow::Resu
         anyhow::bail!("Database not found: {}", db_path.display());
     }
 
-    let repo = ConfigHistoryRepository::new(&db_path)?;
-    let entries = repo.get_all()?;
+    let pool = create_pool(&db_path).await?;
+    let repo = AsyncConfigHistoryRepository::new(pool);
+    let entries = repo.get_all().await?;
 
     if entries.is_empty() {
         println!("No configuration history found.");

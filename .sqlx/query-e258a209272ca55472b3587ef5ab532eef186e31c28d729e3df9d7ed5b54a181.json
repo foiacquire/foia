@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as \"count!: i32\" FROM configuration_history WHERE hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i32",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e258a209272ca55472b3587ef5ab532eef186e31c28d729e3df9d7ed5b54a181"
+}

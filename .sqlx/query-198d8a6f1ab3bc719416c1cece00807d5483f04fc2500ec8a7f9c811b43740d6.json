@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                uuid as \"uuid!\",\n                created_at as \"created_at!\",\n                data as \"data!\",\n                format as \"format!\",\n                hash as \"hash!\"\n               FROM configuration_history\n               ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "uuid!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "data!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "format!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "hash!",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "198d8a6f1ab3bc719416c1cece00807d5483f04fc2500ec8a7f9c811b43740d6"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO configuration_history (uuid, created_at, data, format, hash)\n               VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f80648c6c43eb2d586f80e9ecee1573bf369e5f234d3a036ea33ae0696fa5c8a"
+}

@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use crate::models::{Document, DocumentVersion};
-use crate::repository::{extract_filename_parts, sanitize_filename, DocumentRepository};
+use crate::repository::{
+    extract_filename_parts, sanitize_filename, AsyncDocumentRepository, DocumentRepository,
+};
 use crate::scrapers::ScraperResult;
 
 /// Save scraped document content to disk and database.
@@ -67,6 +69,63 @@ pub fn save_scraped_document(
             result.metadata.clone(),
         );
         doc_repo.save(&doc)?;
+        Ok(true) // Created new
+    }
+}
+
+/// Async version of save_scraped_document for use with AsyncDocumentRepository.
+pub async fn save_scraped_document_async(
+    doc_repo: &AsyncDocumentRepository,
+    content: &[u8],
+    result: &ScraperResult,
+    source_id: &str,
+    documents_dir: &Path,
+) -> anyhow::Result<bool> {
+    // Compute content hash and save file with readable name
+    let content_hash = DocumentVersion::compute_hash(content);
+
+    // Extract basename and extension from URL or title
+    let (basename, extension) =
+        extract_filename_parts(&result.url, &result.title, &result.mime_type);
+    let filename = format!(
+        "{}-{}.{}",
+        sanitize_filename(&basename),
+        &content_hash[..8],
+        extension
+    );
+
+    // Store in subdirectory by first 2 chars of hash (for filesystem efficiency)
+    let content_path = documents_dir.join(&content_hash[..2]).join(&filename);
+    std::fs::create_dir_all(content_path.parent().unwrap())?;
+    std::fs::write(&content_path, content)?;
+
+    let version = DocumentVersion::new_with_metadata(
+        content,
+        content_path,
+        result.mime_type.clone(),
+        Some(result.url.clone()),
+        result.original_filename.clone(),
+        result.server_date,
+    );
+
+    // Check existing document
+    let existing = doc_repo.get_by_url(&result.url).await?;
+
+    if let Some(mut doc) = existing {
+        if doc.add_version(version) {
+            doc_repo.save(&doc).await?;
+        }
+        Ok(false) // Updated existing
+    } else {
+        let doc = Document::new(
+            uuid::Uuid::new_v4().to_string(),
+            source_id.to_string(),
+            result.title.clone(),
+            result.url.clone(),
+            version,
+            result.metadata.clone(),
+        );
+        doc_repo.save(&doc).await?;
         Ok(true) // Created new
     }
 }

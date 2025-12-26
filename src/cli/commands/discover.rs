@@ -3,7 +3,7 @@
 use console::style;
 
 use crate::config::Settings;
-use crate::repository::{CrawlRepository, DocumentRepository};
+use crate::repository::{create_pool, AsyncCrawlRepository, AsyncDocumentRepository};
 
 /// Analyze URL patterns and discover new URLs.
 pub async fn cmd_discover(
@@ -18,8 +18,9 @@ pub async fn cmd_discover(
     use std::collections::{HashMap, HashSet};
 
     let db_path = settings.database_path();
-    let doc_repo = DocumentRepository::new(&db_path, &settings.documents_dir)?;
-    let crawl_repo = CrawlRepository::new(&db_path)?;
+    let pool = create_pool(&db_path).await?;
+    let doc_repo = AsyncDocumentRepository::new(pool.clone(), settings.documents_dir.clone());
+    let crawl_repo = AsyncCrawlRepository::new(pool);
 
     println!(
         "{} Analyzing URL patterns for source: {}",
@@ -28,7 +29,7 @@ pub async fn cmd_discover(
     );
 
     // Get just the URLs for this source (lightweight query)
-    let urls = doc_repo.get_urls_by_source(source_id)?;
+    let urls = doc_repo.get_urls_by_source(source_id).await?;
     if urls.is_empty() {
         println!(
             "{} No documents found for source {}",
@@ -164,7 +165,8 @@ pub async fn cmd_discover(
     // Get existing URLs to avoid duplicates
     let existing_urls: HashSet<String> = urls.iter().cloned().collect();
     let queued_urls: HashSet<String> = crawl_repo
-        .get_pending_urls(source_id, 0)?
+        .get_pending_urls(source_id, 0)
+        .await?
         .into_iter()
         .map(|u| u.url)
         .collect();
@@ -347,7 +349,7 @@ pub async fn cmd_discover(
                 0,
             );
 
-            match crawl_repo.add_url(&crawl_url) {
+            match crawl_repo.add_url(&crawl_url).await {
                 Ok(true) => added += 1,
                 Ok(false) => {}
                 Err(e) => tracing::warn!("Failed to add directory URL {}: {}", url, e),
@@ -364,7 +366,7 @@ pub async fn cmd_discover(
                 0,
             );
 
-            match crawl_repo.add_url(&crawl_url) {
+            match crawl_repo.add_url(&crawl_url).await {
                 Ok(true) => added += 1,
                 Ok(false) => {}
                 Err(e) => tracing::warn!("Failed to add URL {}: {}", url, e),

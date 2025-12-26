@@ -11,10 +11,13 @@ mod crawl;
 mod document;
 mod source;
 
-pub use config_history::{ConfigHistoryEntry, ConfigHistoryRepository};
-pub use crawl::CrawlRepository;
+pub use config_history::{
+    AsyncConfigHistoryRepository, ConfigHistoryEntry, ConfigHistoryRepository,
+};
+pub use crawl::{AsyncCrawlRepository, CrawlRepository};
 pub use document::{
-    extract_filename_parts, sanitize_filename, DocumentRepository, DocumentSummary,
+    extract_filename_parts, sanitize_filename, AsyncDocumentRepository, DocumentRepository,
+    DocumentSummary,
 };
 pub use source::{AsyncSourceRepository, SourceRepository};
 
@@ -71,7 +74,19 @@ pub type Result<T> = std::result::Result<T, RepositoryError>;
 /// This is the sqlx equivalent of `connect()` for rusqlite.
 /// The pool handles connection management and concurrency automatically.
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
-    let db_url = format!("sqlite:{}", db_path.display());
+    // Handle UNC paths (\\server\share\...) which need special SQLite URI format
+    // SQLite URI for UNC: file:////server/share/path (4 slashes = file:// + //server)
+    let path_str = db_path.to_string_lossy();
+    let db_url = if path_str.starts_with("\\\\") {
+        // Windows UNC path: \\server\share\... -> file:////server/share/...
+        let normalized = path_str.replace('\\', "/");
+        format!("sqlite:file://{}", normalized)
+    } else if path_str.starts_with("//") {
+        // Unix-style UNC path: //server/share/... -> file:////server/share/...
+        format!("sqlite:file://{}", path_str)
+    } else {
+        format!("sqlite:{}", db_path.display())
+    };
 
     let options = SqliteConnectOptions::from_str(&db_url)?
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)

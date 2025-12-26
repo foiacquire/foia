@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM configuration_history\n               WHERE uuid NOT IN (\n                   SELECT uuid FROM configuration_history\n                   ORDER BY created_at DESC\n                   LIMIT ?\n               )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3ef5fe3ecbdff227b7ae93fadf6c49641c7fed6e64e6b6ff056cb1363500b4f7"
+}

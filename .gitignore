@@ -19,3 +19,5 @@
 # Non-git hidden file patterns
 .*
 !.git*
+!.sqlx/
+!.cargo/
