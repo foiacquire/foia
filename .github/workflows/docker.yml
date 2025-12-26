@@ -12,6 +12,7 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/workflows/docker.yml'
   workflow_dispatch:
 
 env:
@@ -37,6 +38,54 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-features -- -D warnings
+
+  build:
+    name: Build Binaries
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - features: browser
+            artifact: foiacquire-browser
+          - features: browser,redis-backend
+            artifact: foiacquire-redis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.artifact }}
+
+      - name: Build amd64
+        run: |
+          cargo build --release --features "${{ matrix.features }}" --target x86_64-unknown-linux-musl
+          mkdir -p dist/amd64
+          cp target/x86_64-unknown-linux-musl/release/foiacquire dist/amd64/
+
+      - name: Build arm64
+        run: |
+          cross build --release --features "${{ matrix.features }}" --target aarch64-unknown-linux-musl
+          mkdir -p dist/arm64
+          cp target/aarch64-unknown-linux-musl/release/foiacquire dist/arm64/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
 
   chromium:
     name: Build Chromium Image
@@ -154,27 +203,33 @@ jobs:
 
   foiacquire:
     name: Build FOIAcquire Image
-    needs: lint
+    needs: build
     runs-on: ubuntu-latest
     environment: release
     strategy:
       matrix:
         include:
           - tag: latest
-            features: browser
+            artifact: foiacquire-browser
             tesseract: "false"
           - tag: tesseract
-            features: browser
+            artifact: foiacquire-browser
             tesseract: "true"
           - tag: redis
-            features: browser,redis-backend
+            artifact: foiacquire-redis
             tesseract: "false"
           - tag: annotate
-            features: browser
+            artifact: foiacquire-browser
             tesseract: "false"
           # TODO: ocrs/paddle disabled - ONNX Runtime dynamic linking issues on Alpine/musl
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -204,7 +259,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
           build-args: |
-            FEATURES=${{ matrix.features }}
             WITH_TESSERACT=${{ matrix.tesseract }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
