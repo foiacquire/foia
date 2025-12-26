@@ -1,5 +1,7 @@
 //! LLM client configuration.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 use super::prompts::{DEFAULT_SYNOPSIS_PROMPT, DEFAULT_TAGS_PROMPT};

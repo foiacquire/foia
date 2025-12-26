@@ -2,6 +2,8 @@
 //!
 //! Supports Ollama API for local LLM inference.
 
+#![allow(dead_code)]
+
 mod config;
 mod prompts;
 

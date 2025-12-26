@@ -47,6 +47,7 @@ fn update_document_metadata(
 }
 
 /// Save new content and add a new version to the document.
+#[allow(clippy::too_many_arguments)]
 fn save_new_version(
     doc: &Document,
     content: &[u8],
@@ -139,6 +140,7 @@ pub enum ReloadMode {
 }
 
 /// Scrape documents from one or more sources.
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_scrape(
     settings: &Settings,
     source_ids: &[String],

@@ -1,5 +1,7 @@
 //! MIME type categorization and display utilities.
 
+#![allow(dead_code)]
+
 /// MIME type categories for document classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MimeCategory {

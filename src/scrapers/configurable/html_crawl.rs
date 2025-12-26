@@ -211,6 +211,7 @@ fn convert_google_drive_file_url(url: String) -> String {
 }
 
 /// Send discovered document URLs to the channel and crawl repository.
+#[allow(clippy::too_many_arguments)]
 async fn send_document_url(
     url: String,
     source_id: &str,
