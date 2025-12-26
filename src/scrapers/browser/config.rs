@@ -37,8 +37,22 @@ pub struct BrowserEngineConfig {
 
     /// Remote Chrome DevTools URL (e.g., "ws://localhost:9222").
     /// If set, connects to existing browser instead of launching one.
+    /// Can also be set via BROWSER_URL environment variable.
     #[serde(default)]
     pub remote_url: Option<String>,
+}
+
+impl BrowserEngineConfig {
+    /// Apply environment variable overrides.
+    /// BROWSER_URL - Remote Chrome DevTools URL (e.g., "ws://host:9222")
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Ok(val) = std::env::var("BROWSER_URL") {
+            if !val.is_empty() {
+                self.remote_url = Some(val);
+            }
+        }
+        self
+    }
 }
 
 pub fn default_headless() -> bool {

@@ -102,6 +102,7 @@ fn default_browser_timeout() -> u64 {
 
 impl BrowserConfig {
     /// Convert to BrowserEngineConfig.
+    /// Applies environment variable overrides (BROWSER_URL).
     pub fn to_engine_config(&self) -> BrowserEngineConfig {
         let engine = match self.engine.to_lowercase().as_str() {
             "stealth" => BrowserEngineType::Stealth,
@@ -120,6 +121,7 @@ impl BrowserConfig {
             chrome_args: Vec::new(),
             remote_url: self.remote_url.clone(),
         }
+        .with_env_overrides()
     }
 }
 

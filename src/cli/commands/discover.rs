@@ -442,7 +442,8 @@ pub async fn cmd_browser_test(
         wait_for_selector: None,
         chrome_args: vec![],
         remote_url: browser_url,
-    };
+    }
+    .with_env_overrides();
 
     let mut fetcher = BrowserFetcher::new(config);
 

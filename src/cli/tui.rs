@@ -43,12 +43,22 @@ fn set_scroll_region(top: u16, bottom: u16) -> io::Result<()> {
 /// Returns Ok(true) if TUI was activated, Ok(false) if not in interactive terminal.
 pub fn init(num_status_lines: u16) -> io::Result<bool> {
     // Only activate in interactive terminals
-    let term = Term::stdout();
-    if !term.is_term() {
+    // Use try/catch pattern since Term::stdout() can fail in Docker without TTY
+    let is_terminal = std::panic::catch_unwind(|| {
+        let term = Term::stdout();
+        term.is_term()
+    })
+    .unwrap_or(false);
+
+    if !is_terminal {
         return Ok(false);
     }
 
-    let (_, height) = terminal::size()?;
+    // terminal::size() can also fail without a TTY
+    let (_, height) = match terminal::size() {
+        Ok(size) => size,
+        Err(_) => return Ok(false),
+    };
 
     // Need at least status lines + some scroll area
     if height < num_status_lines + 5 {
@@ -96,18 +106,22 @@ pub fn cleanup() -> io::Result<()> {
         return Ok(());
     }
 
+    TUI_ACTIVE.store(false, Ordering::SeqCst);
+
+    // Best-effort cleanup - don't fail if terminal ops fail
+    let height = match terminal::size() {
+        Ok((_, h)) => h,
+        Err(_) => return Ok(()),
+    };
+
     let mut stdout = io::stdout();
-    let (_, height) = terminal::size()?;
 
     // Reset scroll region to full terminal
-    set_scroll_region(1, height)?;
+    let _ = set_scroll_region(1, height);
 
     // Move to bottom
-    execute!(stdout, MoveTo(0, height - 1))?;
-
-    stdout.flush()?;
-
-    TUI_ACTIVE.store(false, Ordering::SeqCst);
+    let _ = execute!(stdout, MoveTo(0, height - 1));
+    let _ = stdout.flush();
 
     Ok(())
 }
