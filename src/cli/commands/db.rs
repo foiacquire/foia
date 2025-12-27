@@ -373,9 +373,8 @@ where
     if options.clear {
         if let Some(ref tables) = options.tables {
             println!("{} Clearing specified tables...", style("!").yellow());
-            for table in tables {
-                target.clear_table(table).await?;
-            }
+            let table_refs: Vec<&str> = tables.iter().map(|s| s.as_str()).collect();
+            target.clear_tables(&table_refs).await?;
         } else {
             println!("{} Clearing target database...", style("!").yellow());
             target.clear_all().await?;
