@@ -475,11 +475,15 @@ impl PostgresMigrator {
         Ok(count)
     }
 
-    /// Clear a specific table by name.
-    pub async fn clear_table(&self, table: &str) -> Result<(), DieselError> {
+    /// Clear specific tables by name.
+    /// Uses a single TRUNCATE statement for atomicity and proper FK handling.
+    pub async fn clear_tables(&self, tables: &[&str]) -> Result<(), DieselError> {
+        if tables.is_empty() {
+            return Ok(());
+        }
         let mut conn = self.pool.get().await.map_err(to_diesel_error)?;
-        // Use TRUNCATE for speed, CASCADE handles foreign keys
-        let sql = format!("TRUNCATE {} CASCADE", table);
+        // Use TRUNCATE with all tables at once - PostgreSQL handles FK ordering
+        let sql = format!("TRUNCATE {} RESTART IDENTITY", tables.join(", "));
         diesel::sql_query(sql).execute(&mut conn).await?;
         Ok(())
     }
