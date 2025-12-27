@@ -345,13 +345,12 @@ impl Config {
 
     /// Save configuration to database history if it has changed.
     /// Returns true if saved, false if unchanged, or logs warning on error.
-    pub async fn save_to_db_if_changed(&self, db_path: &Path, target_dir: &Path) {
+    pub async fn save_to_db_if_changed(&self, settings: &Settings) {
         let hash = self.hash();
-        let data = self.to_json_relative(target_dir);
+        let data = self.to_json_relative(&settings.data_dir);
         let format = "json";
 
-        let docs_dir = db_path.parent().unwrap_or(Path::new(".")).join("documents");
-        let ctx = DbContext::new(db_path, &docs_dir);
+        let ctx = settings.create_db_context();
         let repo = ctx.config_history();
 
         match repo.insert_if_new(&data, format, &hash).await {
@@ -536,12 +535,17 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
         }
     }
 
-    // Save config to database history if database exists (only for file-based DBs)
-    if settings.database_url.is_none() {
-        let db_path = settings.database_path();
-        if db_path.exists() {
-            config.save_to_db_if_changed(&db_path, &settings.data_dir).await;
-        }
+    // Save config to database history
+    // For SQLite: only if the database file exists
+    // For Postgres: always try (will fail gracefully if DB not set up)
+    let should_save = if settings.database_url.is_some() {
+        true // Postgres - try to save
+    } else {
+        settings.database_path().exists() // SQLite - only if file exists
+    };
+
+    if should_save {
+        config.save_to_db_if_changed(&settings).await;
     }
 
     (settings, config)
