@@ -1,6 +1,10 @@
 //! Database management commands.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use console::style;
@@ -9,8 +13,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::repository::migration::ProgressCallback;
 use crate::repository::util::redact_url_password;
 use crate::repository::{AsyncSqlitePool, DatabaseExporter, DatabaseImporter, SqliteMigrator};
-
-use std::collections::HashSet;
 
 /// Options for database copy operations.
 #[derive(Clone)]
@@ -21,6 +23,34 @@ pub struct CopyOptions {
     pub show_progress: bool,
     pub tables: Option<HashSet<String>>,
     pub analyze: bool,
+    pub duplicate_log: Option<Arc<Mutex<DuplicateLogger>>>,
+}
+
+/// Logger for duplicate records during merge operations.
+pub struct DuplicateLogger {
+    file: File,
+    count: usize,
+}
+
+impl DuplicateLogger {
+    /// Create a new duplicate logger writing to the specified file.
+    pub fn new(path: &PathBuf) -> std::io::Result<Self> {
+        let mut file = File::create(path)?;
+        writeln!(file, "table,id")?;
+        Ok(Self { file, count: 0 })
+    }
+
+    /// Log a duplicate record.
+    pub fn log(&mut self, table: &str, id: &str) -> std::io::Result<()> {
+        writeln!(self.file, "{},{}", table, id)?;
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Get the number of duplicates logged.
+    pub fn count(&self) -> usize {
+        self.count
+    }
 }
 
 impl CopyOptions {
@@ -43,6 +73,7 @@ pub async fn cmd_db_copy(
     show_progress: bool,
     tables: Option<String>,
     analyze: bool,
+    skip_duplicates: Option<String>,
 ) -> anyhow::Result<()> {
     println!("{} Copying database:", style("→").cyan());
     println!("  From: {}", redact_url_password(source_url));
@@ -81,6 +112,15 @@ pub async fn cmd_db_copy(
         println!("  Tables: {}", set.iter().cloned().collect::<Vec<_>>().join(", "));
     }
 
+    // Create duplicate logger if skip_duplicates is specified
+    let duplicate_log = if let Some(ref path) = skip_duplicates {
+        let path = PathBuf::from(path);
+        println!("  Skip duplicates: {} (logging to {})", style("yes").green(), path.display());
+        Some(Arc::new(Mutex::new(DuplicateLogger::new(&path)?)))
+    } else {
+        None
+    };
+
     let options = CopyOptions {
         clear,
         batch_size,
@@ -88,6 +128,7 @@ pub async fn cmd_db_copy(
         show_progress,
         tables: tables_set,
         analyze,
+        duplicate_log: duplicate_log.clone(),
     };
 
     // Validate --copy flag
@@ -368,6 +409,8 @@ async fn copy_with_postgres(
             target.init_schema().await?;
             if options.use_copy {
                 copy_tables_with_copy(&source, &target, &options).await?;
+            } else if options.duplicate_log.is_some() {
+                copy_tables_skip_dups(&source, &target, &options).await?;
             } else {
                 copy_tables(&source, &target, &options).await?;
             }
@@ -393,6 +436,8 @@ async fn copy_with_postgres(
             target.init_schema().await?;
             if options.use_copy {
                 copy_tables_with_copy(&source, &target, &options).await?;
+            } else if options.duplicate_log.is_some() {
+                copy_tables_skip_dups(&source, &target, &options).await?;
             } else {
                 copy_tables(&source, &target, &options).await?;
             }
@@ -418,6 +463,275 @@ async fn run_analyze_if_needed(
     } else {
         target.analyze_all().await?;
     }
+    Ok(())
+}
+
+/// Copy tables with duplicate skipping (for merge operations).
+#[cfg(feature = "postgres")]
+async fn copy_tables_skip_dups<S>(
+    source: &S,
+    target: &crate::repository::migration_postgres::PostgresMigrator,
+    options: &CopyOptions,
+) -> anyhow::Result<()>
+where
+    S: DatabaseExporter,
+{
+    let dup_log = options.duplicate_log.as_ref().unwrap();
+
+    println!("\nCopying tables (skipping duplicates):");
+
+    // Helper to log duplicates
+    fn log_dups(
+        log: &Arc<Mutex<DuplicateLogger>>,
+        table: &str,
+        ids: impl Iterator<Item = String>,
+    ) {
+        if let Ok(mut logger) = log.lock() {
+            for id in ids {
+                let _ = logger.log(table, &id);
+            }
+        }
+    }
+
+    // Sources (string ID)
+    if options.should_copy("sources") {
+        let sources = source.export_sources().await?;
+        let ids: Vec<String> = sources.iter().map(|s| s.id.clone()).collect();
+        let existing = target.get_existing_string_ids("sources", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = sources
+            .into_iter()
+            .partition(|s| !existing.contains(&s.id));
+        log_dups(dup_log, "sources", dups.iter().map(|s| s.id.clone()));
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "sources",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_sources(&to_insert, None).await?;
+        }
+    }
+
+    // Documents (string ID)
+    if options.should_copy("documents") {
+        let documents = source.export_documents().await?;
+        let ids: Vec<String> = documents.iter().map(|d| d.id.clone()).collect();
+        let existing = target.get_existing_string_ids("documents", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = documents
+            .into_iter()
+            .partition(|d| !existing.contains(&d.id));
+        log_dups(dup_log, "documents", dups.iter().map(|d| d.id.clone()));
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "documents",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_documents(&to_insert, None).await?;
+        }
+    }
+
+    // Document versions (integer ID)
+    if options.should_copy("document_versions") {
+        let versions = source.export_document_versions().await?;
+        let ids: Vec<i32> = versions.iter().map(|v| v.id).collect();
+        let existing = target.get_existing_int_ids("document_versions", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = versions
+            .into_iter()
+            .partition(|v| !existing.contains(&v.id));
+        log_dups(
+            dup_log,
+            "document_versions",
+            dups.iter().map(|v| v.id.to_string()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "document_versions",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_document_versions(&to_insert, None).await?;
+        }
+    }
+
+    // Document pages (integer ID)
+    if options.should_copy("document_pages") {
+        let pages = source.export_document_pages().await?;
+        let ids: Vec<i32> = pages.iter().map(|p| p.id).collect();
+        let existing = target.get_existing_int_ids("document_pages", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = pages
+            .into_iter()
+            .partition(|p| !existing.contains(&p.id));
+        log_dups(
+            dup_log,
+            "document_pages",
+            dups.iter().map(|p| p.id.to_string()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "document_pages",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_document_pages(&to_insert, None).await?;
+        }
+    }
+
+    // Virtual files (string ID)
+    if options.should_copy("virtual_files") {
+        let files = source.export_virtual_files().await?;
+        let ids: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
+        let existing = target.get_existing_string_ids("virtual_files", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = files
+            .into_iter()
+            .partition(|f| !existing.contains(&f.id));
+        log_dups(dup_log, "virtual_files", dups.iter().map(|f| f.id.clone()));
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "virtual_files",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_virtual_files(&to_insert, None).await?;
+        }
+    }
+
+    // Crawl URLs (integer ID)
+    if options.should_copy("crawl_urls") {
+        let urls = source.export_crawl_urls().await?;
+        let ids: Vec<i32> = urls.iter().map(|u| u.id).collect();
+        let existing = target.get_existing_int_ids("crawl_urls", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = urls
+            .into_iter()
+            .partition(|u| !existing.contains(&u.id));
+        log_dups(dup_log, "crawl_urls", dups.iter().map(|u| u.id.to_string()));
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "crawl_urls",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_crawl_urls(&to_insert, None).await?;
+        }
+    }
+
+    // Crawl requests (integer ID)
+    if options.should_copy("crawl_requests") {
+        let requests = source.export_crawl_requests().await?;
+        let ids: Vec<i32> = requests.iter().map(|r| r.id).collect();
+        let existing = target.get_existing_int_ids("crawl_requests", "id", &ids).await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = requests
+            .into_iter()
+            .partition(|r| !existing.contains(&r.id));
+        log_dups(
+            dup_log,
+            "crawl_requests",
+            dups.iter().map(|r| r.id.to_string()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "crawl_requests",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_crawl_requests(&to_insert, None).await?;
+        }
+    }
+
+    // Crawl config (string ID - source_id is primary key)
+    if options.should_copy("crawl_config") {
+        let configs = source.export_crawl_configs().await?;
+        let ids: Vec<String> = configs.iter().map(|c| c.source_id.clone()).collect();
+        let existing = target
+            .get_existing_string_ids("crawl_config", "source_id", &ids)
+            .await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = configs
+            .into_iter()
+            .partition(|c| !existing.contains(&c.source_id));
+        log_dups(
+            dup_log,
+            "crawl_config",
+            dups.iter().map(|c| c.source_id.clone()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "crawl_config",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_crawl_configs(&to_insert, None).await?;
+        }
+    }
+
+    // Configuration history (string ID - uuid)
+    if options.should_copy("configuration_history") {
+        let history = source.export_config_history().await?;
+        let ids: Vec<String> = history.iter().map(|h| h.uuid.clone()).collect();
+        let existing = target
+            .get_existing_string_ids("configuration_history", "uuid", &ids)
+            .await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = history
+            .into_iter()
+            .partition(|h| !existing.contains(&h.uuid));
+        log_dups(
+            dup_log,
+            "configuration_history",
+            dups.iter().map(|h| h.uuid.clone()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "configuration_history",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_config_history(&to_insert, None).await?;
+        }
+    }
+
+    // Rate limit state (string ID - domain)
+    if options.should_copy("rate_limit_state") {
+        let states = source.export_rate_limit_states().await?;
+        let ids: Vec<String> = states.iter().map(|s| s.domain.clone()).collect();
+        let existing = target
+            .get_existing_string_ids("rate_limit_state", "domain", &ids)
+            .await?;
+        let (to_insert, dups): (Vec<_>, Vec<_>) = states
+            .into_iter()
+            .partition(|s| !existing.contains(&s.domain));
+        log_dups(
+            dup_log,
+            "rate_limit_state",
+            dups.iter().map(|s| s.domain.clone()),
+        );
+        println!(
+            "  {:>20}: {} new, {} duplicates",
+            "rate_limit_state",
+            to_insert.len(),
+            dups.len()
+        );
+        if !to_insert.is_empty() {
+            target.import_rate_limit_states(&to_insert, None).await?;
+        }
+    }
+
+    // Print summary
+    if let Ok(logger) = dup_log.lock() {
+        println!(
+            "\n{} Copy complete! ({} duplicates skipped, logged to file)",
+            style("✓").green(),
+            logger.count()
+        );
+    }
+
     Ok(())
 }
 

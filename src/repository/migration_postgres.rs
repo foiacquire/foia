@@ -797,6 +797,101 @@ impl PostgresMigrator {
         .await
     }
 
+    /// Get existing string IDs from a table.
+    pub async fn get_existing_string_ids(
+        &self,
+        table: &str,
+        id_column: &str,
+        ids: &[String],
+    ) -> Result<std::collections::HashSet<String>, DieselError> {
+        use std::collections::HashSet;
+
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let (client, connection) = tokio_postgres::connect(&self.database_url, NoTls)
+            .await
+            .map_err(pg_error)?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("PostgreSQL connection error: {}", e);
+            }
+        });
+
+        // Query in batches to avoid huge IN clauses
+        let mut existing = HashSet::new();
+        for chunk in ids.chunks(1000) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                id_column,
+                table,
+                id_column,
+                placeholders.join(", ")
+            );
+
+            let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+                chunk.iter().map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+            let rows = client.query(&sql, &params).await.map_err(pg_error)?;
+            for row in rows {
+                let id: String = row.get(0);
+                existing.insert(id);
+            }
+        }
+
+        Ok(existing)
+    }
+
+    /// Get existing integer IDs from a table.
+    pub async fn get_existing_int_ids(
+        &self,
+        table: &str,
+        id_column: &str,
+        ids: &[i32],
+    ) -> Result<std::collections::HashSet<i32>, DieselError> {
+        use std::collections::HashSet;
+
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let (client, connection) = tokio_postgres::connect(&self.database_url, NoTls)
+            .await
+            .map_err(pg_error)?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("PostgreSQL connection error: {}", e);
+            }
+        });
+
+        let mut existing = HashSet::new();
+        for chunk in ids.chunks(1000) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+            let sql = format!(
+                "SELECT {} FROM {} WHERE {} IN ({})",
+                id_column,
+                table,
+                id_column,
+                placeholders.join(", ")
+            );
+
+            let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+                chunk.iter().map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+            let rows = client.query(&sql, &params).await.map_err(pg_error)?;
+            for row in rows {
+                let id: i32 = row.get(0);
+                existing.insert(id);
+            }
+        }
+
+        Ok(existing)
+    }
+
     /// Initialize the schema (create tables if they don't exist).
     pub async fn init_schema(&self) -> Result<(), DieselError> {
         let mut conn = self.pool.get().await.map_err(to_diesel_error)?;
