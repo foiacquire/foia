@@ -6,6 +6,13 @@
 mod config_history;
 mod context;
 mod crawl;
+pub mod diesel_config_history;
+pub mod diesel_context;
+pub mod diesel_crawl;
+pub mod diesel_document;
+pub mod diesel_models;
+pub mod diesel_pool;
+pub mod diesel_source;
 mod document;
 mod source;
 
