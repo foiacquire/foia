@@ -178,6 +178,43 @@ fn maybe_progress(
     }
 }
 
+/// Create a progress bar for COPY operations that tracks "sending" progress.
+/// Returns a callback that updates progress, and a finish function to call after sink.finish().
+#[cfg(feature = "postgres")]
+fn create_copy_progress(
+    show: bool,
+    total: u64,
+    table_name: &str,
+) -> (Option<ProgressCallback>, Box<dyn FnOnce()>) {
+    if !show {
+        println!("  {} ...", table_name);
+        return (None, Box::new(|| {}));
+    }
+
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("  {prefix:>20} [{bar:40.cyan/dim}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+    pb.set_prefix(table_name.to_string());
+    pb.set_message("sending");
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let pb_clone = pb.clone();
+    let cb: ProgressCallback = Arc::new(move |count| {
+        pb_clone.set_position(count as u64);
+    });
+
+    let finish = Box::new(move || {
+        pb.set_message("done");
+        pb.finish();
+    });
+
+    (Some(cb), finish)
+}
+
 /// Copy all tables from source to target.
 async fn copy_tables<S, T>(source: &S, target: &T, options: &CopyOptions) -> anyhow::Result<()>
 where
@@ -415,45 +452,33 @@ where
     // Sources - use COPY
     if options.should_copy("sources") {
         let sources = source.export_sources().await?;
-        let (pb, cb) = maybe_progress(options.show_progress, sources.len() as u64, "sources");
+        let (cb, finish) = create_copy_progress(options.show_progress, sources.len() as u64, "sources");
         target.copy_sources(&sources, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Documents - use COPY
     if options.should_copy("documents") {
         let documents = source.export_documents().await?;
-        let (pb, cb) = maybe_progress(options.show_progress, documents.len() as u64, "documents");
+        let (cb, finish) = create_copy_progress(options.show_progress, documents.len() as u64, "documents");
         target.copy_documents(&documents, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Document versions - use COPY
     if options.should_copy("document_versions") {
         let versions = source.export_document_versions().await?;
-        let (pb, cb) = maybe_progress(
-            options.show_progress,
-            versions.len() as u64,
-            "document_versions",
-        );
+        let (cb, finish) = create_copy_progress(options.show_progress, versions.len() as u64, "document_versions");
         target.copy_document_versions(&versions, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Document pages - use COPY
     if options.should_copy("document_pages") {
         let pages = source.export_document_pages().await?;
-        let (pb, cb) = maybe_progress(options.show_progress, pages.len() as u64, "document_pages");
+        let (cb, finish) = create_copy_progress(options.show_progress, pages.len() as u64, "document_pages");
         target.copy_document_pages(&pages, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Virtual files - use INSERT (usually small)
@@ -469,21 +494,17 @@ where
     // Crawl URLs - use COPY
     if options.should_copy("crawl_urls") {
         let urls = source.export_crawl_urls().await?;
-        let (pb, cb) = maybe_progress(options.show_progress, urls.len() as u64, "crawl_urls");
+        let (cb, finish) = create_copy_progress(options.show_progress, urls.len() as u64, "crawl_urls");
         target.copy_crawl_urls(&urls, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Crawl requests - use COPY
     if options.should_copy("crawl_requests") {
         let requests = source.export_crawl_requests().await?;
-        let (pb, cb) = maybe_progress(options.show_progress, requests.len() as u64, "crawl_requests");
+        let (cb, finish) = create_copy_progress(options.show_progress, requests.len() as u64, "crawl_requests");
         target.copy_crawl_requests(&requests, cb).await?;
-        if let Some(pb) = pb {
-            pb.finish();
-        }
+        finish();
     }
 
     // Crawl configs - use INSERT (usually small)
