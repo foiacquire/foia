@@ -9,6 +9,7 @@ mod llm;
 mod models;
 mod ocr;
 mod repository;
+mod schema;
 mod scrapers;
 mod server;
 mod services;
