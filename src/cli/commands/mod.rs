@@ -471,6 +471,9 @@ enum DbCommands {
         /// Run ANALYZE on copied tables afterward (Postgres only, recommended after bulk loads)
         #[arg(long)]
         analyze: bool,
+        /// Skip duplicate records and log them to the specified CSV file (table,id format)
+        #[arg(long, value_name = "FILE")]
+        skip_duplicates: Option<String>,
     },
 }
 
@@ -533,7 +536,8 @@ pub async fn run() -> anyhow::Result<()> {
                 progress,
                 tables,
                 analyze,
-            } => db::cmd_db_copy(&from, &to, clear, batch_size, copy, progress, tables, analyze).await,
+                skip_duplicates,
+            } => db::cmd_db_copy(&from, &to, clear, batch_size, copy, progress, tables, analyze, skip_duplicates).await,
         },
         Commands::Scrape {
             source_ids,
