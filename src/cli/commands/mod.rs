@@ -468,6 +468,9 @@ enum DbCommands {
         // show a helpful message listing available tables instead of clap's generic error
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         tables: Option<String>,
+        /// Run ANALYZE on copied tables afterward (Postgres only, recommended after bulk loads)
+        #[arg(long)]
+        analyze: bool,
     },
 }
 
@@ -529,7 +532,8 @@ pub async fn run() -> anyhow::Result<()> {
                 copy,
                 progress,
                 tables,
-            } => db::cmd_db_copy(&from, &to, clear, batch_size, copy, progress, tables).await,
+                analyze,
+            } => db::cmd_db_copy(&from, &to, clear, batch_size, copy, progress, tables, analyze).await,
         },
         Commands::Scrape {
             source_ids,

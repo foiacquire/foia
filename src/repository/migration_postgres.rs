@@ -519,6 +519,34 @@ impl PostgresMigrator {
         Ok(())
     }
 
+    /// Run ANALYZE on specified tables to update statistics.
+    pub async fn analyze_tables(&self, tables: &[&str]) -> Result<(), DieselError> {
+        if tables.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await.map_err(to_diesel_error)?;
+        let sql = format!("ANALYZE {}", tables.join(", "));
+        diesel::sql_query(sql).execute(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Run ANALYZE on all migration tables.
+    pub async fn analyze_all(&self) -> Result<(), DieselError> {
+        self.analyze_tables(&[
+            "sources",
+            "documents",
+            "document_versions",
+            "document_pages",
+            "virtual_files",
+            "crawl_urls",
+            "crawl_requests",
+            "crawl_config",
+            "configuration_history",
+            "rate_limit_state",
+        ])
+        .await
+    }
+
     /// Initialize the schema (create tables if they don't exist).
     pub async fn init_schema(&self) -> Result<(), DieselError> {
         let mut conn = self.pool.get().await.map_err(to_diesel_error)?;

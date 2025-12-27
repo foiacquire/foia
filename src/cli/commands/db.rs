@@ -20,6 +20,7 @@ pub struct CopyOptions {
     pub use_copy: bool,
     pub show_progress: bool,
     pub tables: Option<HashSet<String>>,
+    pub analyze: bool,
 }
 
 impl CopyOptions {
@@ -41,6 +42,7 @@ pub async fn cmd_db_copy(
     use_copy: bool,
     show_progress: bool,
     tables: Option<String>,
+    analyze: bool,
 ) -> anyhow::Result<()> {
     println!("{} Copying database:", style("→").cyan());
     println!("  From: {}", redact_url_password(source_url));
@@ -85,6 +87,7 @@ pub async fn cmd_db_copy(
         use_copy,
         show_progress,
         tables: tables_set,
+        analyze,
     };
 
     // Validate --copy flag
@@ -327,10 +330,11 @@ async fn copy_with_postgres(
             );
             target.init_schema().await?;
             if options.use_copy {
-                copy_tables_with_copy(&source, &target, &options).await
+                copy_tables_with_copy(&source, &target, &options).await?;
             } else {
-                copy_tables(&source, &target, &options).await
+                copy_tables(&source, &target, &options).await?;
             }
+            run_analyze_if_needed(&target, &options).await
         }
         (true, false) => {
             // Postgres to SQLite
@@ -351,13 +355,33 @@ async fn copy_with_postgres(
             );
             target.init_schema().await?;
             if options.use_copy {
-                copy_tables_with_copy(&source, &target, &options).await
+                copy_tables_with_copy(&source, &target, &options).await?;
             } else {
-                copy_tables(&source, &target, &options).await
+                copy_tables(&source, &target, &options).await?;
             }
+            run_analyze_if_needed(&target, &options).await
         }
         (false, false) => unreachable!(),
     }
+}
+
+/// Run ANALYZE on Postgres target if --analyze flag was provided.
+#[cfg(feature = "postgres")]
+async fn run_analyze_if_needed(
+    target: &crate::repository::migration_postgres::PostgresMigrator,
+    options: &CopyOptions,
+) -> anyhow::Result<()> {
+    if !options.analyze {
+        return Ok(());
+    }
+    println!("{} Running ANALYZE...", style("→").cyan());
+    if let Some(ref tables) = options.tables {
+        let table_refs: Vec<&str> = tables.iter().map(|s| s.as_str()).collect();
+        target.analyze_tables(&table_refs).await?;
+    } else {
+        target.analyze_all().await?;
+    }
+    Ok(())
 }
 
 /// Copy tables using PostgreSQL COPY protocol (fast bulk load).
