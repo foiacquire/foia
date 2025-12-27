@@ -4,7 +4,12 @@ FROM alpine:latest
 ARG TARGETARCH
 ARG WITH_TESSERACT="false"
 
+ARG WITH_POSTGRES="true"
+
 RUN apk add --no-cache sqlite-libs ca-certificates su-exec shadow \
+    && if [ "$WITH_POSTGRES" = "true" ]; then \
+         apk add --no-cache libpq; \
+       fi \
     && if [ "$WITH_TESSERACT" = "true" ]; then \
          apk add --no-cache tesseract-ocr tesseract-ocr-data-eng; \
        fi
