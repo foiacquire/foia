@@ -40,6 +40,43 @@ macro_rules! with_diesel_conn {
     }};
 }
 
+/// Execute database-specific operations on a diesel_context::DbPool.
+///
+/// Use this when the SQL syntax differs between SQLite and PostgreSQL
+/// (e.g., upserts with replace_into vs ON CONFLICT).
+///
+/// # Usage
+///
+/// ```ignore
+/// with_diesel_conn_split!(self.pool,
+///     sqlite: conn => {
+///         diesel::replace_into(table).values(&values).execute(&mut conn).await
+///     },
+///     postgres: conn => {
+///         diesel::insert_into(table).values(&values)
+///             .on_conflict(id).do_update().set(&values)
+///             .execute(&mut conn).await
+///     }
+/// )
+/// ```
+#[macro_export]
+macro_rules! with_diesel_conn_split {
+    ($pool:expr, sqlite: $sqlite_conn:ident => $sqlite_body:expr, postgres: $pg_conn:ident => $pg_body:expr) => {{
+        match &$pool {
+            $crate::repository::diesel_context::DbPool::Sqlite(pool) => {
+                let mut $sqlite_conn = pool.get().await?;
+                $sqlite_body
+            }
+            #[cfg(feature = "postgres")]
+            $crate::repository::diesel_context::DbPool::Postgres(pool) => {
+                use $crate::repository::util::to_diesel_error;
+                let mut $pg_conn = pool.get().await.map_err(to_diesel_error)?;
+                $pg_body
+            }
+        }
+    }};
+}
+
 /// Check if a database URL is a PostgreSQL URL.
 ///
 /// Returns true for URLs starting with `postgres://` or `postgresql://`.

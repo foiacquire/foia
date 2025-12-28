@@ -13,7 +13,7 @@ use super::diesel_pool::DieselError;
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Source, SourceType};
 use crate::schema::sources;
-use crate::with_diesel_conn;
+use crate::{with_diesel_conn, with_diesel_conn_split};
 
 /// Convert a database record to a domain model.
 impl From<SourceRecord> for Source {
@@ -72,10 +72,8 @@ impl DieselSourceRepository {
         let last_scraped = source.last_scraped.map(|dt| dt.to_rfc3339());
         let source_type = source.source_type.as_str().to_string();
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                // Use replace_into for SQLite upsert
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 diesel::replace_into(sources::table)
                     .values((
                         sources::id.eq(&source.id),
@@ -88,13 +86,10 @@ impl DieselSourceRepository {
                     ))
                     .execute(&mut conn)
                     .await?;
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
+                Ok(())
+            },
+            postgres: conn => {
                 use diesel::upsert::excluded;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                // Use ON CONFLICT for PostgreSQL upsert
                 diesel::insert_into(sources::table)
                     .values((
                         sources::id.eq(&source.id),
@@ -116,9 +111,9 @@ impl DieselSourceRepository {
                     ))
                     .execute(&mut conn)
                     .await?;
+                Ok(())
             }
-        }
-        Ok(())
+        )
     }
 
     /// Delete a source.
@@ -165,9 +160,8 @@ impl DieselSourceRepository {
     /// Rename a source ID, updating all related tables.
     /// Returns the number of documents and crawl URLs updated.
     pub async fn rename(&self, old_id: &str, new_id: &str) -> Result<(usize, usize), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 let docs_updated =
                     diesel::sql_query("UPDATE documents SET source_id = ?1 WHERE source_id = ?2")
                         .bind::<diesel::sql_types::Text, _>(new_id)
@@ -195,11 +189,8 @@ impl DieselSourceRepository {
                     .await?;
 
                 Ok((docs_updated, crawls_updated))
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+            },
+            postgres: conn => {
                 let docs_updated =
                     diesel::sql_query("UPDATE documents SET source_id = $1 WHERE source_id = $2")
                         .bind::<diesel::sql_types::Text, _>(new_id)
@@ -228,7 +219,7 @@ impl DieselSourceRepository {
 
                 Ok((docs_updated, crawls_updated))
             }
-        }
+        )
     }
 }
 

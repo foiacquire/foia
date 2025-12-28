@@ -15,7 +15,7 @@ use super::diesel_pool::DieselError;
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{CrawlRequest, CrawlUrl, DiscoveryMethod, UrlStatus};
 use crate::schema::{crawl_config, crawl_requests, crawl_urls};
-use crate::with_diesel_conn;
+use crate::{with_diesel_conn, with_diesel_conn_split};
 
 /// Convert a database record to a domain model.
 impl From<CrawlUrlRecord> for CrawlUrl {
@@ -608,9 +608,8 @@ impl DieselCrawlRepository {
     ) -> Result<(), DieselError> {
         let updated_at = Utc::now().to_rfc3339();
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 diesel::replace_into(crawl_config::table)
                     .values((
                         crawl_config::source_id.eq(source_id),
@@ -620,11 +619,8 @@ impl DieselCrawlRepository {
                     .execute(&mut conn)
                     .await?;
                 Ok(())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+            },
+            postgres: conn => {
                 diesel::sql_query(
                     r#"INSERT INTO crawl_config (source_id, config_hash, updated_at)
                        VALUES ($1, $2, $3)
@@ -639,7 +635,7 @@ impl DieselCrawlRepository {
                 .await?;
                 Ok(())
             }
-        }
+        )
     }
 
     // ========================================================================
