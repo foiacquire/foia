@@ -13,6 +13,7 @@ use super::diesel_document::DieselDocumentRepository;
 use super::diesel_pool::{AsyncSqliteConnection, AsyncSqlitePool, DieselError};
 use super::diesel_source::DieselSourceRepository;
 use super::util::validate_database_url;
+use crate::with_diesel_conn_split;
 
 #[cfg(feature = "postgres")]
 use super::util::{is_postgres_url, to_diesel_error};
@@ -518,9 +519,8 @@ impl DieselDbContext {
     /// Get list of all tables in the database.
     #[allow(dead_code)]
     pub async fn list_tables(&self) -> Result<Vec<String>, DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 let rows: Vec<TableName> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(
                         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -529,11 +529,9 @@ impl DieselDbContext {
                 )
                 .await?;
                 Ok(rows.into_iter().map(|r| r.name).collect())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
+            },
+            postgres: conn => {
                 use diesel_async::RunQueryDsl;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
                 let rows: Vec<TableName> = diesel::sql_query(
                     "SELECT tablename as name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
                 )
@@ -541,7 +539,7 @@ impl DieselDbContext {
                 .await?;
                 Ok(rows.into_iter().map(|r| r.name).collect())
             }
-        }
+        )
     }
 }
 

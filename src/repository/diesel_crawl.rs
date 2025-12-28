@@ -94,86 +94,43 @@ impl DieselCrawlRepository {
         let fetched_at = crawl_url.fetched_at.map(|dt| dt.to_rfc3339());
         let next_retry_at = crawl_url.next_retry_at.map(|dt| dt.to_rfc3339());
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                use diesel::dsl::count_star;
-                let exists: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(&crawl_url.source_id))
-                    .filter(crawl_urls::url.eq(&crawl_url.url))
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
+        use diesel::dsl::count_star;
+        with_diesel_conn!(self.pool, conn, {
+            let exists: i64 = crawl_urls::table
+                .filter(crawl_urls::source_id.eq(&crawl_url.source_id))
+                .filter(crawl_urls::url.eq(&crawl_url.url))
+                .select(count_star())
+                .first(&mut conn)
+                .await?;
 
-                if exists > 0 {
-                    return Ok(false);
-                }
-
-                diesel::insert_into(crawl_urls::table)
-                    .values((
-                        crawl_urls::url.eq(&crawl_url.url),
-                        crawl_urls::source_id.eq(&crawl_url.source_id),
-                        crawl_urls::status.eq(&status),
-                        crawl_urls::discovery_method.eq(&discovery_method),
-                        crawl_urls::parent_url.eq(&crawl_url.parent_url),
-                        crawl_urls::discovery_context.eq(&discovery_context),
-                        crawl_urls::depth.eq(depth),
-                        crawl_urls::discovered_at.eq(&discovered_at),
-                        crawl_urls::fetched_at.eq(&fetched_at),
-                        crawl_urls::retry_count.eq(retry_count),
-                        crawl_urls::last_error.eq(&crawl_url.last_error),
-                        crawl_urls::next_retry_at.eq(&next_retry_at),
-                        crawl_urls::etag.eq(&crawl_url.etag),
-                        crawl_urls::last_modified.eq(&crawl_url.last_modified),
-                        crawl_urls::content_hash.eq(&crawl_url.content_hash),
-                        crawl_urls::document_id.eq(&crawl_url.document_id),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-
-                Ok(true)
+            if exists > 0 {
+                return Ok(false);
             }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                use diesel::dsl::count_star;
-                let exists: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(&crawl_url.source_id))
-                    .filter(crawl_urls::url.eq(&crawl_url.url))
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
 
-                if exists > 0 {
-                    return Ok(false);
-                }
+            diesel::insert_into(crawl_urls::table)
+                .values((
+                    crawl_urls::url.eq(&crawl_url.url),
+                    crawl_urls::source_id.eq(&crawl_url.source_id),
+                    crawl_urls::status.eq(&status),
+                    crawl_urls::discovery_method.eq(&discovery_method),
+                    crawl_urls::parent_url.eq(&crawl_url.parent_url),
+                    crawl_urls::discovery_context.eq(&discovery_context),
+                    crawl_urls::depth.eq(depth),
+                    crawl_urls::discovered_at.eq(&discovered_at),
+                    crawl_urls::fetched_at.eq(&fetched_at),
+                    crawl_urls::retry_count.eq(retry_count),
+                    crawl_urls::last_error.eq(&crawl_url.last_error),
+                    crawl_urls::next_retry_at.eq(&next_retry_at),
+                    crawl_urls::etag.eq(&crawl_url.etag),
+                    crawl_urls::last_modified.eq(&crawl_url.last_modified),
+                    crawl_urls::content_hash.eq(&crawl_url.content_hash),
+                    crawl_urls::document_id.eq(&crawl_url.document_id),
+                ))
+                .execute(&mut conn)
+                .await?;
 
-                diesel::insert_into(crawl_urls::table)
-                    .values((
-                        crawl_urls::url.eq(&crawl_url.url),
-                        crawl_urls::source_id.eq(&crawl_url.source_id),
-                        crawl_urls::status.eq(&status),
-                        crawl_urls::discovery_method.eq(&discovery_method),
-                        crawl_urls::parent_url.eq(&crawl_url.parent_url),
-                        crawl_urls::discovery_context.eq(&discovery_context),
-                        crawl_urls::depth.eq(depth),
-                        crawl_urls::discovered_at.eq(&discovered_at),
-                        crawl_urls::fetched_at.eq(&fetched_at),
-                        crawl_urls::retry_count.eq(retry_count),
-                        crawl_urls::last_error.eq(&crawl_url.last_error),
-                        crawl_urls::next_retry_at.eq(&next_retry_at),
-                        crawl_urls::etag.eq(&crawl_url.etag),
-                        crawl_urls::last_modified.eq(&crawl_url.last_modified),
-                        crawl_urls::content_hash.eq(&crawl_url.content_hash),
-                        crawl_urls::document_id.eq(&crawl_url.document_id),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-
-                Ok(true)
-            }
-        }
+            Ok(true)
+        })
     }
 
     /// Get a specific URL's crawl state.
@@ -363,9 +320,8 @@ impl DieselCrawlRepository {
         let exhausted_cutoff = (now - chrono::Duration::days(70)).to_rfc3339();
         let limit = limit as i64;
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 diesel::sql_query(
                     r#"SELECT id, url, source_id, status, discovery_method, parent_url,
                               discovery_context, depth, discovered_at, fetched_at, retry_count,
@@ -386,11 +342,8 @@ impl DieselCrawlRepository {
                 .load::<CrawlUrlRecordRaw>(&mut conn)
                 .await
                 .map(|records| records.into_iter().map(CrawlUrl::from).collect())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+            },
+            postgres: conn => {
                 diesel::sql_query(
                     r#"SELECT id, url, source_id, status, discovery_method, parent_url,
                               discovery_context, depth, discovered_at, fetched_at, retry_count,
@@ -412,7 +365,7 @@ impl DieselCrawlRepository {
                 .await
                 .map(|records| records.into_iter().map(CrawlUrl::from).collect())
             }
-        }
+        )
     }
 
     // ========================================================================
@@ -433,9 +386,8 @@ impl DieselCrawlRepository {
         let was_conditional = if request.was_conditional { 1 } else { 0 };
         let was_not_modified = if request.was_not_modified { 1 } else { 0 };
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 diesel::insert_into(crawl_requests::table)
                     .values((
                         crawl_requests::source_id.eq(&request.source_id),
@@ -459,12 +411,8 @@ impl DieselCrawlRepository {
                     .get_result::<LastInsertRowId>(&mut conn)
                     .await
                     .map(|r| r.id)
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-
+            },
+            postgres: conn => {
                 // PostgreSQL uses RETURNING to get the inserted ID
                 let result: LastInsertId = diesel::sql_query(
                     r#"INSERT INTO crawl_requests
@@ -494,7 +442,7 @@ impl DieselCrawlRepository {
 
                 Ok(result.id as i64)
             }
-        }
+        )
     }
 
     // ========================================================================
@@ -506,9 +454,8 @@ impl DieselCrawlRepository {
         &self,
         source_id: &str,
     ) -> Result<HashMap<String, u64>, DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 let rows: Vec<StatusCount> = diesel::sql_query(
                     "SELECT status, COUNT(*) as count FROM crawl_urls WHERE source_id = ? GROUP BY status",
                 )
@@ -521,11 +468,8 @@ impl DieselCrawlRepository {
                     counts.insert(status, count as u64);
                 }
                 Ok(counts)
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+            },
+            postgres: conn => {
                 let rows: Vec<StatusCount> = diesel::sql_query(
                     "SELECT status, COUNT(*) as count FROM crawl_urls WHERE source_id = $1 GROUP BY status",
                 )
@@ -539,44 +483,25 @@ impl DieselCrawlRepository {
                 }
                 Ok(counts)
             }
-        }
+        )
     }
 
     /// Count total pending URLs.
     pub async fn count_pending(&self, source_id: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                let count: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .filter(
-                        crawl_urls::status
-                            .eq("discovered")
-                            .or(crawl_urls::status.eq("fetching")),
-                    )
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(count as u64)
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                let count: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .filter(
-                        crawl_urls::status
-                            .eq("discovered")
-                            .or(crawl_urls::status.eq("fetching")),
-                    )
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(count as u64)
-            }
-        }
+        with_diesel_conn!(self.pool, conn, {
+            let count: i64 = crawl_urls::table
+                .filter(crawl_urls::source_id.eq(source_id))
+                .filter(
+                    crawl_urls::status
+                        .eq("discovered")
+                        .or(crawl_urls::status.eq("fetching")),
+                )
+                .select(count_star())
+                .first(&mut conn)
+                .await?;
+            Ok(count as u64)
+        })
     }
 
     // ========================================================================
@@ -679,9 +604,8 @@ impl DieselCrawlRepository {
             total_bytes: i64,
         }
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
+        with_diesel_conn_split!(self.pool,
+            sqlite: conn => {
                 let query = format!(
                     r#"SELECT
                         COUNT(*) as total_requests,
@@ -711,11 +635,8 @@ impl DieselCrawlRepository {
                 } else {
                     Ok(RequestStats::default())
                 }
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+            },
+            postgres: conn => {
                 let results: Vec<StatsRow> = diesel::sql_query(
                     r#"SELECT
                         COUNT(*) as total_requests,
@@ -745,7 +666,7 @@ impl DieselCrawlRepository {
                     Ok(RequestStats::default())
                 }
             }
-        }
+        )
     }
 
     /// Get all stats for a source.
@@ -774,26 +695,13 @@ impl DieselCrawlRepository {
             source_id: String,
         }
 
-        let source_ids: Vec<SourceIdRow> = match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query("SELECT DISTINCT source_id FROM crawl_urls"),
-                    &mut conn,
-                )
-                .await?
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query("SELECT DISTINCT source_id FROM crawl_urls"),
-                    &mut conn,
-                )
-                .await?
-            }
-        };
+        let source_ids: Vec<SourceIdRow> = with_diesel_conn!(self.pool, conn, {
+            diesel_async::RunQueryDsl::load(
+                diesel::sql_query("SELECT DISTINCT source_id FROM crawl_urls"),
+                &mut conn,
+            )
+            .await
+        })?;
 
         let mut stats = HashMap::new();
         for row in source_ids {
@@ -813,44 +721,22 @@ impl DieselCrawlRepository {
     ) -> Result<Vec<CrawlUrl>, DieselError> {
         let limit = limit as i64;
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                let mut query = crawl_urls::table
-                    .filter(crawl_urls::status.eq("fetched"))
-                    .order(crawl_urls::fetched_at.desc())
-                    .limit(limit)
-                    .into_boxed();
+        with_diesel_conn!(self.pool, conn, {
+            let mut query = crawl_urls::table
+                .filter(crawl_urls::status.eq("fetched"))
+                .order(crawl_urls::fetched_at.desc())
+                .limit(limit)
+                .into_boxed();
 
-                if let Some(sid) = source_id {
-                    query = query.filter(crawl_urls::source_id.eq(sid));
-                }
-
-                query
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
+            if let Some(sid) = source_id {
+                query = query.filter(crawl_urls::source_id.eq(sid));
             }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                let mut query = crawl_urls::table
-                    .filter(crawl_urls::status.eq("fetched"))
-                    .order(crawl_urls::fetched_at.desc())
-                    .limit(limit)
-                    .into_boxed();
 
-                if let Some(sid) = source_id {
-                    query = query.filter(crawl_urls::source_id.eq(sid));
-                }
-
-                query
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
-            }
-        }
+            query
+                .load::<CrawlUrlRecord>(&mut conn)
+                .await
+                .map(|records| records.into_iter().map(CrawlUrl::from).collect())
+        })
     }
 
     /// Get failed URLs.
@@ -861,52 +747,26 @@ impl DieselCrawlRepository {
     ) -> Result<Vec<CrawlUrl>, DieselError> {
         let limit = limit as i64;
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                let mut query = crawl_urls::table
-                    .filter(
-                        crawl_urls::status
-                            .eq("failed")
-                            .or(crawl_urls::status.eq("exhausted")),
-                    )
-                    .order(crawl_urls::fetched_at.desc())
-                    .limit(limit)
-                    .into_boxed();
+        with_diesel_conn!(self.pool, conn, {
+            let mut query = crawl_urls::table
+                .filter(
+                    crawl_urls::status
+                        .eq("failed")
+                        .or(crawl_urls::status.eq("exhausted")),
+                )
+                .order(crawl_urls::fetched_at.desc())
+                .limit(limit)
+                .into_boxed();
 
-                if let Some(sid) = source_id {
-                    query = query.filter(crawl_urls::source_id.eq(sid));
-                }
-
-                query
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
+            if let Some(sid) = source_id {
+                query = query.filter(crawl_urls::source_id.eq(sid));
             }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                let mut query = crawl_urls::table
-                    .filter(
-                        crawl_urls::status
-                            .eq("failed")
-                            .or(crawl_urls::status.eq("exhausted")),
-                    )
-                    .order(crawl_urls::fetched_at.desc())
-                    .limit(limit)
-                    .into_boxed();
 
-                if let Some(sid) = source_id {
-                    query = query.filter(crawl_urls::source_id.eq(sid));
-                }
-
-                query
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
-            }
-        }
+            query
+                .load::<CrawlUrlRecord>(&mut conn)
+                .await
+                .map(|records| records.into_iter().map(CrawlUrl::from).collect())
+        })
     }
 
     // ========================================================================
@@ -916,100 +776,49 @@ impl DieselCrawlRepository {
     /// Clear pending crawl state for a source (keeps fetched URLs).
     #[allow(dead_code)]
     pub async fn clear_source(&self, source_id: &str) -> Result<(), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel::delete(
-                    crawl_urls::table
-                        .filter(crawl_urls::source_id.eq(source_id))
-                        .filter(
-                            crawl_urls::status
-                                .eq("discovered")
-                                .or(crawl_urls::status.eq("fetching"))
-                                .or(crawl_urls::status.eq("failed")),
-                        ),
-                )
-                .execute(&mut conn)
-                .await?;
+        with_diesel_conn!(self.pool, conn, {
+            diesel::delete(
+                crawl_urls::table
+                    .filter(crawl_urls::source_id.eq(source_id))
+                    .filter(
+                        crawl_urls::status
+                            .eq("discovered")
+                            .or(crawl_urls::status.eq("fetching"))
+                            .or(crawl_urls::status.eq("failed")),
+                    ),
+            )
+            .execute(&mut conn)
+            .await?;
 
-                diesel::delete(
-                    crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
-                )
-                .execute(&mut conn)
-                .await?;
+            diesel::delete(
+                crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
+            )
+            .execute(&mut conn)
+            .await?;
 
-                Ok(())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel::delete(
-                    crawl_urls::table
-                        .filter(crawl_urls::source_id.eq(source_id))
-                        .filter(
-                            crawl_urls::status
-                                .eq("discovered")
-                                .or(crawl_urls::status.eq("fetching"))
-                                .or(crawl_urls::status.eq("failed")),
-                        ),
-                )
-                .execute(&mut conn)
-                .await?;
-
-                diesel::delete(
-                    crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
-                )
-                .execute(&mut conn)
-                .await?;
-
-                Ok(())
-            }
-        }
+            Ok(())
+        })
     }
 
     /// Clear ALL crawl state for a source.
     pub async fn clear_source_all(&self, source_id: &str) -> Result<(), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel::delete(crawl_urls::table.filter(crawl_urls::source_id.eq(source_id)))
-                    .execute(&mut conn)
-                    .await?;
-
-                diesel::delete(
-                    crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
-                )
+        with_diesel_conn!(self.pool, conn, {
+            diesel::delete(crawl_urls::table.filter(crawl_urls::source_id.eq(source_id)))
                 .execute(&mut conn)
                 .await?;
 
-                diesel::delete(crawl_config::table.filter(crawl_config::source_id.eq(source_id)))
-                    .execute(&mut conn)
-                    .await?;
+            diesel::delete(
+                crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
+            )
+            .execute(&mut conn)
+            .await?;
 
-                Ok(())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel::delete(crawl_urls::table.filter(crawl_urls::source_id.eq(source_id)))
-                    .execute(&mut conn)
-                    .await?;
-
-                diesel::delete(
-                    crawl_requests::table.filter(crawl_requests::source_id.eq(source_id)),
-                )
+            diesel::delete(crawl_config::table.filter(crawl_config::source_id.eq(source_id)))
                 .execute(&mut conn)
                 .await?;
 
-                diesel::delete(crawl_config::table.filter(crawl_config::source_id.eq(source_id)))
-                    .execute(&mut conn)
-                    .await?;
-
-                Ok(())
-            }
-        }
+            Ok(())
+        })
     }
 
     // ========================================================================
@@ -1019,28 +828,14 @@ impl DieselCrawlRepository {
     /// Count URLs for a source.
     pub async fn count_by_source(&self, source_id: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                let count: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(count as u64)
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                let count: i64 = crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(count as u64)
-            }
-        }
+        with_diesel_conn!(self.pool, conn, {
+            let count: i64 = crawl_urls::table
+                .filter(crawl_urls::source_id.eq(source_id))
+                .select(count_star())
+                .first(&mut conn)
+                .await?;
+            Ok(count as u64)
+        })
     }
 
     /// Get all request stats for all sources.
@@ -1053,26 +848,13 @@ impl DieselCrawlRepository {
             source_id: String,
         }
 
-        let source_ids: Vec<SourceIdRow> = match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query("SELECT DISTINCT source_id FROM crawl_requests"),
-                    &mut conn,
-                )
-                .await?
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query("SELECT DISTINCT source_id FROM crawl_requests"),
-                    &mut conn,
-                )
-                .await?
-            }
-        };
+        let source_ids: Vec<SourceIdRow> = with_diesel_conn!(self.pool, conn, {
+            diesel_async::RunQueryDsl::load(
+                diesel::sql_query("SELECT DISTINCT source_id FROM crawl_requests"),
+                &mut conn,
+            )
+            .await
+        })?;
 
         let mut stats = HashMap::new();
         for row in source_ids {
@@ -1094,34 +876,17 @@ impl DieselCrawlRepository {
         let cutoff_str = cutoff.to_rfc3339();
         let limit = limit as i64;
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .filter(crawl_urls::status.eq("fetched"))
-                    .filter(crawl_urls::fetched_at.lt(&cutoff_str))
-                    .order(crawl_urls::fetched_at.asc())
-                    .limit(limit)
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                crawl_urls::table
-                    .filter(crawl_urls::source_id.eq(source_id))
-                    .filter(crawl_urls::status.eq("fetched"))
-                    .filter(crawl_urls::fetched_at.lt(&cutoff_str))
-                    .order(crawl_urls::fetched_at.asc())
-                    .limit(limit)
-                    .load::<CrawlUrlRecord>(&mut conn)
-                    .await
-                    .map(|records| records.into_iter().map(CrawlUrl::from).collect())
-            }
-        }
+        with_diesel_conn!(self.pool, conn, {
+            crawl_urls::table
+                .filter(crawl_urls::source_id.eq(source_id))
+                .filter(crawl_urls::status.eq("fetched"))
+                .filter(crawl_urls::fetched_at.lt(&cutoff_str))
+                .order(crawl_urls::fetched_at.asc())
+                .limit(limit)
+                .load::<CrawlUrlRecord>(&mut conn)
+                .await
+                .map(|records| records.into_iter().map(CrawlUrl::from).collect())
+        })
     }
 
     /// Mark a URL for refresh by resetting its status to discovered.
@@ -1130,34 +895,17 @@ impl DieselCrawlRepository {
         source_id: &str,
         url: &str,
     ) -> Result<(), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel::update(
-                    crawl_urls::table
-                        .filter(crawl_urls::source_id.eq(source_id))
-                        .filter(crawl_urls::url.eq(url)),
-                )
-                .set(crawl_urls::status.eq("discovered"))
-                .execute(&mut conn)
-                .await?;
-                Ok(())
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel::update(
-                    crawl_urls::table
-                        .filter(crawl_urls::source_id.eq(source_id))
-                        .filter(crawl_urls::url.eq(url)),
-                )
-                .set(crawl_urls::status.eq("discovered"))
-                .execute(&mut conn)
-                .await?;
-                Ok(())
-            }
-        }
+        with_diesel_conn!(self.pool, conn, {
+            diesel::update(
+                crawl_urls::table
+                    .filter(crawl_urls::source_id.eq(source_id))
+                    .filter(crawl_urls::url.eq(url)),
+            )
+            .set(crawl_urls::status.eq("discovered"))
+            .execute(&mut conn)
+            .await?;
+            Ok(())
+        })
     }
 }
 
