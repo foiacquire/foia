@@ -772,10 +772,7 @@ async fn get_pending_count(ctx: &DieselDbContext, source_id: Option<&str>) -> an
 
 /// Show overall system status.
 pub async fn cmd_status(settings: &Settings) -> anyhow::Result<()> {
-    let db_path = settings.database_path();
-
-    // Check if database exists
-    if !db_path.exists() {
+    if !settings.database_exists() {
         println!(
             "{} System not initialized. Run 'foiacquire init' first.",
             style("!").yellow()

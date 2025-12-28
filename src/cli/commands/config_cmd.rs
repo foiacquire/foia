@@ -100,9 +100,8 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
 
 /// Restore the most recent config from database history.
 pub async fn cmd_config_restore(settings: &Settings, output: Option<&Path>) -> anyhow::Result<()> {
-    let db_path = settings.database_path();
-    if !db_path.exists() {
-        anyhow::bail!("Database not found: {}", db_path.display());
+    if !settings.database_exists() {
+        anyhow::bail!("Database not found: {}", settings.database_path().display());
     }
 
     let ctx = settings.create_db_context();
@@ -138,9 +137,8 @@ pub async fn cmd_config_restore(settings: &Settings, output: Option<&Path>) -> a
 
 /// List configuration history entries.
 pub async fn cmd_config_history(settings: &Settings, full: bool) -> anyhow::Result<()> {
-    let db_path = settings.database_path();
-    if !db_path.exists() {
-        anyhow::bail!("Database not found: {}", db_path.display());
+    if !settings.database_exists() {
+        anyhow::bail!("Database not found: {}", settings.database_path().display());
     }
 
     let ctx = settings.create_db_context();

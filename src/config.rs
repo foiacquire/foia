@@ -83,14 +83,32 @@ impl Settings {
     }
 
     /// Check if using an explicit database URL (vs file path).
-    #[allow(dead_code)]
     pub fn has_database_url(&self) -> bool {
         self.database_url.is_some()
+    }
+
+    /// Check if using PostgreSQL (vs SQLite).
+    #[allow(dead_code)]
+    pub fn is_postgres(&self) -> bool {
+        self.database_url
+            .as_ref()
+            .is_some_and(|url| url.starts_with("postgres://") || url.starts_with("postgresql://"))
     }
 
     /// Get the full path to the database (for SQLite file-based databases).
     pub fn database_path(&self) -> PathBuf {
         self.data_dir.join(&self.database_filename)
+    }
+
+    /// Check if the database appears to be initialized.
+    /// For SQLite: checks if the database file exists.
+    /// For PostgreSQL: always returns true (connection errors handled elsewhere).
+    pub fn database_exists(&self) -> bool {
+        if self.has_database_url() {
+            true // PostgreSQL - assume it exists, connection errors handled elsewhere
+        } else {
+            self.database_path().exists()
+        }
     }
 
     /// Ensure all directories exist.
@@ -470,6 +488,7 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
     let using_postgres = database_url_override
         .as_ref()
         .is_some_and(|url| url.starts_with("postgres://") || url.starts_with("postgresql://"));
+    // Note: Can't use Settings::is_postgres() here since settings isn't built yet
 
     // If target is specified, resolve it first
     let resolved_target = options
