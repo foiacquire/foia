@@ -9,13 +9,12 @@ use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 
-use super::diesel_context::DbPool;
 use super::diesel_models::{CrawlRequestRecord, CrawlUrlRecord};
-use super::diesel_pool::DieselError;
+use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{CrawlRequest, CrawlUrl, DiscoveryMethod, UrlStatus};
 use crate::schema::{crawl_config, crawl_requests, crawl_urls};
-use crate::{with_diesel_conn, with_diesel_conn_split};
+use crate::{with_conn, with_conn_split};
 
 /// Convert a database record to a domain model.
 impl From<CrawlUrlRecord> for CrawlUrl {
@@ -95,7 +94,7 @@ impl DieselCrawlRepository {
         let next_retry_at = crawl_url.next_retry_at.map(|dt| dt.to_rfc3339());
 
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let exists: i64 = crawl_urls::table
                 .filter(crawl_urls::source_id.eq(&crawl_url.source_id))
                 .filter(crawl_urls::url.eq(&crawl_url.url))
@@ -139,7 +138,7 @@ impl DieselCrawlRepository {
         source_id: &str,
         url: &str,
     ) -> Result<Option<CrawlUrl>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .filter(crawl_urls::url.eq(url))
@@ -154,7 +153,7 @@ impl DieselCrawlRepository {
     #[allow(dead_code)]
     pub async fn url_exists(&self, source_id: &str, url: &str) -> Result<bool, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .filter(crawl_urls::url.eq(url))
@@ -172,7 +171,7 @@ impl DieselCrawlRepository {
         let retry_count = crawl_url.retry_count as i32;
         let next_retry_at = crawl_url.next_retry_at.map(|dt| dt.to_rfc3339());
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(
                 crawl_urls::table
                     .filter(crawl_urls::source_id.eq(&crawl_url.source_id))
@@ -206,7 +205,7 @@ impl DieselCrawlRepository {
         limit: u32,
     ) -> Result<Vec<CrawlUrl>, DieselError> {
         let limit = limit as i64;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .filter(
@@ -229,7 +228,7 @@ impl DieselCrawlRepository {
     ) -> Result<Option<CrawlUrl>, DieselError> {
         let source_id = source_id.map(|s| s.to_string());
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             conn.transaction(|conn| {
                 let source_id = source_id.clone();
                 Box::pin(async move {
@@ -278,7 +277,7 @@ impl DieselCrawlRepository {
         let exhausted_cutoff = (now - chrono::Duration::days(70)).to_rfc3339();
         let limit = limit as i64;
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::sql_query(
                     r#"SELECT id, url, source_id, status, discovery_method, parent_url,
@@ -344,7 +343,7 @@ impl DieselCrawlRepository {
         let was_conditional = if request.was_conditional { 1 } else { 0 };
         let was_not_modified = if request.was_not_modified { 1 } else { 0 };
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::insert_into(crawl_requests::table)
                     .values((
@@ -412,7 +411,7 @@ impl DieselCrawlRepository {
         &self,
         source_id: &str,
     ) -> Result<HashMap<String, u64>, DieselError> {
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let rows: Vec<StatusCount> = diesel::sql_query(
                     "SELECT status, COUNT(*) as count FROM crawl_urls WHERE source_id = ? GROUP BY status",
@@ -447,7 +446,7 @@ impl DieselCrawlRepository {
     /// Count total pending URLs.
     pub async fn count_pending(&self, source_id: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .filter(
@@ -472,7 +471,7 @@ impl DieselCrawlRepository {
         source_id: &str,
         current_hash: &str,
     ) -> Result<bool, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let stored_hash: Option<String> = crawl_config::table
                 .find(source_id)
                 .select(crawl_config::config_hash)
@@ -491,7 +490,7 @@ impl DieselCrawlRepository {
     ) -> Result<(), DieselError> {
         let updated_at = Utc::now().to_rfc3339();
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::replace_into(crawl_config::table)
                     .values((
@@ -562,7 +561,7 @@ impl DieselCrawlRepository {
             total_bytes: i64,
         }
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let query = format!(
                     r#"SELECT
@@ -653,7 +652,7 @@ impl DieselCrawlRepository {
             source_id: String,
         }
 
-        let source_ids: Vec<SourceIdRow> = with_diesel_conn!(self.pool, conn, {
+        let source_ids: Vec<SourceIdRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(
                 diesel::sql_query("SELECT DISTINCT source_id FROM crawl_urls"),
                 &mut conn,
@@ -679,7 +678,7 @@ impl DieselCrawlRepository {
     ) -> Result<Vec<CrawlUrl>, DieselError> {
         let limit = limit as i64;
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let mut query = crawl_urls::table
                 .filter(crawl_urls::status.eq("fetched"))
                 .order(crawl_urls::fetched_at.desc())
@@ -705,7 +704,7 @@ impl DieselCrawlRepository {
     ) -> Result<Vec<CrawlUrl>, DieselError> {
         let limit = limit as i64;
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let mut query = crawl_urls::table
                 .filter(
                     crawl_urls::status
@@ -734,7 +733,7 @@ impl DieselCrawlRepository {
     /// Clear pending crawl state for a source (keeps fetched URLs).
     #[allow(dead_code)]
     pub async fn clear_source(&self, source_id: &str) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::delete(
                 crawl_urls::table
                     .filter(crawl_urls::source_id.eq(source_id))
@@ -760,7 +759,7 @@ impl DieselCrawlRepository {
 
     /// Clear ALL crawl state for a source.
     pub async fn clear_source_all(&self, source_id: &str) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::delete(crawl_urls::table.filter(crawl_urls::source_id.eq(source_id)))
                 .execute(&mut conn)
                 .await?;
@@ -786,7 +785,7 @@ impl DieselCrawlRepository {
     /// Count URLs for a source.
     pub async fn count_by_source(&self, source_id: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .select(count_star())
@@ -806,7 +805,7 @@ impl DieselCrawlRepository {
             source_id: String,
         }
 
-        let source_ids: Vec<SourceIdRow> = with_diesel_conn!(self.pool, conn, {
+        let source_ids: Vec<SourceIdRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(
                 diesel::sql_query("SELECT DISTINCT source_id FROM crawl_requests"),
                 &mut conn,
@@ -834,7 +833,7 @@ impl DieselCrawlRepository {
         let cutoff_str = cutoff.to_rfc3339();
         let limit = limit as i64;
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             crawl_urls::table
                 .filter(crawl_urls::source_id.eq(source_id))
                 .filter(crawl_urls::status.eq("fetched"))
@@ -853,7 +852,7 @@ impl DieselCrawlRepository {
         source_id: &str,
         url: &str,
     ) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(
                 crawl_urls::table
                     .filter(crawl_urls::source_id.eq(source_id))
@@ -1006,7 +1005,7 @@ impl From<CrawlUrlRecordRaw> for CrawlUrl {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diesel_pool::AsyncSqlitePool;
+    use super::super::pool::SqlitePool;
     use super::*;
     use diesel_async::SimpleAsyncConnection;
     use tempfile::tempdir;
@@ -1014,9 +1013,8 @@ mod tests {
     async fn setup_test_db() -> (DbPool, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db_url = db_path.display().to_string();
 
-        let sqlite_pool = AsyncSqlitePool::new(&db_url, 5);
+        let sqlite_pool = SqlitePool::from_path(&db_path);
         let mut conn = sqlite_pool.get().await.unwrap();
 
         conn.batch_execute(

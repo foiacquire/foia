@@ -72,17 +72,17 @@ impl DbContext {
 
     /// Get a crawl repository.
     pub fn crawl(&self) -> DieselCrawlRepository {
-        DieselCrawlRepository::new(self.pool.to_diesel_pool())
+        DieselCrawlRepository::new(self.pool.clone())
     }
 
     /// Get a document repository.
     pub fn documents(&self) -> DieselDocumentRepository {
-        DieselDocumentRepository::new(self.pool.to_diesel_pool(), self.documents_dir.clone())
+        DieselDocumentRepository::new(self.pool.clone(), self.documents_dir.clone())
     }
 
     /// Get a config history repository.
     pub fn config_history(&self) -> DieselConfigHistoryRepository {
-        DieselConfigHistoryRepository::new(self.pool.to_diesel_pool())
+        DieselConfigHistoryRepository::new(self.pool.clone())
     }
 
     /// Initialize database schema.

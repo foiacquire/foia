@@ -10,93 +10,12 @@ use diesel_async::SimpleAsyncConnection;
 use super::diesel_config_history::DieselConfigHistoryRepository;
 use super::diesel_crawl::DieselCrawlRepository;
 use super::diesel_document::DieselDocumentRepository;
-use super::diesel_pool::{AsyncSqliteConnection, AsyncSqlitePool, DieselError};
 use super::diesel_source::DieselSourceRepository;
-use super::util::validate_database_url;
-use crate::with_diesel_conn_split;
+use super::pool::{DbPool, DieselError, SqliteConn};
+use crate::with_conn_split;
 
-#[cfg(feature = "postgres")]
-use super::util::{is_postgres_url, to_diesel_error};
-#[cfg(feature = "postgres")]
-use diesel_async::pooled_connection::deadpool::Pool;
-#[cfg(feature = "postgres")]
-use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 #[cfg(feature = "postgres")]
 use diesel_async::AsyncPgConnection;
-
-/// Database pool that supports both SQLite and PostgreSQL.
-#[derive(Clone)]
-pub enum DbPool {
-    Sqlite(AsyncSqlitePool),
-    #[cfg(feature = "postgres")]
-    Postgres(Pool<AsyncPgConnection>),
-}
-
-#[allow(dead_code)]
-impl DbPool {
-    /// Create a pool from a database URL.
-    ///
-    /// Detects the backend from the URL prefix:
-    /// - `postgres://` or `postgresql://` -> PostgreSQL
-    /// - Everything else -> SQLite
-    ///
-    /// Returns an error if a PostgreSQL URL is provided but the `postgres` feature is not enabled.
-    pub fn from_url(database_url: &str, max_size: usize) -> Result<Self, DieselError> {
-        // Validate the URL is supported by this build
-        validate_database_url(database_url)?;
-
-        #[cfg(feature = "postgres")]
-        if is_postgres_url(database_url) {
-            let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
-            let pool = Pool::builder(config)
-                .max_size(max_size)
-                .build()
-                .map_err(to_diesel_error)?;
-            return Ok(DbPool::Postgres(pool));
-        }
-
-        Ok(DbPool::Sqlite(AsyncSqlitePool::new(database_url, max_size)))
-    }
-
-    /// Create a SQLite pool from a file path.
-    pub fn sqlite_from_path(db_path: &Path, max_size: usize) -> Self {
-        DbPool::Sqlite(AsyncSqlitePool::from_path(db_path, max_size))
-    }
-
-    /// Check if this is a SQLite backend.
-    pub fn is_sqlite(&self) -> bool {
-        matches!(self, DbPool::Sqlite(_))
-    }
-
-    /// Check if this is a PostgreSQL backend.
-    #[cfg(feature = "postgres")]
-    pub fn is_postgres(&self) -> bool {
-        matches!(self, DbPool::Postgres(_))
-    }
-
-    /// Get a SQLite connection.
-    pub async fn get_sqlite(&self) -> Result<AsyncSqliteConnection, DieselError> {
-        match self {
-            DbPool::Sqlite(pool) => pool.get().await,
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(_) => Err(to_diesel_error("Called get_sqlite on PostgreSQL pool")),
-        }
-    }
-
-    /// Get a PostgreSQL connection.
-    #[cfg(feature = "postgres")]
-    pub async fn get_postgres(
-        &self,
-    ) -> Result<
-        deadpool::managed::Object<AsyncDieselConnectionManager<AsyncPgConnection>>,
-        DieselError,
-    > {
-        match self {
-            DbPool::Postgres(pool) => pool.get().await.map_err(to_diesel_error),
-            DbPool::Sqlite(_) => Err(to_diesel_error("Called get_postgres on SQLite pool")),
-        }
-    }
-}
 
 /// Diesel database context that manages the connection pool and provides repository access.
 ///
@@ -119,7 +38,7 @@ pub struct DieselDbContext {
 impl DieselDbContext {
     /// Create a new database context from a file path (SQLite only).
     pub fn new(db_path: &Path, documents_dir: &Path) -> Self {
-        let pool = DbPool::sqlite_from_path(db_path, 10);
+        let pool = DbPool::sqlite_from_path(db_path);
         Self {
             pool,
             documents_dir: documents_dir.to_path_buf(),
@@ -132,7 +51,7 @@ impl DieselDbContext {
     /// - SQLite URLs like `sqlite:path/to/db.sqlite` or just file paths
     /// - PostgreSQL URLs like `postgres://user:pass@host/db`
     pub fn from_url(database_url: &str, documents_dir: &Path) -> Result<Self, DieselError> {
-        let pool = DbPool::from_url(database_url, 10)?;
+        let pool = DbPool::from_url(database_url)?;
         Ok(Self {
             pool,
             documents_dir: documents_dir.to_path_buf(),
@@ -188,7 +107,7 @@ impl DieselDbContext {
     ///
     /// This creates the necessary tables if they don't exist.
     pub async fn init_schema(&self) -> Result<(), DieselError> {
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 Self::init_sqlite_schema(&mut conn).await
             },
@@ -198,7 +117,7 @@ impl DieselDbContext {
         )
     }
 
-    async fn init_sqlite_schema(conn: &mut AsyncSqliteConnection) -> Result<(), DieselError> {
+    async fn init_sqlite_schema(conn: &mut SqliteConn) -> Result<(), DieselError> {
         conn.batch_execute(
             r#"
             -- Sources table
@@ -515,7 +434,7 @@ impl DieselDbContext {
     /// Get list of all tables in the database.
     #[allow(dead_code)]
     pub async fn list_tables(&self) -> Result<Vec<String>, DieselError> {
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let rows: Vec<TableName> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(

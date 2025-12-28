@@ -7,13 +7,12 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_context::DbPool;
 use super::diesel_models::SourceRecord;
-use super::diesel_pool::DieselError;
+use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Source, SourceType};
 use crate::schema::sources;
-use crate::{with_diesel_conn, with_diesel_conn_split};
+use crate::{with_conn, with_conn_split};
 
 /// Convert a database record to a domain model.
 impl From<SourceRecord> for Source {
@@ -44,7 +43,7 @@ impl DieselSourceRepository {
 
     /// Get a source by ID.
     pub async fn get(&self, id: &str) -> Result<Option<Source>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             sources::table
                 .find(id)
                 .first::<SourceRecord>(&mut conn)
@@ -56,7 +55,7 @@ impl DieselSourceRepository {
 
     /// Get all sources.
     pub async fn get_all(&self) -> Result<Vec<Source>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             sources::table
                 .load::<SourceRecord>(&mut conn)
                 .await
@@ -72,7 +71,7 @@ impl DieselSourceRepository {
         let last_scraped = source.last_scraped.map(|dt| dt.to_rfc3339());
         let source_type = source.source_type.as_str().to_string();
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::replace_into(sources::table)
                     .values((
@@ -119,7 +118,7 @@ impl DieselSourceRepository {
     /// Delete a source.
     #[allow(dead_code)]
     pub async fn delete(&self, id: &str) -> Result<bool, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let rows = diesel::delete(sources::table.find(id))
                 .execute(&mut conn)
                 .await?;
@@ -130,7 +129,7 @@ impl DieselSourceRepository {
     /// Check if a source exists.
     pub async fn exists(&self, id: &str) -> Result<bool, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = sources::table
                 .filter(sources::id.eq(id))
                 .select(count_star())
@@ -148,7 +147,7 @@ impl DieselSourceRepository {
         timestamp: DateTime<Utc>,
     ) -> Result<(), DieselError> {
         let ts = timestamp.to_rfc3339();
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(sources::table.find(id))
                 .set(sources::last_scraped.eq(Some(&ts)))
                 .execute(&mut conn)
@@ -160,7 +159,7 @@ impl DieselSourceRepository {
     /// Rename a source ID, updating all related tables.
     /// Returns the number of documents and crawl URLs updated.
     pub async fn rename(&self, old_id: &str, new_id: &str) -> Result<(usize, usize), DieselError> {
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let docs_updated =
                     diesel::sql_query("UPDATE documents SET source_id = ?1 WHERE source_id = ?2")
@@ -225,17 +224,16 @@ impl DieselSourceRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diesel_pool::AsyncSqlitePool;
+    use super::super::pool::SqlitePool;
     use super::*;
-    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+    use diesel_async::SimpleAsyncConnection;
     use tempfile::tempdir;
 
     async fn setup_test_db() -> (DbPool, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db_url = db_path.display().to_string();
 
-        let sqlite_pool = AsyncSqlitePool::new(&db_url, 5);
+        let sqlite_pool = SqlitePool::from_path(&db_path);
         let mut conn = sqlite_pool.get().await.unwrap();
 
         // Create tables

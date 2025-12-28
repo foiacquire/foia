@@ -11,8 +11,9 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::repository::migration::ProgressCallback;
+use crate::repository::pool::SqlitePool;
 use crate::repository::util::{is_postgres_url, redact_url_password, validate_database_url};
-use crate::repository::{AsyncSqlitePool, DatabaseExporter, DatabaseImporter, SqliteMigrator};
+use crate::repository::{DatabaseExporter, DatabaseImporter, SqliteMigrator};
 
 /// Options for database copy operations.
 #[derive(Clone)]
@@ -183,8 +184,8 @@ pub async fn cmd_db_copy(
     }
 
     // SQLite to SQLite
-    let source_pool = AsyncSqlitePool::new(source_url, 10);
-    let target_pool = AsyncSqlitePool::new(target_url, 10);
+    let source_pool = SqlitePool::new(source_url);
+    let target_pool = SqlitePool::new(target_url);
 
     let source = SqliteMigrator::new(source_pool);
     let target = SqliteMigrator::new(target_pool);
@@ -433,13 +434,13 @@ async fn copy_with_postgres(
         (true, false) => {
             // Postgres to SQLite
             let source = PostgresMigrator::new(source_url).await?;
-            let target_pool = AsyncSqlitePool::new(target_url, 10);
+            let target_pool = SqlitePool::new(target_url);
             let target = SqliteMigrator::new(target_pool);
             copy_tables(&source, &target, &options).await
         }
         (false, true) => {
             // SQLite to Postgres
-            let source_pool = AsyncSqlitePool::new(source_url, 10);
+            let source_pool = SqlitePool::new(source_url);
             let source = SqliteMigrator::new(source_pool);
             let mut target = PostgresMigrator::new(target_url).await?;
             target.set_batch_size(options.batch_size);

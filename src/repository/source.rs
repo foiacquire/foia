@@ -43,7 +43,7 @@ impl SourceRepository {
 
     /// Get a source by ID.
     pub async fn get(&self, id: &str) -> Result<Option<Source>, DbError> {
-        with_conn!(self.pool, conn => {
+        with_conn!(self.pool, conn, {
             sources::table
                 .find(id)
                 .first::<SourceRecord>(&mut conn)
@@ -55,7 +55,7 @@ impl SourceRepository {
 
     /// Get all sources.
     pub async fn get_all(&self) -> Result<Vec<Source>, DbError> {
-        with_conn!(self.pool, conn => {
+        with_conn!(self.pool, conn, {
             sources::table
                 .load::<SourceRecord>(&mut conn)
                 .await
@@ -73,7 +73,7 @@ impl SourceRepository {
 
         #[cfg(not(feature = "postgres"))]
         {
-            with_conn!(self.pool, conn => {
+            with_conn!(self.pool, conn, {
                 diesel::replace_into(sources::table)
                     .values((
                         sources::id.eq(&source.id),
@@ -138,7 +138,7 @@ impl SourceRepository {
     /// Delete a source.
     #[allow(dead_code)]
     pub async fn delete(&self, id: &str) -> Result<bool, DbError> {
-        with_conn!(self.pool, conn => {
+        with_conn!(self.pool, conn, {
             let rows = diesel::delete(sources::table.find(id))
                 .execute(&mut conn)
                 .await?;
@@ -148,7 +148,7 @@ impl SourceRepository {
 
     /// Check if a source exists.
     pub async fn exists(&self, id: &str) -> Result<bool, DbError> {
-        with_conn!(self.pool, conn => {
+        with_conn!(self.pool, conn, {
             use diesel::dsl::count_star;
             let count: i64 = sources::table
                 .filter(sources::id.eq(id))
@@ -168,7 +168,7 @@ impl SourceRepository {
     ) -> Result<(), DbError> {
         let ts = timestamp.to_rfc3339();
 
-        with_conn!(self.pool, conn => {
+        with_conn!(self.pool, conn, {
             diesel::update(sources::table.find(id))
                 .set(sources::last_scraped.eq(Some(&ts)))
                 .execute(&mut conn)
@@ -182,7 +182,7 @@ impl SourceRepository {
     pub async fn rename(&self, old_id: &str, new_id: &str) -> Result<(usize, usize), DbError> {
         #[cfg(not(feature = "postgres"))]
         {
-            with_conn!(self.pool, conn => {
+            with_conn!(self.pool, conn, {
                 let docs_updated =
                     diesel::sql_query("UPDATE documents SET source_id = ?1 WHERE source_id = ?2")
                         .bind::<diesel::sql_types::Text, _>(new_id)

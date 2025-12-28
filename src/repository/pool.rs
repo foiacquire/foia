@@ -23,6 +23,9 @@ use super::util::is_postgres_url;
 /// Diesel error type alias.
 pub type DbError = diesel::result::Error;
 
+/// Alias for DbError used by diesel repositories.
+pub type DieselError = diesel::result::Error;
+
 /// Async SQLite connection type.
 pub type SqliteConn = SyncConnectionWrapper<SqliteConnection>;
 
@@ -140,19 +143,6 @@ impl DbPool {
     pub fn is_postgres(&self) -> bool {
         matches!(self, DbPool::Postgres(_))
     }
-
-    /// Convert to a diesel_context::DbPool for use with diesel repositories.
-    pub fn to_diesel_pool(&self) -> super::diesel_context::DbPool {
-        match self {
-            DbPool::Sqlite(pool) => super::diesel_context::DbPool::Sqlite(
-                super::diesel_pool::AsyncSqlitePool::new(pool.database_url(), 10),
-            ),
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                super::diesel_context::DbPool::Postgres(pool.inner())
-            }
-        }
-    }
 }
 
 /// Macro for running database operations on either backend.
@@ -162,13 +152,13 @@ impl DbPool {
 ///
 /// # Example
 /// ```ignore
-/// with_conn!(self.pool, conn => {
+/// with_conn!(self.pool, conn, {
 ///     sources::table.load::<SourceRecord>(&mut conn).await
 /// })
 /// ```
 #[macro_export]
 macro_rules! with_conn {
-    ($pool:expr, $conn:ident => $body:expr) => {{
+    ($pool:expr, $conn:ident, $body:expr) => {{
         match &$pool {
             $crate::repository::pool::DbPool::Sqlite(pool) => {
                 let mut $conn = pool.get().await?;
@@ -176,7 +166,8 @@ macro_rules! with_conn {
             }
             #[cfg(feature = "postgres")]
             $crate::repository::pool::DbPool::Postgres(pool) => {
-                let mut $conn = pool.get().await?;
+                use $crate::repository::util::to_diesel_error;
+                let mut $conn = pool.get().await.map_err(to_diesel_error)?;
                 $body
             }
         }
@@ -208,7 +199,8 @@ macro_rules! with_conn_split {
             }
             #[cfg(feature = "postgres")]
             $crate::repository::pool::DbPool::Postgres(pool) => {
-                let mut $pg_conn = pool.get().await?;
+                use $crate::repository::util::to_diesel_error;
+                let mut $pg_conn = pool.get().await.map_err(to_diesel_error)?;
                 $pg_body
             }
         }

@@ -8,13 +8,12 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 
-use super::diesel_context::DbPool;
 use super::diesel_models::{DocumentRecord, DocumentVersionRecord, VirtualFileRecord};
-use super::diesel_pool::DieselError;
+use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Document, DocumentStatus, DocumentVersion, VirtualFile, VirtualFileStatus};
 use crate::schema::{document_pages, document_versions, documents, virtual_files};
-use crate::{with_diesel_conn, with_diesel_conn_split};
+use crate::{with_conn, with_conn_split};
 
 /// OCR result for a page.
 #[derive(Debug, Clone)]
@@ -68,7 +67,7 @@ impl DieselDocumentRepository {
     /// Count all documents.
     pub async fn count(&self) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = documents::table
                 .select(count_star())
                 .first(&mut conn)
@@ -81,7 +80,7 @@ impl DieselDocumentRepository {
     pub async fn get_all_source_counts(
         &self,
     ) -> Result<std::collections::HashMap<String, u64>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let rows: Vec<SourceCount> = diesel::sql_query(
                 "SELECT source_id, COUNT(*) as count FROM documents GROUP BY source_id",
             )
@@ -99,7 +98,7 @@ impl DieselDocumentRepository {
     /// Count documents needing OCR.
     /// Documents need OCR if status is 'pending' or 'downloaded' and they have a PDF version.
     pub async fn count_needing_ocr(&self, source_id: Option<&str>) -> Result<u64, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let mut query = documents::table
                 .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
                 .into_boxed();
@@ -117,7 +116,7 @@ impl DieselDocumentRepository {
         &self,
         source_id: Option<&str>,
     ) -> Result<u64, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let mut query = documents::table
                 .filter(documents::status.eq("ocr_complete"))
                 .into_boxed();
@@ -133,7 +132,7 @@ impl DieselDocumentRepository {
     pub async fn get_type_stats(
         &self,
     ) -> Result<std::collections::HashMap<String, u64>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let results: Vec<MimeCount> = diesel_async::RunQueryDsl::load(
                 diesel::sql_query(
                     r#"SELECT COALESCE(dv.mime_type, 'unknown') as mime_type, COUNT(DISTINCT dv.document_id) as count
@@ -158,7 +157,7 @@ impl DieselDocumentRepository {
     /// Get recent documents.
     pub async fn get_recent(&self, limit: u32) -> Result<Vec<Document>, DieselError> {
         let limit = limit as i64;
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .order(documents::updated_at.desc())
                 .limit(limit)
@@ -193,7 +192,7 @@ impl DieselDocumentRepository {
     /// Tags are stored as JSON arrays in the metadata field.
     pub async fn search_tags(&self, query: &str) -> Result<Vec<String>, DieselError> {
         let pattern = format!("%{}%", query.to_lowercase());
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(
@@ -232,7 +231,7 @@ impl DieselDocumentRepository {
 
     /// Get all unique tags from document metadata.
     pub async fn get_all_tags(&self) -> Result<Vec<String>, DieselError> {
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(
@@ -274,7 +273,7 @@ impl DieselDocumentRepository {
         let limit = limit as i64;
         let offset = offset as i64;
 
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             let mut query = documents::table
                 .order(documents::updated_at.desc())
                 .limit(limit)
@@ -305,7 +304,7 @@ impl DieselDocumentRepository {
         _category: Option<&str>,
     ) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let mut query = documents::table.select(count_star()).into_boxed();
             if let Some(sid) = source_id {
                 query = query.filter(documents::source_id.eq(sid));
@@ -327,7 +326,7 @@ impl DieselDocumentRepository {
         use super::document::DocumentNavigation;
         use diesel::dsl::count_star;
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let prev: Option<(String, String)> = documents::table
                 .select((documents::id, documents::title))
                 .filter(documents::source_id.eq(source_id))
@@ -369,7 +368,7 @@ impl DieselDocumentRepository {
     /// Count pages for a document.
     pub async fn count_pages(&self, document_id: &str, version: i32) -> Result<u32, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = document_pages::table
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version))
@@ -386,7 +385,7 @@ impl DieselDocumentRepository {
 
     /// Get a document by ID.
     pub async fn get(&self, id: &str) -> Result<Option<Document>, DieselError> {
-        let record: Option<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let record: Option<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .find(id)
                 .first(&mut conn)
@@ -405,7 +404,7 @@ impl DieselDocumentRepository {
 
     /// Get all documents for a source.
     pub async fn get_by_source(&self, source_id: &str) -> Result<Vec<Document>, DieselError> {
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::source_id.eq(source_id))
                 .order(documents::created_at.desc())
@@ -423,7 +422,7 @@ impl DieselDocumentRepository {
 
     /// Get documents by URL.
     pub async fn get_by_url(&self, url: &str) -> Result<Vec<Document>, DieselError> {
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::source_url.eq(url))
                 .load(&mut conn)
@@ -442,7 +441,7 @@ impl DieselDocumentRepository {
     #[allow(dead_code)]
     pub async fn exists(&self, id: &str) -> Result<bool, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = documents::table
                 .filter(documents::id.eq(id))
                 .select(count_star())
@@ -459,7 +458,7 @@ impl DieselDocumentRepository {
         let updated_at = doc.updated_at.to_rfc3339();
         let status = doc.status.as_str().to_string();
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::replace_into(documents::table)
                     .values((
@@ -509,7 +508,7 @@ impl DieselDocumentRepository {
     /// Delete a document.
     #[allow(dead_code)]
     pub async fn delete(&self, id: &str) -> Result<bool, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             conn.transaction(|conn| {
                 Box::pin(async move {
                     diesel::delete(
@@ -542,7 +541,7 @@ impl DieselDocumentRepository {
         let status_str = status.as_str().to_string();
         let updated_at = Utc::now().to_rfc3339();
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(documents::table.find(id))
                 .set((
                     documents::status.eq(&status_str),
@@ -560,7 +559,7 @@ impl DieselDocumentRepository {
 
     /// Load versions for a document.
     async fn load_versions(&self, document_id: &str) -> Result<Vec<DocumentVersion>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             document_versions::table
                 .filter(document_versions::document_id.eq(document_id))
                 .order(document_versions::id.desc())
@@ -586,7 +585,7 @@ impl DieselDocumentRepository {
         let acquired_at = version.acquired_at.to_rfc3339();
         let file_size = version.file_size as i32;
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::insert_into(document_versions::table)
                     .values((
@@ -644,7 +643,7 @@ impl DieselDocumentRepository {
         &self,
         document_id: &str,
     ) -> Result<Option<DocumentVersion>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             document_versions::table
                 .filter(document_versions::document_id.eq(document_id))
                 .order(document_versions::id.desc())
@@ -662,7 +661,7 @@ impl DieselDocumentRepository {
     /// Count documents by source.
     pub async fn count_by_source(&self, source_id: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = documents::table
                 .filter(documents::source_id.eq(source_id))
                 .select(count_star())
@@ -686,7 +685,7 @@ impl DieselDocumentRepository {
             "SELECT status, COUNT(*) as count FROM documents GROUP BY status".to_string()
         };
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let rows: Vec<StatusCount> =
                 diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await?;
             let mut counts = std::collections::HashMap::new();
@@ -707,7 +706,7 @@ impl DieselDocumentRepository {
         let limit = limit as i64;
         let offset = offset as i64;
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let records: Vec<DocumentRecord> = documents::table
                 .filter(documents::source_id.eq(source_id))
                 .order(documents::updated_at.desc())
@@ -755,7 +754,7 @@ impl DieselDocumentRepository {
         document_id: &str,
         version: i32,
     ) -> Result<Vec<VirtualFile>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             virtual_files::table
                 .filter(virtual_files::document_id.eq(document_id))
                 .filter(virtual_files::version_id.eq(version))
@@ -776,7 +775,7 @@ impl DieselDocumentRepository {
 
     /// Get all documents.
     pub async fn get_all(&self) -> Result<Vec<Document>, DieselError> {
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .order(documents::created_at.desc())
                 .load(&mut conn)
@@ -793,7 +792,7 @@ impl DieselDocumentRepository {
 
     /// Get all document URLs as a HashSet.
     pub async fn get_all_urls_set(&self) -> Result<std::collections::HashSet<String>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let urls: Vec<String> = documents::table
                 .select(documents::source_url)
                 .load(&mut conn)
@@ -809,7 +808,7 @@ impl DieselDocumentRepository {
         tag: &str,
         source_id: Option<&str>,
     ) -> Result<Vec<Document>, DieselError> {
-        let ids: Vec<DocIdRow> = with_diesel_conn_split!(self.pool,
+        let ids: Vec<DocIdRow> = with_conn_split!(self.pool,
             sqlite: conn => {
                 let query = if let Some(sid) = source_id {
                     format!(
@@ -905,7 +904,7 @@ impl DieselDocumentRepository {
             limit
         );
 
-        let ids: Vec<DocIdRow> = with_diesel_conn!(self.pool, conn, {
+        let ids: Vec<DocIdRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
                 .await
                 .unwrap_or_default()
@@ -930,7 +929,7 @@ impl DieselDocumentRepository {
             .map(|s| format!("AND source_id = '{}'", s.replace('\'', "''")))
             .unwrap_or_default();
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 let query = format!(
                     r#"SELECT COUNT(*) as count FROM documents
@@ -972,7 +971,7 @@ impl DieselDocumentRepository {
             .map(|s| format!("AND source_id = '{}'", s.replace('\'', "''")))
             .unwrap_or_default();
 
-        let ids: Vec<DocIdRow> = with_diesel_conn_split!(self.pool,
+        let ids: Vec<DocIdRow> = with_conn_split!(self.pool,
             sqlite: conn => {
                 let query = format!(
                     r#"SELECT id FROM documents
@@ -1016,7 +1015,7 @@ impl DieselDocumentRepository {
         confidence: &str,
         source: &str,
     ) -> Result<(), DieselError> {
-        let record: Option<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let record: Option<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .find(id)
                 .first(&mut conn)
@@ -1035,7 +1034,7 @@ impl DieselDocumentRepository {
             });
 
             let now = Utc::now().to_rfc3339();
-            with_diesel_conn!(self.pool, conn, {
+            with_conn!(self.pool, conn, {
                 diesel::update(documents::table.find(id))
                     .set((
                         documents::metadata.eq(metadata.to_string()),
@@ -1059,7 +1058,7 @@ impl DieselDocumentRepository {
         data: Option<&str>,
         error: Option<&str>,
     ) -> Result<(), DieselError> {
-        let record: Option<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let record: Option<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .find(id)
                 .first(&mut conn)
@@ -1085,7 +1084,7 @@ impl DieselDocumentRepository {
             });
 
             let now = Utc::now().to_rfc3339();
-            with_diesel_conn!(self.pool, conn, {
+            with_conn!(self.pool, conn, {
                 diesel::update(documents::table.find(id))
                     .set((
                         documents::metadata.eq(metadata.to_string()),
@@ -1102,7 +1101,7 @@ impl DieselDocumentRepository {
 
     /// Get URLs by source.
     pub async fn get_urls_by_source(&self, source_id: &str) -> Result<Vec<String>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::source_id.eq(source_id))
                 .select(documents::source_url)
@@ -1116,7 +1115,7 @@ impl DieselDocumentRepository {
         &self,
         document_id: &str,
     ) -> Result<Option<i64>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let version: Option<i32> = document_versions::table
                 .filter(document_versions::document_id.eq(document_id))
                 .order(document_versions::id.desc())
@@ -1132,7 +1131,7 @@ impl DieselDocumentRepository {
     pub async fn insert_virtual_file(&self, vf: &VirtualFile) -> Result<(), DieselError> {
         let now = Utc::now().to_rfc3339();
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::insert_into(virtual_files::table)
                 .values((
                     virtual_files::id.eq(&vf.id),
@@ -1180,7 +1179,7 @@ impl DieselDocumentRepository {
             source_filter
         );
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let result: Vec<CountRow> =
                 diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await?;
             #[allow(clippy::get_first)]
@@ -1207,7 +1206,7 @@ impl DieselDocumentRepository {
             source_filter
         );
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let result: Vec<CountRow> =
                 diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await?;
             #[allow(clippy::get_first)]
@@ -1243,7 +1242,7 @@ impl DieselDocumentRepository {
             source_filter, limit
         );
 
-        let ids: Vec<DocIdRow> = with_diesel_conn!(self.pool, conn, {
+        let ids: Vec<DocIdRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await
         })?;
 
@@ -1278,7 +1277,7 @@ impl DieselDocumentRepository {
             source_filter, limit
         );
 
-        let ids: Vec<DocIdRow> = with_diesel_conn!(self.pool, conn, {
+        let ids: Vec<DocIdRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await
         })?;
 
@@ -1302,7 +1301,7 @@ impl DieselDocumentRepository {
     pub async fn save_page(&self, page: &crate::models::DocumentPage) -> Result<i64, DieselError> {
         let now = Utc::now().to_rfc3339();
 
-        with_diesel_conn_split!(self.pool,
+        with_conn_split!(self.pool,
             sqlite: conn => {
                 diesel::replace_into(document_pages::table)
                     .values((
@@ -1378,7 +1377,7 @@ impl DieselDocumentRepository {
     /// Count pages needing OCR across all documents.
     pub async fn count_pages_needing_ocr(&self) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = document_pages::table
                 .filter(
                     document_pages::ocr_status
@@ -1409,7 +1408,7 @@ impl DieselDocumentRepository {
             title: Option<String>,
         }
 
-        let results: Vec<HashRow> = with_diesel_conn!(self.pool, conn, {
+        let results: Vec<HashRow> = with_conn!(self.pool, conn, {
             diesel::sql_query(
                 r#"SELECT dv.document_id, d.source_id, dv.content_hash, d.title
                    FROM document_versions dv
@@ -1469,7 +1468,7 @@ impl DieselDocumentRepository {
             )
         };
 
-        let results: Vec<SourceRow> = with_diesel_conn!(self.pool, conn, {
+        let results: Vec<SourceRow> = with_conn!(self.pool, conn, {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await
         })?;
 
@@ -1491,7 +1490,7 @@ impl DieselDocumentRepository {
         blake3_hash: &str,
         file_size: i64,
     ) -> Result<Option<String>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             document_versions::table
                 .filter(document_versions::content_hash.eq(sha256_hash))
                 .filter(document_versions::content_hash_blake3.eq(blake3_hash))
@@ -1505,7 +1504,7 @@ impl DieselDocumentRepository {
 
     /// Get all document summaries.
     pub async fn get_all_summaries(&self) -> Result<Vec<DieselDocumentSummary>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let records: Vec<DocumentRecord> = documents::table
                 .order(documents::updated_at.desc())
                 .load(&mut conn)
@@ -1561,7 +1560,7 @@ impl DieselDocumentRepository {
         use super::diesel_models::DocumentPageRecord;
         use crate::models::PageOcrStatus;
 
-        let records: Vec<DocumentPageRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentPageRecord> = with_conn!(self.pool, conn, {
             document_pages::table
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version))
@@ -1621,7 +1620,7 @@ impl DieselDocumentRepository {
             "ocr_complete"
         };
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(document_pages::table.find(page_id as i32))
                 .set((
                     document_pages::ocr_text.eq(text),
@@ -1638,7 +1637,7 @@ impl DieselDocumentRepository {
         &self,
         limit: usize,
     ) -> Result<Vec<Document>, DieselError> {
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::status.eq("ocr_complete"))
                 .order(documents::updated_at.asc())
@@ -1661,7 +1660,7 @@ impl DieselDocumentRepository {
         document_id: &str,
         version: i32,
     ) -> Result<Option<String>, DieselError> {
-        let texts: Vec<Option<String>> = with_diesel_conn!(self.pool, conn, {
+        let texts: Vec<Option<String>> = with_conn!(self.pool, conn, {
             document_pages::table
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version))
@@ -1682,7 +1681,7 @@ impl DieselDocumentRepository {
 
     /// Finalize pending documents - mark documents with all pages complete as indexed.
     pub async fn finalize_pending_documents(&self) -> Result<u64, DieselError> {
-        let doc_ids: Vec<String> = with_diesel_conn!(self.pool, conn, {
+        let doc_ids: Vec<String> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::status.eq("ocr_complete"))
                 .select(documents::id)
@@ -1701,7 +1700,7 @@ impl DieselDocumentRepository {
 
     /// Get documents needing OCR.
     pub async fn get_needing_ocr(&self, limit: usize) -> Result<Vec<Document>, DieselError> {
-        let records: Vec<DocumentRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
                 .order(documents::updated_at.asc())
@@ -1724,7 +1723,7 @@ impl DieselDocumentRepository {
         version_id: i64,
         mime_type: &str,
     ) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::update(document_versions::table.find(version_id as i32))
                 .set(document_versions::mime_type.eq(mime_type))
                 .execute(&mut conn)
@@ -1743,7 +1742,7 @@ impl DieselDocumentRepository {
         use super::diesel_models::DocumentPageRecord;
         use crate::models::PageOcrStatus;
 
-        let records: Vec<DocumentPageRecord> = with_diesel_conn!(self.pool, conn, {
+        let records: Vec<DocumentPageRecord> = with_conn!(self.pool, conn, {
             document_pages::table
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version_id))
@@ -1782,7 +1781,7 @@ impl DieselDocumentRepository {
         document_id: &str,
         version_id: i32,
     ) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::delete(
                 document_pages::table
                     .filter(document_pages::document_id.eq(document_id))
@@ -1801,7 +1800,7 @@ impl DieselDocumentRepository {
         version_id: i32,
     ) -> Result<bool, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let pending_count: i64 = document_pages::table
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version_id))
@@ -1933,7 +1932,7 @@ struct LastInsertRowId {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diesel_pool::AsyncSqlitePool;
+    use super::super::pool::SqlitePool;
     use super::*;
     use diesel_async::SimpleAsyncConnection;
     use tempfile::tempdir;
@@ -1941,9 +1940,8 @@ mod tests {
     async fn setup_test_db() -> (DbPool, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db_url = db_path.display().to_string();
 
-        let sqlite_pool = AsyncSqlitePool::new(&db_url, 5);
+        let sqlite_pool = SqlitePool::from_path(&db_path);
         let mut conn = sqlite_pool.get().await.unwrap();
 
         conn.batch_execute(

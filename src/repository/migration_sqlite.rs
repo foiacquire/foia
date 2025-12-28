@@ -5,24 +5,23 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
 use super::diesel_models::*;
-use super::diesel_pool::AsyncSqlitePool;
 use super::migration::{
     DatabaseExporter, DatabaseImporter, PortableConfigHistory, PortableCrawlConfig,
     PortableCrawlRequest, PortableCrawlUrl, PortableDocument, PortableDocumentPage,
     PortableDocumentVersion, PortableRateLimitState, PortableSource, PortableVirtualFile,
     ProgressCallback,
 };
-use super::DieselError;
+use super::pool::{DieselError, SqlitePool};
 use crate::schema::*;
 
 /// SQLite database migrator.
 pub struct SqliteMigrator {
-    pool: AsyncSqlitePool,
+    pool: SqlitePool,
 }
 
 impl SqliteMigrator {
     /// Create a new SQLite migrator.
-    pub fn new(pool: AsyncSqlitePool) -> Self {
+    pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 }

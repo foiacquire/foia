@@ -6,12 +6,11 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_context::DbPool;
 use super::diesel_models::{ConfigHistoryRecord, NewConfigHistory};
-use super::diesel_pool::DieselError;
+use super::pool::{DbPool, DieselError};
 use super::parse_datetime;
 use crate::schema::configuration_history;
-use crate::with_diesel_conn;
+use crate::with_conn;
 
 /// Maximum number of configuration history entries to retain.
 const MAX_HISTORY_ENTRIES: i64 = 16;
@@ -54,7 +53,7 @@ impl DieselConfigHistoryRepository {
     /// Check if a config with the given hash already exists.
     pub async fn hash_exists(&self, hash: &str) -> Result<bool, DieselError> {
         use diesel::dsl::count_star;
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             let count: i64 = configuration_history::table
                 .filter(configuration_history::hash.eq(hash))
                 .select(count_star())
@@ -87,7 +86,7 @@ impl DieselConfigHistoryRepository {
             hash,
         };
 
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             diesel::insert_into(configuration_history::table)
                 .values(&new_entry)
                 .execute(&mut conn)
@@ -103,7 +102,7 @@ impl DieselConfigHistoryRepository {
 
     /// Get the most recent configuration entry.
     pub async fn get_latest(&self) -> Result<Option<DieselConfigHistoryEntry>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             configuration_history::table
                 .order(configuration_history::created_at.desc())
                 .first::<ConfigHistoryRecord>(&mut conn)
@@ -115,7 +114,7 @@ impl DieselConfigHistoryRepository {
 
     /// Get all configuration history entries (most recent first).
     pub async fn get_all(&self) -> Result<Vec<DieselConfigHistoryEntry>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             configuration_history::table
                 .order(configuration_history::created_at.desc())
                 .load::<ConfigHistoryRecord>(&mut conn)
@@ -131,7 +130,7 @@ impl DieselConfigHistoryRepository {
 
     /// Get just the hash of the most recent configuration entry.
     pub async fn get_latest_hash(&self) -> Result<Option<String>, DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             configuration_history::table
                 .select(configuration_history::hash)
                 .order(configuration_history::created_at.desc())
@@ -143,7 +142,7 @@ impl DieselConfigHistoryRepository {
 
     /// Prune old entries to keep only the last MAX_HISTORY_ENTRIES.
     async fn prune_old_entries(&self) -> Result<(), DieselError> {
-        with_diesel_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
             // Get UUIDs to keep (most recent MAX_HISTORY_ENTRIES)
             let uuids_to_keep: Vec<String> = configuration_history::table
                 .select(configuration_history::uuid)
@@ -168,17 +167,16 @@ impl DieselConfigHistoryRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::super::diesel_pool::AsyncSqlitePool;
+    use super::super::pool::SqlitePool;
     use super::*;
-    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+    use diesel_async::SimpleAsyncConnection;
     use tempfile::tempdir;
 
     async fn setup_test_db() -> (DbPool, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db_url = db_path.display().to_string();
 
-        let sqlite_pool = AsyncSqlitePool::new(&db_url, 5);
+        let sqlite_pool = SqlitePool::from_path(&db_path);
         let mut conn = sqlite_pool.get().await.unwrap();
 
         conn.batch_execute(
