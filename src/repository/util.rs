@@ -4,6 +4,31 @@ use diesel::result::DatabaseErrorInformation;
 #[cfg(feature = "postgres")]
 use std::error::Error;
 
+/// Check if a database URL is a PostgreSQL URL.
+///
+/// Returns true for URLs starting with `postgres://` or `postgresql://`.
+pub fn is_postgres_url(url: &str) -> bool {
+    url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
+/// Validate that a PostgreSQL URL can be used with the current build.
+///
+/// Returns an error if the URL is a PostgreSQL URL but the `postgres` feature is not enabled.
+/// Returns Ok(()) otherwise.
+pub fn validate_database_url(url: &str) -> Result<(), diesel::result::Error> {
+    #[cfg(not(feature = "postgres"))]
+    if is_postgres_url(url) {
+        return Err(diesel::result::Error::QueryBuilderError(
+            "PostgreSQL URL provided but this binary was compiled without PostgreSQL support. \
+             Use a build with the 'postgres' feature enabled."
+                .into(),
+        ));
+    }
+
+    let _ = url; // Suppress unused warning when postgres feature is enabled
+    Ok(())
+}
+
 /// Simple error info wrapper for database errors.
 #[derive(Debug)]
 pub struct DbErrorInfo(pub String);
@@ -82,37 +107,66 @@ pub fn pg_to_diesel_error(e: tokio_postgres::Error) -> diesel::result::Error {
 ///
 /// Transforms `postgres://user:password@host/db` to `postgres://user:***@host/db`
 pub fn redact_url_password(url: &str) -> String {
-    // Handle postgres:// and postgresql:// URLs
-    if let Some(rest) = url
-        .strip_prefix("postgres://")
-        .or_else(|| url.strip_prefix("postgresql://"))
-    {
-        let prefix = if url.starts_with("postgresql://") {
-            "postgresql://"
-        } else {
-            "postgres://"
-        };
+    if !is_postgres_url(url) {
+        return url.to_string();
+    }
 
-        // Find the @ separator - use rfind to handle passwords containing @
-        if let Some(at_pos) = rest.rfind('@') {
-            let auth = &rest[..at_pos];
-            let host_and_rest = &rest[at_pos..];
+    // Extract prefix and rest
+    let (prefix, rest) = if let Some(rest) = url.strip_prefix("postgresql://") {
+        ("postgresql://", rest)
+    } else if let Some(rest) = url.strip_prefix("postgres://") {
+        ("postgres://", rest)
+    } else {
+        return url.to_string();
+    };
 
-            // Find the : in the auth section (separates user from password)
-            if let Some(colon_pos) = auth.find(':') {
-                let user = &auth[..colon_pos];
-                return format!("{prefix}{user}:***{host_and_rest}");
-            }
+    // Find the @ separator - use rfind to handle passwords containing @
+    if let Some(at_pos) = rest.rfind('@') {
+        let auth = &rest[..at_pos];
+        let host_and_rest = &rest[at_pos..];
+
+        // Find the : in the auth section (separates user from password)
+        if let Some(colon_pos) = auth.find(':') {
+            let user = &auth[..colon_pos];
+            return format!("{prefix}{user}:***{host_and_rest}");
         }
     }
 
-    // No password found or not a postgres URL, return as-is
+    // No password found, return as-is
     url.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_postgres_url() {
+        assert!(is_postgres_url("postgres://user:pass@host/db"));
+        assert!(is_postgres_url("postgresql://user:pass@host/db"));
+        assert!(!is_postgres_url("sqlite:///path/to/db.sqlite"));
+        assert!(!is_postgres_url("/path/to/db.sqlite"));
+        assert!(!is_postgres_url("file:///path/to/db.sqlite"));
+    }
+
+    #[test]
+    fn test_validate_database_url() {
+        // SQLite URLs are always valid
+        assert!(validate_database_url("sqlite:///path/to/db.sqlite").is_ok());
+        assert!(validate_database_url("/path/to/db.sqlite").is_ok());
+
+        // PostgreSQL URLs depend on feature flag
+        #[cfg(feature = "postgres")]
+        {
+            assert!(validate_database_url("postgres://user:pass@host/db").is_ok());
+            assert!(validate_database_url("postgresql://user:pass@host/db").is_ok());
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            assert!(validate_database_url("postgres://user:pass@host/db").is_err());
+            assert!(validate_database_url("postgresql://user:pass@host/db").is_err());
+        }
+    }
 
     #[test]
     fn test_redact_url_password() {

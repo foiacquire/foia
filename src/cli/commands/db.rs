@@ -11,7 +11,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::repository::migration::ProgressCallback;
-use crate::repository::util::redact_url_password;
+use crate::repository::util::{is_postgres_url, redact_url_password, validate_database_url};
 use crate::repository::{AsyncSqlitePool, DatabaseExporter, DatabaseImporter, SqliteMigrator};
 
 /// Options for database copy operations.
@@ -142,9 +142,16 @@ pub async fn cmd_db_copy(
         duplicate_log: duplicate_log.clone(),
     };
 
+    // Detect database types
+    let source_is_postgres = is_postgres_url(source_url);
+    let target_is_postgres = is_postgres_url(target_url);
+
+    // Validate URLs are supported by this build
+    validate_database_url(source_url)?;
+    validate_database_url(target_url)?;
+
     // Validate --copy flag
     if use_copy {
-        let target_is_postgres = target_url.starts_with("postgres");
         if !target_is_postgres {
             anyhow::bail!(
                 "--copy flag requires a PostgreSQL target database.\n\
@@ -157,19 +164,7 @@ pub async fn cmd_db_copy(
         );
     }
 
-    // Detect database types
-    let source_is_postgres = source_url.starts_with("postgres");
-    let target_is_postgres = target_url.starts_with("postgres");
-
     if source_is_postgres || target_is_postgres {
-        #[cfg(not(feature = "postgres"))]
-        {
-            anyhow::bail!(
-                "PostgreSQL support requires the 'postgres' feature.\n\
-                 Compile with: cargo build --features postgres"
-            );
-        }
-
         #[cfg(feature = "postgres")]
         {
             return copy_with_postgres(
@@ -181,6 +176,10 @@ pub async fn cmd_db_copy(
             )
             .await;
         }
+
+        // This is unreachable due to validate_database_url above, but included for completeness
+        #[cfg(not(feature = "postgres"))]
+        unreachable!("validate_database_url should have caught this");
     }
 
     // SQLite to SQLite

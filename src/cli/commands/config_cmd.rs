@@ -6,6 +6,7 @@ use std::path::Path;
 
 use console::style;
 
+use crate::cli::icons::{dim_arrow, success, warn};
 use crate::config::{Config, Settings};
 use crate::repository::diesel_context::DieselDbContext;
 use crate::scrapers::ScraperConfig;
@@ -35,14 +36,10 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
     if sources.is_empty() {
         eprintln!(
             "{} No sources found in database. Generating minimal config.",
-            style("!").yellow()
+            warn()
         );
     } else {
-        eprintln!(
-            "{} Found {} source(s) in database",
-            style("✓").green(),
-            sources.len()
-        );
+        eprintln!("{} Found {} source(s) in database", success(), sources.len());
     }
 
     // Build scraper configs from sources
@@ -55,7 +52,7 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
         };
         scrapers.insert(source.id.clone(), scraper_config);
 
-        eprintln!("  {} {} ({})", style("→").dim(), source.id, source.base_url);
+        eprintln!("  {} {} ({})", dim_arrow(), source.id, source.base_url);
     }
 
     // Build the config
@@ -75,11 +72,7 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
             let mut file = std::fs::File::create(path)?;
             file.write_all(json.as_bytes())?;
             file.write_all(b"\n")?;
-            eprintln!(
-                "\n{} Config written to {}",
-                style("✓").green(),
-                path.display()
-            );
+            eprintln!("\n{} Config written to {}", success(), path.display());
         }
         None => {
             println!("{}", json);
@@ -121,11 +114,7 @@ pub async fn cmd_config_restore(settings: &Settings, output: Option<&Path>) -> a
     file.write_all(entry.data.as_bytes())?;
     file.write_all(b"\n")?;
 
-    eprintln!(
-        "{} Config restored to {}",
-        style("✓").green(),
-        output_path.display()
-    );
+    eprintln!("{} Config restored to {}", success(), output_path.display());
     eprintln!(
         "  Format: {}, Created: {}",
         entry.format,

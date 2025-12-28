@@ -14,7 +14,8 @@ use crate::scrapers::{
     load_rate_limit_state, save_rate_limit_state, ConfigurableScraper, RateLimiter,
 };
 
-use super::helpers::{mime_to_extension, truncate};
+use super::helpers::truncate;
+use crate::cli::helpers::{content_storage_path, mime_to_extension};
 
 /// Parse server date from Last-Modified header.
 fn parse_server_date(last_modified: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -55,11 +56,7 @@ fn save_new_version(
     server_date: Option<chrono::DateTime<chrono::Utc>>,
     documents_dir: &Path,
 ) -> Document {
-    let content_path = documents_dir.join(&new_hash[..2]).join(format!(
-        "{}.{}",
-        &new_hash[..8],
-        mime_to_extension(mime_type)
-    ));
+    let content_path = content_storage_path(documents_dir, new_hash, mime_to_extension(mime_type));
 
     if let Some(parent) = content_path.parent() {
         let _ = std::fs::create_dir_all(parent);

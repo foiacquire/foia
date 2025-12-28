@@ -1,10 +1,39 @@
 //! Shared helper functions for CLI commands.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::models::{Document, DocumentVersion};
 use crate::repository::{extract_filename_parts, sanitize_filename, DieselDocumentRepository};
 use crate::scrapers::ScraperResult;
+
+/// Construct the storage path for document content.
+///
+/// Uses a two-level directory structure based on hash prefix for filesystem efficiency:
+/// `{documents_dir}/{hash[0..2]}/{hash[0..8]}.{extension}`
+pub fn content_storage_path(documents_dir: &Path, content_hash: &str, extension: &str) -> PathBuf {
+    documents_dir
+        .join(&content_hash[..2])
+        .join(format!("{}.{}", &content_hash[..8], extension))
+}
+
+/// Construct the storage path with a full filename (including basename).
+///
+/// Uses a two-level directory structure based on hash prefix:
+/// `{documents_dir}/{hash[0..2]}/{sanitized_basename}-{hash[0..8]}.{extension}`
+pub fn content_storage_path_with_name(
+    documents_dir: &Path,
+    content_hash: &str,
+    basename: &str,
+    extension: &str,
+) -> PathBuf {
+    let filename = format!(
+        "{}-{}.{}",
+        sanitize_filename(basename),
+        &content_hash[..8],
+        extension
+    );
+    documents_dir.join(&content_hash[..2]).join(filename)
+}
 
 /// Save scraped document content to disk and database.
 pub async fn save_scraped_document_async(
@@ -20,15 +49,9 @@ pub async fn save_scraped_document_async(
     // Extract basename and extension from URL or title
     let (basename, extension) =
         extract_filename_parts(&result.url, &result.title, &result.mime_type);
-    let filename = format!(
-        "{}-{}.{}",
-        sanitize_filename(&basename),
-        &content_hash[..8],
-        extension
-    );
 
     // Store in subdirectory by first 2 chars of hash (for filesystem efficiency)
-    let content_path = documents_dir.join(&content_hash[..2]).join(&filename);
+    let content_path = content_storage_path_with_name(documents_dir, &content_hash, &basename, &extension);
     std::fs::create_dir_all(content_path.parent().unwrap())?;
     std::fs::write(&content_path, content)?;
 
@@ -103,13 +126,9 @@ pub fn save_version_content(
     content: &[u8],
     mime_type: &str,
     documents_dir: &Path,
-) -> anyhow::Result<std::path::PathBuf> {
+) -> anyhow::Result<PathBuf> {
     let content_hash = DocumentVersion::compute_hash(content);
-    let content_path = documents_dir.join(&content_hash[..2]).join(format!(
-        "{}.{}",
-        &content_hash[..8],
-        mime_to_extension(mime_type)
-    ));
+    let content_path = content_storage_path(documents_dir, &content_hash, mime_to_extension(mime_type));
 
     if let Some(parent) = content_path.parent() {
         std::fs::create_dir_all(parent)?;

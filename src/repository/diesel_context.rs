@@ -12,9 +12,10 @@ use super::diesel_crawl::DieselCrawlRepository;
 use super::diesel_document::DieselDocumentRepository;
 use super::diesel_pool::{AsyncSqliteConnection, AsyncSqlitePool, DieselError};
 use super::diesel_source::DieselSourceRepository;
+use super::util::validate_database_url;
 
 #[cfg(feature = "postgres")]
-use super::util::to_diesel_error;
+use super::util::{is_postgres_url, to_diesel_error};
 #[cfg(feature = "postgres")]
 use diesel_async::pooled_connection::deadpool::Pool;
 #[cfg(feature = "postgres")]
@@ -37,9 +38,14 @@ impl DbPool {
     /// Detects the backend from the URL prefix:
     /// - `postgres://` or `postgresql://` -> PostgreSQL
     /// - Everything else -> SQLite
+    ///
+    /// Returns an error if a PostgreSQL URL is provided but the `postgres` feature is not enabled.
     pub fn from_url(database_url: &str, max_size: usize) -> Result<Self, DieselError> {
+        // Validate the URL is supported by this build
+        validate_database_url(database_url)?;
+
         #[cfg(feature = "postgres")]
-        if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+        if is_postgres_url(database_url) {
             let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
             let pool = Pool::builder(config)
                 .max_size(max_size)

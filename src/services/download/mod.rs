@@ -12,10 +12,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::cli::helpers::content_storage_path_with_name;
 use crate::models::{Document, DocumentVersion, UrlStatus};
-use crate::repository::{
-    extract_filename_parts, sanitize_filename, DieselCrawlRepository, DieselDocumentRepository,
-};
+use crate::repository::{extract_filename_parts, DieselCrawlRepository, DieselDocumentRepository};
 use crate::scrapers::{extract_title_from_url, HttpClient};
 use crate::services::youtube;
 
@@ -272,57 +271,16 @@ impl DownloadService {
                                 .await;
                             (std::path::PathBuf::from(existing_path), true)
                         }
-                        Ok(None) => {
-                            // No duplicate, write new file
+                        Ok(None) | Err(_) => {
+                            // No duplicate or dedup check failed - write new file
                             let (basename, extension) =
                                 extract_filename_parts(&url, &title, &mime_type);
-                            let filename = format!(
-                                "{}-{}.{}",
-                                sanitize_filename(&basename),
-                                &hashes.sha256[..8],
-                                extension
+                            let new_path = content_storage_path_with_name(
+                                &documents_dir,
+                                &hashes.sha256,
+                                &basename,
+                                &extension,
                             );
-                            let new_path = documents_dir.join(&hashes.sha256[..2]).join(&filename);
-
-                            if let Err(e) =
-                                tokio::fs::create_dir_all(new_path.parent().unwrap()).await
-                            {
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                let _ = event_tx
-                                    .send(DownloadEvent::Failed {
-                                        worker_id,
-                                        url,
-                                        error: e.to_string(),
-                                    })
-                                    .await;
-                                continue;
-                            }
-
-                            if let Err(e) = tokio::fs::write(&new_path, &content).await {
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                let _ = event_tx
-                                    .send(DownloadEvent::Failed {
-                                        worker_id,
-                                        url,
-                                        error: e.to_string(),
-                                    })
-                                    .await;
-                                continue;
-                            }
-                            (new_path, false)
-                        }
-                        Err(e) => {
-                            // Database error, log and continue with normal save
-                            eprintln!("Dedup check failed: {e}");
-                            let (basename, extension) =
-                                extract_filename_parts(&url, &title, &mime_type);
-                            let filename = format!(
-                                "{}-{}.{}",
-                                sanitize_filename(&basename),
-                                &hashes.sha256[..8],
-                                extension
-                            );
-                            let new_path = documents_dir.join(&hashes.sha256[..2]).join(&filename);
 
                             if let Err(e) =
                                 tokio::fs::create_dir_all(new_path.parent().unwrap()).await

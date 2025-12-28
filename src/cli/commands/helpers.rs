@@ -22,23 +22,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Get file extension from MIME type.
-pub fn mime_to_extension(mime: &str) -> &'static str {
-    match mime {
-        "application/pdf" => "pdf",
-        "text/html" => "html",
-        "text/plain" => "txt",
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "application/msword" => "doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
-        "application/vnd.ms-excel" => "xls",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
-        _ => "bin",
-    }
-}
-
 /// Convert MIME type to short form for display.
 pub fn mime_short(mime: &str) -> &'static str {
     match mime {

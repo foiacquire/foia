@@ -2,6 +2,7 @@
 
 mod commands;
 pub mod helpers;
+pub mod icons;
 pub mod progress;
 pub mod tui;
 
