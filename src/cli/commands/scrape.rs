@@ -9,7 +9,7 @@ use console::style;
 use crate::config::{Config, Settings};
 use crate::llm::LlmClient;
 use crate::models::{Document, DocumentStatus, DocumentVersion, Source, SourceType};
-use crate::repository::DbContext;
+use crate::repository::diesel_context::DieselDbContext;
 use crate::scrapers::{
     load_rate_limit_state, save_rate_limit_state, ConfigurableScraper, RateLimiter,
 };
@@ -750,7 +750,7 @@ pub async fn cmd_download(
 }
 
 /// Get pending document count for a source or all sources.
-async fn get_pending_count(ctx: &DbContext, source_id: Option<&str>) -> anyhow::Result<u64> {
+async fn get_pending_count(ctx: &DieselDbContext, source_id: Option<&str>) -> anyhow::Result<u64> {
     let crawl_repo = ctx.crawl();
 
     if let Some(sid) = source_id {

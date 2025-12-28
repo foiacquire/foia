@@ -7,7 +7,7 @@ use std::path::Path;
 use console::style;
 
 use crate::config::{Config, Settings};
-use crate::repository::DbContext;
+use crate::repository::diesel_context::DieselDbContext;
 use crate::scrapers::ScraperConfig;
 
 /// Recover a skeleton config from an existing database.
@@ -28,7 +28,7 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
         .ok_or_else(|| anyhow::anyhow!("Could not determine database filename"))?;
 
     // Open database and query sources
-    let ctx = DbContext::new(database, target);
+    let ctx = DieselDbContext::new(database, target);
     let source_repo = ctx.sources();
     let sources = source_repo.get_all().await?;
 

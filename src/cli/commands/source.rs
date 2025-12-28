@@ -50,7 +50,6 @@ pub async fn cmd_source_rename(
     new_id: &str,
     confirm: bool,
 ) -> anyhow::Result<()> {
-    use diesel_async::RunQueryDsl;
     use std::io::{self, Write};
 
     let ctx = settings.create_db_context();
@@ -100,38 +99,8 @@ pub async fn cmd_source_rename(
         }
     }
 
-    // Perform the rename using raw SQL for atomicity
-    let mut conn = ctx.pool().get().await?;
-
-    // Update documents
-    let docs_updated =
-        diesel::sql_query("UPDATE documents SET source_id = ?1 WHERE source_id = ?2")
-            .bind::<diesel::sql_types::Text, _>(new_id)
-            .bind::<diesel::sql_types::Text, _>(old_id)
-            .execute(&mut conn)
-            .await?;
-
-    // Update crawl_urls
-    let crawls_updated =
-        diesel::sql_query("UPDATE crawl_urls SET source_id = ?1 WHERE source_id = ?2")
-            .bind::<diesel::sql_types::Text, _>(new_id)
-            .bind::<diesel::sql_types::Text, _>(old_id)
-            .execute(&mut conn)
-            .await?;
-
-    // Update crawl_config
-    diesel::sql_query("UPDATE crawl_config SET source_id = ?1 WHERE source_id = ?2")
-        .bind::<diesel::sql_types::Text, _>(new_id)
-        .bind::<diesel::sql_types::Text, _>(old_id)
-        .execute(&mut conn)
-        .await?;
-
-    // Update source itself
-    diesel::sql_query("UPDATE sources SET id = ?1 WHERE id = ?2")
-        .bind::<diesel::sql_types::Text, _>(new_id)
-        .bind::<diesel::sql_types::Text, _>(old_id)
-        .execute(&mut conn)
-        .await?;
+    // Perform the rename using the repository (handles both SQLite and PostgreSQL)
+    let (docs_updated, crawls_updated) = source_repo.rename(old_id, new_id).await?;
 
     println!(
         "\n{} Renamed '{}' → '{}'",

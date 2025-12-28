@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::llm::LlmConfig;
-use crate::repository::DbContext;
+use crate::repository::diesel_context::DieselDbContext;
 use crate::scrapers::ScraperConfig;
 
 /// Default refresh TTL in days (14 days).
@@ -102,12 +102,14 @@ impl Settings {
 
     /// Create a database context using the configured database URL or path.
     ///
-    /// This is the preferred way to get a DbContext from settings.
-    pub fn create_db_context(&self) -> DbContext {
+    /// This is the preferred way to get a DieselDbContext from settings.
+    /// Panics if the database URL is invalid (e.g., invalid PostgreSQL URL).
+    pub fn create_db_context(&self) -> DieselDbContext {
         if self.database_url.is_some() {
-            DbContext::from_url(&self.database_url(), &self.documents_dir)
+            DieselDbContext::from_url(&self.database_url(), &self.documents_dir)
+                .expect("Failed to create database context from DATABASE_URL")
         } else {
-            DbContext::new(&self.database_path(), &self.documents_dir)
+            DieselDbContext::new(&self.database_path(), &self.documents_dir)
         }
     }
 }
@@ -334,7 +336,7 @@ impl Config {
     pub async fn load_from_db(db_path: &Path) -> Option<Self> {
         // Use a dummy documents dir since we only need config_history
         let docs_dir = db_path.parent().unwrap_or(Path::new(".")).join("documents");
-        let ctx = DbContext::new(db_path, &docs_dir);
+        let ctx = DieselDbContext::new(db_path, &docs_dir);
         let entry = ctx.config_history().get_latest().await.ok()??;
 
         match entry.format.to_lowercase().as_str() {

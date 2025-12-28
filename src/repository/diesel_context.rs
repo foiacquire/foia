@@ -1,7 +1,7 @@
 //! Diesel database context for managing connection pools and repository access.
 //!
 //! Provides a unified entry point for database operations using Diesel ORM.
-//! Uses diesel-async's SyncConnectionWrapper for SQLite async support.
+//! Supports both SQLite (via SyncConnectionWrapper) and PostgreSQL backends.
 
 use std::path::{Path, PathBuf};
 
@@ -10,8 +10,85 @@ use diesel_async::SimpleAsyncConnection;
 use super::diesel_config_history::DieselConfigHistoryRepository;
 use super::diesel_crawl::DieselCrawlRepository;
 use super::diesel_document::DieselDocumentRepository;
-use super::diesel_pool::{AsyncSqlitePool, DieselError};
+use super::diesel_pool::{AsyncSqliteConnection, AsyncSqlitePool, DieselError};
 use super::diesel_source::DieselSourceRepository;
+use super::util::to_diesel_error;
+
+#[cfg(feature = "postgres")]
+use diesel_async::pooled_connection::deadpool::Pool;
+#[cfg(feature = "postgres")]
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+#[cfg(feature = "postgres")]
+use diesel_async::AsyncPgConnection;
+
+/// Database pool that supports both SQLite and PostgreSQL.
+#[derive(Clone)]
+pub enum DbPool {
+    Sqlite(AsyncSqlitePool),
+    #[cfg(feature = "postgres")]
+    Postgres(Pool<AsyncPgConnection>),
+}
+
+#[allow(dead_code)]
+impl DbPool {
+    /// Create a pool from a database URL.
+    ///
+    /// Detects the backend from the URL prefix:
+    /// - `postgres://` or `postgresql://` -> PostgreSQL
+    /// - Everything else -> SQLite
+    pub fn from_url(database_url: &str, max_size: usize) -> Result<Self, DieselError> {
+        #[cfg(feature = "postgres")]
+        if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+            let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
+            let pool = Pool::builder(config)
+                .max_size(max_size)
+                .build()
+                .map_err(to_diesel_error)?;
+            return Ok(DbPool::Postgres(pool));
+        }
+
+        Ok(DbPool::Sqlite(AsyncSqlitePool::new(database_url, max_size)))
+    }
+
+    /// Create a SQLite pool from a file path.
+    pub fn sqlite_from_path(db_path: &Path, max_size: usize) -> Self {
+        DbPool::Sqlite(AsyncSqlitePool::from_path(db_path, max_size))
+    }
+
+    /// Check if this is a SQLite backend.
+    pub fn is_sqlite(&self) -> bool {
+        matches!(self, DbPool::Sqlite(_))
+    }
+
+    /// Check if this is a PostgreSQL backend.
+    #[cfg(feature = "postgres")]
+    pub fn is_postgres(&self) -> bool {
+        matches!(self, DbPool::Postgres(_))
+    }
+
+    /// Get a SQLite connection.
+    pub async fn get_sqlite(&self) -> Result<AsyncSqliteConnection, DieselError> {
+        match self {
+            DbPool::Sqlite(pool) => pool.get().await,
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(_) => Err(to_diesel_error("Called get_sqlite on PostgreSQL pool")),
+        }
+    }
+
+    /// Get a PostgreSQL connection.
+    #[cfg(feature = "postgres")]
+    pub async fn get_postgres(
+        &self,
+    ) -> Result<
+        deadpool::managed::Object<AsyncDieselConnectionManager<AsyncPgConnection>>,
+        DieselError,
+    > {
+        match self {
+            DbPool::Postgres(pool) => pool.get().await.map_err(to_diesel_error),
+            DbPool::Sqlite(_) => Err(to_diesel_error("Called get_postgres on SQLite pool")),
+        }
+    }
+}
 
 /// Diesel database context that manages the connection pool and provides repository access.
 ///
@@ -26,14 +103,15 @@ use super::diesel_source::DieselSourceRepository;
 /// ```
 #[derive(Clone)]
 pub struct DieselDbContext {
-    pool: AsyncSqlitePool,
+    pool: DbPool,
     documents_dir: PathBuf,
 }
 
+#[allow(dead_code)]
 impl DieselDbContext {
-    /// Create a new database context from a file path.
+    /// Create a new database context from a file path (SQLite only).
     pub fn new(db_path: &Path, documents_dir: &Path) -> Self {
-        let pool = AsyncSqlitePool::from_path(db_path, 10);
+        let pool = DbPool::sqlite_from_path(db_path, 10);
         Self {
             pool,
             documents_dir: documents_dir.to_path_buf(),
@@ -42,18 +120,20 @@ impl DieselDbContext {
 
     /// Create a new database context from a database URL.
     ///
-    /// Supports SQLite URLs like `sqlite:path/to/db.sqlite`.
-    pub fn from_url(database_url: &str, documents_dir: &Path) -> Self {
-        let pool = AsyncSqlitePool::new(database_url, 10);
-        Self {
+    /// Supports:
+    /// - SQLite URLs like `sqlite:path/to/db.sqlite` or just file paths
+    /// - PostgreSQL URLs like `postgres://user:pass@host/db`
+    pub fn from_url(database_url: &str, documents_dir: &Path) -> Result<Self, DieselError> {
+        let pool = DbPool::from_url(database_url, 10)?;
+        Ok(Self {
             pool,
             documents_dir: documents_dir.to_path_buf(),
-        }
+        })
     }
 
     /// Create a context with an existing pool.
     #[allow(dead_code)]
-    pub fn with_pool(pool: AsyncSqlitePool, documents_dir: PathBuf) -> Self {
+    pub fn with_pool(pool: DbPool, documents_dir: PathBuf) -> Self {
         Self {
             pool,
             documents_dir,
@@ -61,8 +141,19 @@ impl DieselDbContext {
     }
 
     /// Get the underlying connection pool.
-    pub fn pool(&self) -> &AsyncSqlitePool {
+    pub fn pool(&self) -> &DbPool {
         &self.pool
+    }
+
+    /// Check if using SQLite backend.
+    pub fn is_sqlite(&self) -> bool {
+        self.pool.is_sqlite()
+    }
+
+    /// Check if using PostgreSQL backend.
+    #[cfg(feature = "postgres")]
+    pub fn is_postgres(&self) -> bool {
+        self.pool.is_postgres()
     }
 
     /// Get a source repository.
@@ -89,7 +180,15 @@ impl DieselDbContext {
     ///
     /// This creates the necessary tables if they don't exist.
     pub async fn init_schema(&self) -> Result<(), DieselError> {
-        let mut conn = self.pool.get().await?;
+        match &self.pool {
+            DbPool::Sqlite(pool) => self.init_sqlite_schema(pool).await,
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => self.init_postgres_schema(pool).await,
+        }
+    }
+
+    async fn init_sqlite_schema(&self, pool: &AsyncSqlitePool) -> Result<(), DieselError> {
+        let mut conn = pool.get().await?;
 
         conn.batch_execute(
             r#"
@@ -108,12 +207,21 @@ impl DieselDbContext {
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY,
                 source_id TEXT NOT NULL,
-                url TEXT NOT NULL,
-                title TEXT,
+                title TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                extracted_text TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 metadata TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                synopsis TEXT,
+                tags TEXT,
+                estimated_date TEXT,
+                date_confidence TEXT,
+                date_source TEXT,
+                manual_date TEXT,
+                discovery_method TEXT NOT NULL DEFAULT 'seed',
+                category_id TEXT,
                 FOREIGN KEY (source_id) REFERENCES sources(id)
             );
 
@@ -121,13 +229,15 @@ impl DieselDbContext {
             CREATE TABLE IF NOT EXISTS document_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                file_path TEXT,
-                content_hash TEXT,
-                mime_type TEXT,
-                file_size INTEGER,
-                fetched_at TEXT NOT NULL,
-                UNIQUE(document_id, version),
+                content_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                source_url TEXT,
+                original_filename TEXT,
+                server_date TEXT,
+                page_count INTEGER,
                 FOREIGN KEY (document_id) REFERENCES documents(id)
             );
 
@@ -135,13 +245,33 @@ impl DieselDbContext {
             CREATE TABLE IF NOT EXISTS document_pages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id TEXT NOT NULL,
-                version INTEGER NOT NULL,
+                version_id INTEGER NOT NULL,
                 page_number INTEGER NOT NULL,
-                text_content TEXT,
+                pdf_text TEXT,
                 ocr_text TEXT,
-                has_images INTEGER NOT NULL DEFAULT 0,
+                final_text TEXT,
+                ocr_status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(document_id, version_id, page_number),
+                FOREIGN KEY (document_id) REFERENCES documents(id)
+            );
+
+            -- Virtual files table
+            CREATE TABLE IF NOT EXISTS virtual_files (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                version_id INTEGER NOT NULL,
+                archive_path TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                extracted_text TEXT,
+                synopsis TEXT,
+                tags TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
-                UNIQUE(document_id, version, page_number),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
                 FOREIGN KEY (document_id) REFERENCES documents(id)
             );
 
@@ -192,27 +322,13 @@ impl DieselDbContext {
                 updated_at TEXT NOT NULL
             );
 
-            -- Config history table
-            CREATE TABLE IF NOT EXISTS config_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Configuration history table
+            CREATE TABLE IF NOT EXISTS configuration_history (
+                uuid TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
                 data TEXT NOT NULL,
                 format TEXT NOT NULL DEFAULT 'json',
-                hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            -- Virtual files table
-            CREATE TABLE IF NOT EXISTS virtual_files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_id TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                path TEXT NOT NULL,
-                mime_type TEXT,
-                file_size INTEGER,
-                status TEXT NOT NULL DEFAULT 'pending',
-                ocr_text TEXT,
-                UNIQUE(document_id, version, path),
-                FOREIGN KEY (document_id) REFERENCES documents(id)
+                hash TEXT NOT NULL
             );
 
             -- Rate limit state table
@@ -227,31 +343,194 @@ impl DieselDbContext {
 
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_id);
-            CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url);
+            CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(source_url);
             CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id);
             CREATE INDEX IF NOT EXISTS idx_crawl_urls_source_status ON crawl_urls(source_id, status);
             CREATE INDEX IF NOT EXISTS idx_crawl_urls_parent ON crawl_urls(parent_url);
             CREATE INDEX IF NOT EXISTS idx_crawl_requests_source ON crawl_requests(source_id, request_at);
-            CREATE INDEX IF NOT EXISTS idx_config_history_hash ON config_history(hash);
+            CREATE INDEX IF NOT EXISTS idx_config_history_hash ON configuration_history(hash);
             "#,
         )
         .await
     }
 
+    #[cfg(feature = "postgres")]
+    async fn init_postgres_schema(
+        &self,
+        pool: &Pool<AsyncPgConnection>,
+    ) -> Result<(), DieselError> {
+        use diesel_async::RunQueryDsl;
+
+        let mut conn = pool.get().await.map_err(to_diesel_error)?;
+
+        // PostgreSQL requires separate statements
+        let statements = [
+            r#"CREATE TABLE IF NOT EXISTS sources (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                last_scraped TEXT
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL REFERENCES sources(id),
+                title TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                extracted_text TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                synopsis TEXT,
+                tags TEXT,
+                estimated_date TEXT,
+                date_confidence TEXT,
+                date_source TEXT,
+                manual_date TEXT,
+                discovery_method TEXT NOT NULL DEFAULT 'seed',
+                category_id TEXT
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS document_versions (
+                id SERIAL PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id),
+                content_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                source_url TEXT,
+                original_filename TEXT,
+                server_date TEXT,
+                page_count INTEGER
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS document_pages (
+                id SERIAL PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id),
+                version_id INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                pdf_text TEXT,
+                ocr_text TEXT,
+                final_text TEXT,
+                ocr_status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS virtual_files (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id),
+                version_id INTEGER NOT NULL,
+                archive_path TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                extracted_text TEXT,
+                synopsis TEXT,
+                tags TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS crawl_urls (
+                id SERIAL PRIMARY KEY,
+                url TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'discovered',
+                discovery_method TEXT NOT NULL DEFAULT 'seed',
+                parent_url TEXT,
+                discovery_context TEXT NOT NULL DEFAULT '{}',
+                depth INTEGER NOT NULL DEFAULT 0,
+                discovered_at TEXT NOT NULL,
+                fetched_at TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                next_retry_at TEXT,
+                etag TEXT,
+                last_modified TEXT,
+                content_hash TEXT,
+                document_id TEXT,
+                UNIQUE(source_id, url)
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS crawl_requests (
+                id SERIAL PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'GET',
+                request_headers TEXT NOT NULL DEFAULT '{}',
+                request_at TEXT NOT NULL,
+                response_status INTEGER,
+                response_headers TEXT NOT NULL DEFAULT '{}',
+                response_at TEXT,
+                response_size INTEGER,
+                duration_ms INTEGER,
+                error TEXT,
+                was_conditional INTEGER NOT NULL DEFAULT 0,
+                was_not_modified INTEGER NOT NULL DEFAULT 0
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS crawl_config (
+                source_id TEXT PRIMARY KEY,
+                config_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS configuration_history (
+                uuid TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                data TEXT NOT NULL,
+                format TEXT NOT NULL DEFAULT 'json',
+                hash TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS rate_limit_state (
+                domain TEXT PRIMARY KEY,
+                current_delay_ms INTEGER NOT NULL,
+                in_backoff INTEGER NOT NULL DEFAULT 0,
+                total_requests INTEGER NOT NULL DEFAULT 0,
+                rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(source_url)",
+            "CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id)",
+            "CREATE INDEX IF NOT EXISTS idx_crawl_urls_source_status ON crawl_urls(source_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_crawl_requests_source ON crawl_requests(source_id, request_at)",
+            "CREATE INDEX IF NOT EXISTS idx_config_history_hash ON configuration_history(hash)",
+        ];
+
+        for stmt in statements {
+            diesel::sql_query(stmt).execute(&mut conn).await?;
+        }
+
+        Ok(())
+    }
+
     /// Get list of all tables in the database.
     #[allow(dead_code)]
     pub async fn list_tables(&self) -> Result<Vec<String>, DieselError> {
-        let mut conn = self.pool.get().await?;
-
-        let rows: Vec<TableName> = diesel_async::RunQueryDsl::load(
-            diesel::sql_query(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            ),
-            &mut conn,
-        )
-        .await?;
-
-        Ok(rows.into_iter().map(|r| r.name).collect())
+        match &self.pool {
+            DbPool::Sqlite(pool) => {
+                let mut conn = pool.get().await?;
+                let rows: Vec<TableName> = diesel_async::RunQueryDsl::load(
+                    diesel::sql_query(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                    ),
+                    &mut conn,
+                )
+                .await?;
+                Ok(rows.into_iter().map(|r| r.name).collect())
+            }
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => {
+                use diesel_async::RunQueryDsl;
+                let mut conn = pool.get().await.map_err(to_diesel_error)?;
+                let rows: Vec<TableName> = diesel::sql_query(
+                    "SELECT tablename as name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
+                )
+                .load(&mut conn)
+                .await?;
+                Ok(rows.into_iter().map(|r| r.name).collect())
+            }
+        }
     }
 }
 
