@@ -229,84 +229,42 @@ impl DieselCrawlRepository {
     ) -> Result<Option<CrawlUrl>, DieselError> {
         let source_id = source_id.map(|s| s.to_string());
 
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                conn.transaction(|conn| {
-                    let source_id = source_id.clone();
-                    Box::pin(async move {
-                        let mut query = crawl_urls::table
-                            .filter(crawl_urls::status.eq("discovered"))
-                            .order((crawl_urls::depth.asc(), crawl_urls::discovered_at.asc()))
-                            .limit(1)
-                            .into_boxed();
+        with_diesel_conn!(self.pool, conn, {
+            conn.transaction(|conn| {
+                let source_id = source_id.clone();
+                Box::pin(async move {
+                    let mut query = crawl_urls::table
+                        .filter(crawl_urls::status.eq("discovered"))
+                        .order((crawl_urls::depth.asc(), crawl_urls::discovered_at.asc()))
+                        .limit(1)
+                        .into_boxed();
 
-                        if let Some(ref sid) = source_id {
-                            query = query.filter(crawl_urls::source_id.eq(sid));
-                        }
+                    if let Some(ref sid) = source_id {
+                        query = query.filter(crawl_urls::source_id.eq(sid));
+                    }
 
-                        let record: Option<CrawlUrlRecord> = query.first(conn).await.optional()?;
+                    let record: Option<CrawlUrlRecord> = query.first(conn).await.optional()?;
 
-                        if let Some(record) = record {
-                            diesel::update(
-                                crawl_urls::table
-                                    .filter(crawl_urls::source_id.eq(&record.source_id))
-                                    .filter(crawl_urls::url.eq(&record.url)),
-                            )
-                            .set(crawl_urls::status.eq("fetching"))
-                            .execute(conn)
-                            .await?;
+                    if let Some(record) = record {
+                        diesel::update(
+                            crawl_urls::table
+                                .filter(crawl_urls::source_id.eq(&record.source_id))
+                                .filter(crawl_urls::url.eq(&record.url)),
+                        )
+                        .set(crawl_urls::status.eq("fetching"))
+                        .execute(conn)
+                        .await?;
 
-                            let mut crawl_url = CrawlUrl::from(record);
-                            crawl_url.status = UrlStatus::Fetching;
-                            Ok(Some(crawl_url))
-                        } else {
-                            Ok(None)
-                        }
-                    })
+                        let mut crawl_url = CrawlUrl::from(record);
+                        crawl_url.status = UrlStatus::Fetching;
+                        Ok(Some(crawl_url))
+                    } else {
+                        Ok(None)
+                    }
                 })
-                .await
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                conn.transaction(|conn| {
-                    let source_id = source_id.clone();
-                    Box::pin(async move {
-                        let mut query = crawl_urls::table
-                            .filter(crawl_urls::status.eq("discovered"))
-                            .order((crawl_urls::depth.asc(), crawl_urls::discovered_at.asc()))
-                            .limit(1)
-                            .into_boxed();
-
-                        if let Some(ref sid) = source_id {
-                            query = query.filter(crawl_urls::source_id.eq(sid));
-                        }
-
-                        let record: Option<CrawlUrlRecord> = query.first(conn).await.optional()?;
-
-                        if let Some(record) = record {
-                            diesel::update(
-                                crawl_urls::table
-                                    .filter(crawl_urls::source_id.eq(&record.source_id))
-                                    .filter(crawl_urls::url.eq(&record.url)),
-                            )
-                            .set(crawl_urls::status.eq("fetching"))
-                            .execute(conn)
-                            .await?;
-
-                            let mut crawl_url = CrawlUrl::from(record);
-                            crawl_url.status = UrlStatus::Fetching;
-                            Ok(Some(crawl_url))
-                        } else {
-                            Ok(None)
-                        }
-                    })
-                })
-                .await
-            }
-        }
+            })
+            .await
+        })
     }
 
     /// Get failed URLs that are ready for retry.

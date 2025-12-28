@@ -1724,25 +1724,13 @@ impl DieselDocumentRepository {
         version_id: i64,
         mime_type: &str,
     ) -> Result<(), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel::update(document_versions::table.find(version_id as i32))
-                    .set(document_versions::mime_type.eq(mime_type))
-                    .execute(&mut conn)
-                    .await?;
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel::update(document_versions::table.find(version_id as i32))
-                    .set(document_versions::mime_type.eq(mime_type))
-                    .execute(&mut conn)
-                    .await?;
-            }
-        }
-        Ok(())
+        with_diesel_conn!(self.pool, conn, {
+            diesel::update(document_versions::table.find(version_id as i32))
+                .set(document_versions::mime_type.eq(mime_type))
+                .execute(&mut conn)
+                .await?;
+            Ok(())
+        })
     }
 
     /// Get pages needing OCR.
@@ -1755,40 +1743,20 @@ impl DieselDocumentRepository {
         use super::diesel_models::DocumentPageRecord;
         use crate::models::PageOcrStatus;
 
-        let records: Vec<DocumentPageRecord> = match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                document_pages::table
-                    .filter(document_pages::document_id.eq(document_id))
-                    .filter(document_pages::version_id.eq(version_id))
-                    .filter(
-                        document_pages::ocr_status
-                            .eq("pending")
-                            .or(document_pages::ocr_status.eq("text_extracted")),
-                    )
-                    .order(document_pages::page_number.asc())
-                    .limit(limit as i64)
-                    .load(&mut conn)
-                    .await?
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                document_pages::table
-                    .filter(document_pages::document_id.eq(document_id))
-                    .filter(document_pages::version_id.eq(version_id))
-                    .filter(
-                        document_pages::ocr_status
-                            .eq("pending")
-                            .or(document_pages::ocr_status.eq("text_extracted")),
-                    )
-                    .order(document_pages::page_number.asc())
-                    .limit(limit as i64)
-                    .load(&mut conn)
-                    .await?
-            }
-        };
+        let records: Vec<DocumentPageRecord> = with_diesel_conn!(self.pool, conn, {
+            document_pages::table
+                .filter(document_pages::document_id.eq(document_id))
+                .filter(document_pages::version_id.eq(version_id))
+                .filter(
+                    document_pages::ocr_status
+                        .eq("pending")
+                        .or(document_pages::ocr_status.eq("text_extracted")),
+                )
+                .order(document_pages::page_number.asc())
+                .limit(limit as i64)
+                .load(&mut conn)
+                .await
+        })?;
 
         Ok(records
             .into_iter()
@@ -1814,31 +1782,16 @@ impl DieselDocumentRepository {
         document_id: &str,
         version_id: i32,
     ) -> Result<(), DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                diesel::delete(
-                    document_pages::table
-                        .filter(document_pages::document_id.eq(document_id))
-                        .filter(document_pages::version_id.eq(version_id)),
-                )
-                .execute(&mut conn)
-                .await?;
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                diesel::delete(
-                    document_pages::table
-                        .filter(document_pages::document_id.eq(document_id))
-                        .filter(document_pages::version_id.eq(version_id)),
-                )
-                .execute(&mut conn)
-                .await?;
-            }
-        }
-        Ok(())
+        with_diesel_conn!(self.pool, conn, {
+            diesel::delete(
+                document_pages::table
+                    .filter(document_pages::document_id.eq(document_id))
+                    .filter(document_pages::version_id.eq(version_id)),
+            )
+            .execute(&mut conn)
+            .await?;
+            Ok(())
+        })
     }
 
     /// Check if all pages are complete.
@@ -1847,42 +1800,21 @@ impl DieselDocumentRepository {
         document_id: &str,
         version_id: i32,
     ) -> Result<bool, DieselError> {
-        match &self.pool {
-            DbPool::Sqlite(pool) => {
-                let mut conn = pool.get().await?;
-                use diesel::dsl::count_star;
-                let pending_count: i64 = document_pages::table
-                    .filter(document_pages::document_id.eq(document_id))
-                    .filter(document_pages::version_id.eq(version_id))
-                    .filter(
-                        document_pages::ocr_status
-                            .eq("pending")
-                            .or(document_pages::ocr_status.eq("text_extracted")),
-                    )
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(pending_count == 0)
-            }
-            #[cfg(feature = "postgres")]
-            DbPool::Postgres(pool) => {
-                use super::util::to_diesel_error;
-                let mut conn = pool.get().await.map_err(to_diesel_error)?;
-                use diesel::dsl::count_star;
-                let pending_count: i64 = document_pages::table
-                    .filter(document_pages::document_id.eq(document_id))
-                    .filter(document_pages::version_id.eq(version_id))
-                    .filter(
-                        document_pages::ocr_status
-                            .eq("pending")
-                            .or(document_pages::ocr_status.eq("text_extracted")),
-                    )
-                    .select(count_star())
-                    .first(&mut conn)
-                    .await?;
-                Ok(pending_count == 0)
-            }
-        }
+        use diesel::dsl::count_star;
+        with_diesel_conn!(self.pool, conn, {
+            let pending_count: i64 = document_pages::table
+                .filter(document_pages::document_id.eq(document_id))
+                .filter(document_pages::version_id.eq(version_id))
+                .filter(
+                    document_pages::ocr_status
+                        .eq("pending")
+                        .or(document_pages::ocr_status.eq("text_extracted")),
+                )
+                .select(count_star())
+                .first(&mut conn)
+                .await?;
+            Ok(pending_count == 0)
+        })
     }
 
     // ========================================================================
