@@ -141,10 +141,10 @@ pub async fn cmd_scrape(
         }
 
         if sources_to_scrape.len() == 1 {
-            // Single source - run directly
+            // Single source - run directly but catch errors in daemon mode
             let source_id = &sources_to_scrape[0];
             let line = source_lines.get(source_id).copied();
-            cmd_scrape_single_tui(
+            let result = cmd_scrape_single_tui(
                 settings,
                 source_id,
                 workers,
@@ -154,7 +154,36 @@ pub async fn cmd_scrape(
                 tui_guard.is_active(),
                 Some(rate_limiter.clone()),
             )
-            .await?;
+            .await;
+
+            match result {
+                Ok(()) => {
+                    if let Some(&line) = source_lines.get(source_id) {
+                        let _ = crate::cli::tui::set_status(
+                            line,
+                            &format!("  {} {} done", style("✓").green(), source_id),
+                        );
+                    }
+                }
+                Err(e) => {
+                    if let Some(&line) = source_lines.get(source_id) {
+                        let _ = crate::cli::tui::set_status(
+                            line,
+                            &format!("  {} {} error", style("✗").red(), source_id),
+                        );
+                    }
+                    // In daemon mode, log error and continue; otherwise propagate
+                    if daemon {
+                        let _ = crate::cli::tui::log(&format!(
+                            "\n{} Scraper error: {}",
+                            style("!").yellow(),
+                            e
+                        ));
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         } else {
             // Multiple sources - run in parallel
             let mut handles = Vec::new();
