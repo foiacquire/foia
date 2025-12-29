@@ -11,6 +11,17 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  migrations-check:
+    name: Migration Immutability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history to compare
+
+      - name: Check migrations are immutable
+        run: ./scripts/check-migrations.sh
+
   sqlx-check:
     name: SQLx Query Check
     runs-on: ubuntu-latest
