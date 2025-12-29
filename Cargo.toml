@@ -53,10 +53,6 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 anyhow = "1"
 
-# Unix system calls (for UID/GID diagnostics, Unix only)
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 # Async traits
 async-trait = "0.1"
 
@@ -156,3 +152,7 @@ path = "src/main.rs"
 lto = true
 codegen-units = 1
 strip = true
+
+# Unix-only dependencies
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
