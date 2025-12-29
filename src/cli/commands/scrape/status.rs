@@ -1,10 +1,18 @@
 //! Status command for showing system state.
 
-use std::io::{stdout, Write};
+use std::collections::HashMap;
+use std::io::{stdout, Stdout};
+use std::time::Duration;
 
 use chrono::Local;
 use console::style;
-use crossterm::{cursor, execute, terminal};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::ExecutableCommand;
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::config::Settings;
 use crate::models::DocumentStatus;
@@ -23,46 +31,101 @@ pub async fn cmd_status(settings: &Settings, live: bool, interval: u64) -> anyho
     if live {
         run_live_status(settings, interval).await
     } else {
-        display_status(settings).await
+        display_status_simple(settings).await
     }
 }
 
-/// Display status once.
-async fn display_status(settings: &Settings) -> anyhow::Result<()> {
+/// Status data collected from the database.
+struct StatusData {
+    database_url: String,
+    data_dir: String,
+    total_docs: u64,
+    status_counts: HashMap<String, u64>,
+    pending_downloads: u64,
+    sources: Vec<SourceStats>,
+    last_updated: String,
+}
+
+struct SourceStats {
+    id: String,
+    total: u64,
+    pending: u64,
+    downloaded: u64,
+    ocr_done: u64,
+}
+
+/// Fetch all status data from the database.
+async fn fetch_status_data(settings: &Settings) -> anyhow::Result<StatusData> {
     let ctx = settings.create_db_context()?;
     let doc_repo = ctx.documents();
     let source_repo = ctx.sources();
     let crawl_repo = ctx.crawl();
 
-    let sources = source_repo.get_all().await?;
+    let sources_list = source_repo.get_all().await?;
     let total_docs = doc_repo.count().await?;
     let status_counts = doc_repo.count_all_by_status().await?;
-
-    // Get queue counts
     let pending_downloads = crawl_repo.count_pending_downloads().await.unwrap_or(0) as u64;
+    let source_counts = doc_repo.get_all_source_counts().await?;
+    let source_status_counts = doc_repo.get_source_status_counts().await?;
 
-    let now = Local::now();
+    // Only include sources that have at least one document
+    let sources: Vec<SourceStats> = sources_list
+        .iter()
+        .filter_map(|source| {
+            let total = source_counts.get(&source.id).copied().unwrap_or(0);
+            if total == 0 {
+                return None;
+            }
+            let statuses = source_status_counts.get(&source.id);
+            Some(SourceStats {
+                id: source.id.clone(),
+                total,
+                pending: statuses
+                    .and_then(|s| s.get(DocumentStatus::Pending.as_str()))
+                    .copied()
+                    .unwrap_or(0),
+                downloaded: statuses
+                    .and_then(|s| s.get(DocumentStatus::Downloaded.as_str()))
+                    .copied()
+                    .unwrap_or(0),
+                ocr_done: statuses
+                    .and_then(|s| s.get(DocumentStatus::OcrComplete.as_str()))
+                    .copied()
+                    .unwrap_or(0),
+            })
+        })
+        .collect();
+
+    Ok(StatusData {
+        database_url: redact_url_password(&settings.database_url()),
+        data_dir: settings.data_dir.display().to_string(),
+        total_docs,
+        status_counts,
+        pending_downloads,
+        sources,
+        last_updated: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    })
+}
+
+/// Display status once (non-TUI mode).
+async fn display_status_simple(settings: &Settings) -> anyhow::Result<()> {
+    let data = fetch_status_data(settings).await?;
     let separator = "─".repeat(70);
 
     println!();
     println!(
         "{:<50} Last updated: {}",
         style("foiacquire status").bold(),
-        now.format("%Y-%m-%d %H:%M:%S")
+        data.last_updated
     );
     println!("{}", separator);
 
-    // Database info
-    println!(
-        "Database: {}",
-        redact_url_password(&settings.database_url())
-    );
-    println!("Data Dir: {}", settings.data_dir.display());
+    println!("Database: {}", data.database_url);
+    println!("Data Dir: {}", data.data_dir);
     println!();
 
-    // Document counts
     println!("{}", style("DOCUMENTS").cyan().bold());
-    println!("  {:<20} {:>10}", "Total:", format_number(total_docs));
+    println!("  {:<20} {:>10}", "Total:", format_number(data.total_docs));
 
     for status in [
         DocumentStatus::Pending,
@@ -71,7 +134,7 @@ async fn display_status(settings: &Settings) -> anyhow::Result<()> {
         DocumentStatus::Indexed,
         DocumentStatus::Failed,
     ] {
-        if let Some(&count) = status_counts.get(status.as_str()) {
+        if let Some(&count) = data.status_counts.get(status.as_str()) {
             println!(
                 "  {:<20} {:>10}",
                 format!("{}:", status.as_str()),
@@ -81,15 +144,15 @@ async fn display_status(settings: &Settings) -> anyhow::Result<()> {
     }
     println!();
 
-    // Queue info
     println!("{}", style("QUEUES").cyan().bold());
     println!(
         "  {:<20} {:>10} pending",
         "Download queue:",
-        format_number(pending_downloads)
+        format_number(data.pending_downloads)
     );
 
-    let ocr_pending = status_counts
+    let ocr_pending = data
+        .status_counts
         .get(DocumentStatus::Downloaded.as_str())
         .copied()
         .unwrap_or(0);
@@ -100,8 +163,7 @@ async fn display_status(settings: &Settings) -> anyhow::Result<()> {
     );
     println!();
 
-    // Per-source breakdown
-    if !sources.is_empty() {
+    if !data.sources.is_empty() {
         println!(
             "{:<26} {:>10} {:>10} {:>10} {:>10}",
             style("SOURCES").cyan().bold(),
@@ -111,33 +173,14 @@ async fn display_status(settings: &Settings) -> anyhow::Result<()> {
             "OCR Done"
         );
 
-        let source_counts = doc_repo.get_all_source_counts().await?;
-        let source_status_counts = doc_repo.get_source_status_counts().await?;
-
-        for source in &sources {
-            let total = source_counts.get(&source.id).copied().unwrap_or(0);
-            let statuses = source_status_counts.get(&source.id);
-
-            let pending = statuses
-                .and_then(|s| s.get(DocumentStatus::Pending.as_str()))
-                .copied()
-                .unwrap_or(0);
-            let downloaded = statuses
-                .and_then(|s| s.get(DocumentStatus::Downloaded.as_str()))
-                .copied()
-                .unwrap_or(0);
-            let ocr_done = statuses
-                .and_then(|s| s.get(DocumentStatus::OcrComplete.as_str()))
-                .copied()
-                .unwrap_or(0);
-
+        for source in &data.sources {
             println!(
                 "  {:<24} {:>10} {:>10} {:>10} {:>10}",
                 truncate_string(&source.id, 24),
-                format_number(total),
-                format_number(pending),
-                format_number(downloaded),
-                format_number(ocr_done),
+                format_number(source.total),
+                format_number(source.pending),
+                format_number(source.downloaded),
+                format_number(source.ocr_done),
             );
         }
     }
@@ -147,33 +190,203 @@ async fn display_status(settings: &Settings) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run status display in live mode with periodic refresh.
+/// Run status display in live TUI mode.
 async fn run_live_status(settings: &Settings, interval: u64) -> anyhow::Result<()> {
-    let mut stdout = stdout();
+    // Fetch initial data before entering TUI mode
+    let mut data = fetch_status_data(settings).await?;
 
     // Setup terminal
-    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    println!("Press Ctrl+C to exit\n");
+    let result = run_tui_loop(&mut terminal, settings, &mut data, interval).await;
+
+    // Restore terminal
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+
+    result
+}
+
+/// Main TUI event loop.
+async fn run_tui_loop(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    settings: &Settings,
+    data: &mut StatusData,
+    interval: u64,
+) -> anyhow::Result<()> {
+    let refresh_duration = Duration::from_secs(interval);
+    let poll_duration = Duration::from_millis(100);
 
     loop {
-        // Move cursor to top
-        execute!(stdout, cursor::MoveTo(0, 1))?;
+        // Draw current state
+        terminal.draw(|frame| draw_status(frame, data))?;
 
-        // Clear from cursor to end of screen
-        execute!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
+        // Check for keyboard input (non-blocking with short timeout)
+        let deadline = tokio::time::Instant::now() + refresh_duration;
 
-        // Display status
-        if let Err(e) = display_status(settings).await {
-            eprintln!("{} Error: {}", style("✗").red(), e);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            let poll_time = remaining.min(poll_duration);
+
+            if event::poll(poll_time)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                            {
+                                return Ok(())
+                            }
+                            KeyCode::Char('r') => {
+                                // Force refresh
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
 
-        println!("\nPress Ctrl+C to exit");
-        stdout.flush()?;
-
-        // Wait for interval
-        tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
+        // Fetch new data (keep old data visible during fetch)
+        if let Ok(new_data) = fetch_status_data(settings).await {
+            *data = new_data;
+        }
     }
+}
+
+/// Draw the status TUI.
+fn draw_status(frame: &mut Frame, data: &StatusData) {
+    let area = frame.area();
+
+    // Create main layout
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Length(3), // Database info
+            Constraint::Length(9), // Documents section
+            Constraint::Length(5), // Queues section
+            Constraint::Min(5),    // Sources table
+            Constraint::Length(1), // Footer
+        ])
+        .split(area);
+
+    // Header
+    let header = Paragraph::new(format!(
+        "foiacquire status                                    Last updated: {}",
+        data.last_updated
+    ))
+    .style(Style::default().bold())
+    .block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(header, chunks[0]);
+
+    // Database info
+    let db_info = Paragraph::new(format!(
+        "Database: {}\nData Dir: {}",
+        data.database_url, data.data_dir
+    ))
+    .block(Block::default());
+    frame.render_widget(db_info, chunks[1]);
+
+    // Documents section
+    let ocr_pending = data
+        .status_counts
+        .get(DocumentStatus::Downloaded.as_str())
+        .copied()
+        .unwrap_or(0);
+
+    let docs_text = format!(
+        "  Total:        {:>12}\n  Pending:      {:>12}\n  Downloaded:   {:>12}\n  OCR Complete: {:>12}\n  Indexed:      {:>12}\n  Failed:       {:>12}",
+        format_number(data.total_docs),
+        format_number(data.status_counts.get(DocumentStatus::Pending.as_str()).copied().unwrap_or(0)),
+        format_number(data.status_counts.get(DocumentStatus::Downloaded.as_str()).copied().unwrap_or(0)),
+        format_number(data.status_counts.get(DocumentStatus::OcrComplete.as_str()).copied().unwrap_or(0)),
+        format_number(data.status_counts.get(DocumentStatus::Indexed.as_str()).copied().unwrap_or(0)),
+        format_number(data.status_counts.get(DocumentStatus::Failed.as_str()).copied().unwrap_or(0)),
+    );
+    let docs = Paragraph::new(docs_text).block(
+        Block::default()
+            .title(" DOCUMENTS ")
+            .title_style(Style::default().fg(Color::Cyan).bold())
+            .borders(Borders::TOP),
+    );
+    frame.render_widget(docs, chunks[2]);
+
+    // Queues section
+    let queues_text = format!(
+        "  Download queue: {:>10} pending\n  OCR queue:      {:>10} awaiting",
+        format_number(data.pending_downloads),
+        format_number(ocr_pending),
+    );
+    let queues = Paragraph::new(queues_text).block(
+        Block::default()
+            .title(" QUEUES ")
+            .title_style(Style::default().fg(Color::Cyan).bold())
+            .borders(Borders::TOP),
+    );
+    frame.render_widget(queues, chunks[3]);
+
+    // Sources table
+    if !data.sources.is_empty() {
+        let header_cells = ["Source", "Total", "Pending", "Downloaded", "OCR Done"]
+            .iter()
+            .map(|h| Cell::from(*h).style(Style::default().bold()));
+        let header = Row::new(header_cells).height(1);
+
+        let rows = data.sources.iter().map(|s| {
+            Row::new([
+                Cell::from(truncate_string(&s.id, 24)),
+                Cell::from(format_number(s.total)).style(Style::default().fg(Color::White)),
+                Cell::from(format_number(s.pending)).style(if s.pending > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                }),
+                Cell::from(format_number(s.downloaded)).style(if s.downloaded > 0 {
+                    Style::default().fg(Color::Blue)
+                } else {
+                    Style::default()
+                }),
+                Cell::from(format_number(s.ocr_done)).style(if s.ocr_done > 0 {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                }),
+            ])
+        });
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Min(26),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+            ],
+        )
+        .header(header)
+        .block(
+            Block::default()
+                .title(" SOURCES ")
+                .title_style(Style::default().fg(Color::Cyan).bold())
+                .borders(Borders::TOP),
+        );
+        frame.render_widget(table, chunks[4]);
+    }
+
+    // Footer
+    let footer = Paragraph::new("Press 'q' to quit, 'r' to refresh")
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(footer, chunks[5]);
 }
 
 /// Format a number with thousand separators.
