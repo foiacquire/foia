@@ -130,13 +130,21 @@ impl Settings {
         fs::create_dir_all(&self.data_dir).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!("Failed to create data directory '{}': {}", self.data_dir.display(), e),
+                format!(
+                    "Failed to create data directory '{}': {}",
+                    self.data_dir.display(),
+                    e
+                ),
             )
         })?;
         fs::create_dir_all(&self.documents_dir).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!("Failed to create documents directory '{}': {}", self.documents_dir.display(), e),
+                format!(
+                    "Failed to create documents directory '{}': {}",
+                    self.documents_dir.display(),
+                    e
+                ),
             )
         })?;
         Ok(())
@@ -148,7 +156,13 @@ impl Settings {
         use std::os::unix::fs::MetadataExt;
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
-        tracing::debug!("{} check: path={}, running as uid={} gid={}", label, path.display(), uid, gid);
+        tracing::debug!(
+            "{} check: path={}, running as uid={} gid={}",
+            label,
+            path.display(),
+            uid,
+            gid
+        );
 
         if path.exists() {
             if let Ok(meta) = fs::metadata(path) {
