@@ -7,7 +7,7 @@ use console::style;
 
 use crate::config::{Config, Settings};
 use crate::llm::LlmClient;
-use crate::models::{Source, SourceType};
+use crate::models::{ScraperStats, ServiceStatus, Source, SourceType};
 use crate::scrapers::{
     load_rate_limit_state, save_rate_limit_state, ConfigurableScraper, RateLimiter,
 };
@@ -401,6 +401,7 @@ async fn cmd_scrape_single_tui(
     let source_repo = ctx.sources();
     let doc_repo = ctx.documents();
     let crawl_repo = Arc::new(ctx.crawl());
+    let service_status_repo = ctx.service_status();
 
     // Auto-register source if not in database
     let source = match source_repo.get(source_id).await? {
@@ -440,6 +441,13 @@ async fn cmd_scrape_single_tui(
 
     update_status(&format!("{} starting...", source_id));
 
+    // Register service status
+    let mut service_status = ServiceStatus::new_scraper(source_id);
+    service_status.set_running(Some(&format!("Starting scrape of {}", source_id)));
+    if let Err(e) = service_status_repo.upsert(&service_status).await {
+        tracing::warn!("Failed to register service status: {}", e);
+    }
+
     // Create scraper and start streaming
     let refresh_ttl_days = config.get_refresh_ttl_days(source_id);
     // Clone rate limiter - RateLimiter uses Arc internally so cloning shares state
@@ -458,11 +466,29 @@ async fn cmd_scrape_single_tui(
 
     let mut count = 0u64;
     let mut new_this_session = 0u64;
+    let mut errors_this_session = 0u64;
+    let mut last_heartbeat = std::time::Instant::now();
+    let heartbeat_interval = std::time::Duration::from_secs(15);
 
     while let Some(result) = rx.recv().await {
         if result.not_modified {
             count += 1;
             update_status(&format!("{} {} processed", source_id, count));
+
+            // Periodic heartbeat update
+            if last_heartbeat.elapsed() >= heartbeat_interval {
+                service_status.update_scraper_stats(ScraperStats {
+                    session_processed: count,
+                    session_new: new_this_session,
+                    session_errors: errors_this_session,
+                    rate_per_min: None,
+                    queue_size: None,
+                    browser_failures: None,
+                });
+                service_status.current_task = Some(format!("Processing {}", source_id));
+                let _ = service_status_repo.upsert(&service_status).await;
+                last_heartbeat = std::time::Instant::now();
+            }
             continue;
         }
 
@@ -472,14 +498,21 @@ async fn cmd_scrape_single_tui(
         };
 
         // Save document using helper
-        crate::cli::helpers::save_scraped_document_async(
+        if let Err(e) = crate::cli::helpers::save_scraped_document_async(
             &doc_repo,
             content,
             &result,
             &source.id,
             &settings.documents_dir,
         )
-        .await?;
+        .await
+        {
+            tracing::warn!("Failed to save document: {}", e);
+            errors_this_session += 1;
+            service_status.record_error(&e.to_string());
+            let _ = service_status_repo.upsert(&service_status).await;
+            continue;
+        }
 
         count += 1;
         new_this_session += 1;
@@ -487,6 +520,21 @@ async fn cmd_scrape_single_tui(
             "{} {} processed ({} new)",
             source_id, count, new_this_session
         ));
+
+        // Periodic heartbeat update (every 15 seconds)
+        if last_heartbeat.elapsed() >= heartbeat_interval {
+            service_status.update_scraper_stats(ScraperStats {
+                session_processed: count,
+                session_new: new_this_session,
+                session_errors: errors_this_session,
+                rate_per_min: None,
+                queue_size: None,
+                browser_failures: None,
+            });
+            service_status.current_task = Some(format!("Processing {}", source_id));
+            let _ = service_status_repo.upsert(&service_status).await;
+            last_heartbeat = std::time::Instant::now();
+        }
 
         if limit > 0 && new_this_session as usize >= limit {
             break;
@@ -497,6 +545,18 @@ async fn cmd_scrape_single_tui(
     let mut source = source;
     source.last_scraped = Some(chrono::Utc::now());
     source_repo.save(&source).await?;
+
+    // Update service status to stopped with final stats
+    service_status.update_scraper_stats(ScraperStats {
+        session_processed: count,
+        session_new: new_this_session,
+        session_errors: errors_this_session,
+        rate_per_min: None,
+        queue_size: None,
+        browser_failures: None,
+    });
+    service_status.set_stopped();
+    let _ = service_status_repo.upsert(&service_status).await;
 
     // Final status
     if let Some(line) = status_line {

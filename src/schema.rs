@@ -126,6 +126,25 @@ diesel::table! {
 }
 
 diesel::table! {
+    service_status (id) {
+        id -> Text,
+        service_type -> Text,
+        source_id -> Nullable<Text>,
+        status -> Text,
+        last_heartbeat -> Text,
+        last_activity -> Nullable<Text>,
+        current_task -> Nullable<Text>,
+        stats -> Text,
+        started_at -> Text,
+        host -> Nullable<Text>,
+        version -> Nullable<Text>,
+        last_error -> Nullable<Text>,
+        last_error_at -> Nullable<Text>,
+        error_count -> Integer,
+    }
+}
+
+diesel::table! {
     sources (id) {
         id -> Text,
         source_type -> Text,
@@ -169,6 +188,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     document_versions,
     documents,
     rate_limit_state,
+    service_status,
     sources,
     virtual_files,
 );

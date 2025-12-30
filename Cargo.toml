@@ -134,6 +134,7 @@ futures-util = { version = "0.3", optional = true }
 bytes = { version = "1", optional = true }
 ratatui = "0.30.0"
 serde_yaml = "0.9.34"
+hostname = "0.4.2"
 
 [features]
 default = ["browser"]
