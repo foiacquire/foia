@@ -19,6 +19,7 @@ pub mod diesel_document;
 // Keep these until fully migrated
 pub mod diesel_context;
 pub mod diesel_models;
+pub mod diesel_service_status;
 pub mod diesel_source;
 
 // Utilities
@@ -46,6 +47,7 @@ pub use source::SourceRepository;
 pub use diesel_config_history::DieselConfigHistoryRepository;
 pub use diesel_crawl::DieselCrawlRepository;
 pub use diesel_document::DieselDocumentRepository;
+pub use diesel_service_status::DieselServiceStatusRepository;
 pub use diesel_source::DieselSourceRepository;
 pub use migration::{DatabaseExporter, DatabaseImporter};
 pub use migration_sqlite::SqliteMigrator;

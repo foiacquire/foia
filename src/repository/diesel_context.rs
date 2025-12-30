@@ -10,6 +10,7 @@ use diesel_async::SimpleAsyncConnection;
 use super::diesel_config_history::DieselConfigHistoryRepository;
 use super::diesel_crawl::DieselCrawlRepository;
 use super::diesel_document::DieselDocumentRepository;
+use super::diesel_service_status::DieselServiceStatusRepository;
 use super::diesel_source::DieselSourceRepository;
 use super::pool::{DbPool, DieselError, SqliteConn};
 use crate::with_conn_split;
@@ -101,6 +102,11 @@ impl DieselDbContext {
     /// Get a config history repository.
     pub fn config_history(&self) -> DieselConfigHistoryRepository {
         DieselConfigHistoryRepository::new(self.pool.clone())
+    }
+
+    /// Get a service status repository.
+    pub fn service_status(&self) -> DieselServiceStatusRepository {
+        DieselServiceStatusRepository::new(self.pool.clone())
     }
 
     /// Test that the database connection works.
@@ -336,6 +342,24 @@ impl DieselDbContext {
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Service status table
+            CREATE TABLE IF NOT EXISTS service_status (
+                id TEXT PRIMARY KEY,
+                service_type TEXT NOT NULL,
+                source_id TEXT,
+                status TEXT NOT NULL,
+                last_heartbeat TEXT NOT NULL,
+                last_activity TEXT,
+                current_task TEXT,
+                stats TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT NOT NULL,
+                host TEXT,
+                version TEXT,
+                last_error TEXT,
+                last_error_at TEXT,
+                error_count INTEGER NOT NULL DEFAULT 0
+            );
+
             -- Storage metadata table
             CREATE TABLE IF NOT EXISTS storage_meta (
                 key TEXT PRIMARY KEY,
@@ -489,6 +513,22 @@ impl DieselDbContext {
                 total_requests INTEGER NOT NULL DEFAULT 0,
                 rate_limit_hits INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS service_status (
+                id TEXT PRIMARY KEY,
+                service_type TEXT NOT NULL,
+                source_id TEXT,
+                status TEXT NOT NULL,
+                last_heartbeat TEXT NOT NULL,
+                last_activity TEXT,
+                current_task TEXT,
+                stats TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT NOT NULL,
+                host TEXT,
+                version TEXT,
+                last_error TEXT,
+                last_error_at TEXT,
+                error_count INTEGER NOT NULL DEFAULT 0
             )"#,
             r#"CREATE TABLE IF NOT EXISTS storage_meta (
                 key TEXT PRIMARY KEY,

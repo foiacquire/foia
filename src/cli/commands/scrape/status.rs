@@ -15,7 +15,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::config::Settings;
-use crate::models::DocumentStatus;
+use crate::models::{DocumentStatus, ServiceStatus};
 use crate::repository::util::redact_url_password;
 
 /// Show overall system status.
@@ -43,6 +43,7 @@ struct StatusData {
     status_counts: HashMap<String, u64>,
     pending_downloads: u64,
     sources: Vec<SourceStats>,
+    services: Vec<ServiceStatus>,
     last_updated: String,
 }
 
@@ -60,6 +61,7 @@ async fn fetch_status_data(settings: &Settings) -> anyhow::Result<StatusData> {
     let doc_repo = ctx.documents();
     let source_repo = ctx.sources();
     let crawl_repo = ctx.crawl();
+    let service_repo = ctx.service_status();
 
     let sources_list = source_repo.get_all().await?;
     let total_docs = doc_repo.count().await?;
@@ -67,6 +69,7 @@ async fn fetch_status_data(settings: &Settings) -> anyhow::Result<StatusData> {
     let pending_downloads = crawl_repo.count_pending_downloads().await.unwrap_or(0) as u64;
     let source_counts = doc_repo.get_all_source_counts().await?;
     let source_status_counts = doc_repo.get_source_status_counts().await?;
+    let services = service_repo.get_all().await.unwrap_or_default();
 
     // Only include sources that have at least one document
     let sources: Vec<SourceStats> = sources_list
@@ -103,6 +106,7 @@ async fn fetch_status_data(settings: &Settings) -> anyhow::Result<StatusData> {
         status_counts,
         pending_downloads,
         sources,
+        services,
         last_updated: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     })
 }
@@ -162,6 +166,44 @@ async fn display_status_simple(settings: &Settings) -> anyhow::Result<()> {
         format_number(ocr_pending)
     );
     println!();
+
+    // Show running services
+    let active_services: Vec<_> = data
+        .services
+        .iter()
+        .filter(|s| s.status != crate::models::ServiceState::Stopped)
+        .collect();
+
+    if !active_services.is_empty() {
+        println!("{}", style("SERVICES").cyan().bold());
+        for svc in &active_services {
+            let status_style = match svc.status {
+                crate::models::ServiceState::Running => style(svc.status.as_str()).green(),
+                crate::models::ServiceState::Starting => style(svc.status.as_str()).yellow(),
+                crate::models::ServiceState::Error => style(svc.status.as_str()).red(),
+                crate::models::ServiceState::Idle => style(svc.status.as_str()).dim(),
+                _ => style(svc.status.as_str()),
+            };
+            let task = svc
+                .current_task
+                .as_deref()
+                .unwrap_or("-");
+            let age = chrono::Utc::now() - svc.last_heartbeat;
+            let age_str = if age.num_seconds() < 60 {
+                format!("{}s ago", age.num_seconds())
+            } else {
+                format!("{}m ago", age.num_minutes())
+            };
+            println!(
+                "  {:<24} {} {:>8} {}",
+                truncate_string(&svc.id, 24),
+                status_style,
+                age_str,
+                truncate_string(task, 30)
+            );
+        }
+        println!();
+    }
 
     if !data.sources.is_empty() {
         println!(
@@ -266,16 +308,29 @@ async fn run_tui_loop(
 fn draw_status(frame: &mut Frame, data: &StatusData) {
     let area = frame.area();
 
+    // Filter active services
+    let active_services: Vec<_> = data
+        .services
+        .iter()
+        .filter(|s| s.status != crate::models::ServiceState::Stopped)
+        .collect();
+    let services_height = if active_services.is_empty() {
+        0
+    } else {
+        (active_services.len() + 2).min(8) as u16
+    };
+
     // Create main layout
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Length(3), // Database info
-            Constraint::Length(9), // Documents section
-            Constraint::Length(5), // Queues section
-            Constraint::Min(5),    // Sources table
-            Constraint::Length(1), // Footer
+            Constraint::Length(3),               // Header
+            Constraint::Length(3),               // Database info
+            Constraint::Length(9),               // Documents section
+            Constraint::Length(5),               // Queues section
+            Constraint::Length(services_height), // Services section
+            Constraint::Min(5),                  // Sources table
+            Constraint::Length(1),               // Footer
         ])
         .split(area);
 
@@ -334,6 +389,55 @@ fn draw_status(frame: &mut Frame, data: &StatusData) {
     );
     frame.render_widget(queues, chunks[3]);
 
+    // Services section
+    if !active_services.is_empty() {
+        let header_cells = ["Service", "Status", "Heartbeat", "Task"]
+            .iter()
+            .map(|h| Cell::from(*h).style(Style::default().bold()));
+        let header = Row::new(header_cells).height(1);
+
+        let rows = active_services.iter().map(|svc| {
+            let status_style = match svc.status {
+                crate::models::ServiceState::Running => Style::default().fg(Color::Green),
+                crate::models::ServiceState::Starting => Style::default().fg(Color::Yellow),
+                crate::models::ServiceState::Error => Style::default().fg(Color::Red),
+                crate::models::ServiceState::Idle => Style::default().fg(Color::DarkGray),
+                _ => Style::default(),
+            };
+            let age = chrono::Utc::now() - svc.last_heartbeat;
+            let age_str = if age.num_seconds() < 60 {
+                format!("{}s ago", age.num_seconds())
+            } else {
+                format!("{}m ago", age.num_minutes())
+            };
+            let task = svc.current_task.as_deref().unwrap_or("-");
+            Row::new([
+                Cell::from(truncate_string(&svc.id, 24)),
+                Cell::from(svc.status.as_str()).style(status_style),
+                Cell::from(age_str),
+                Cell::from(truncate_string(task, 30)),
+            ])
+        });
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Min(26),
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Min(20),
+            ],
+        )
+        .header(header)
+        .block(
+            Block::default()
+                .title(" SERVICES ")
+                .title_style(Style::default().fg(Color::Cyan).bold())
+                .borders(Borders::TOP),
+        );
+        frame.render_widget(table, chunks[4]);
+    }
+
     // Sources table
     if !data.sources.is_empty() {
         let header_cells = ["Source", "Total", "Pending", "Downloaded", "OCR Done"]
@@ -380,13 +484,13 @@ fn draw_status(frame: &mut Frame, data: &StatusData) {
                 .title_style(Style::default().fg(Color::Cyan).bold())
                 .borders(Borders::TOP),
         );
-        frame.render_widget(table, chunks[4]);
+        frame.render_widget(table, chunks[5]);
     }
 
     // Footer
     let footer = Paragraph::new("Press 'q' to quit, 'r' to refresh")
         .style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(footer, chunks[5]);
+    frame.render_widget(footer, chunks[6]);
 }
 
 /// Format a number with thousand separators.

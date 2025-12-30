@@ -323,3 +323,24 @@ pub struct RateLimitStateRecord {
     pub rate_limit_hits: i32,
     pub updated_at: String,
 }
+
+/// Service status record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::service_status)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ServiceStatusRecord {
+    pub id: String,
+    pub service_type: String,
+    pub source_id: Option<String>,
+    pub status: String,
+    pub last_heartbeat: String,
+    pub last_activity: Option<String>,
+    pub current_task: Option<String>,
+    pub stats: String,
+    pub started_at: String,
+    pub host: Option<String>,
+    pub version: Option<String>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+    pub error_count: i32,
+}
