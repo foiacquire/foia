@@ -267,7 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_types() {
-        let (app, _dir) = setup_test_app().await;
+        let (app, _dir) = setup_test_app_with_data().await;
 
         let response = app
             .oneshot(
@@ -285,6 +285,24 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.is_array());
+
+        // Verify response structure includes category, name, and count
+        let items = json.as_array().unwrap();
+        assert!(!items.is_empty(), "Should have at least one category");
+        for item in items {
+            assert!(item.get("category").is_some(), "Missing 'category' field");
+            assert!(item.get("name").is_some(), "Missing 'name' field");
+            assert!(item.get("count").is_some(), "Missing 'count' field");
+        }
+
+        // The test data has a PDF, which should be categorized as "documents"
+        let has_documents = items
+            .iter()
+            .any(|i| i.get("category").and_then(|c| c.as_str()) == Some("documents"));
+        assert!(
+            has_documents,
+            "Should have 'documents' category from test PDF"
+        );
     }
 
     #[tokio::test]
