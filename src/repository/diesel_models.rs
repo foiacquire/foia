@@ -324,6 +324,18 @@ pub struct RateLimitStateRecord {
     pub updated_at: String,
 }
 
+/// New rate limit state for insertion.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::rate_limit_state)]
+pub struct NewRateLimitState<'a> {
+    pub domain: &'a str,
+    pub current_delay_ms: i32,
+    pub in_backoff: i32,
+    pub total_requests: i32,
+    pub rate_limit_hits: i32,
+    pub updated_at: &'a str,
+}
+
 /// Service status record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::service_status)]

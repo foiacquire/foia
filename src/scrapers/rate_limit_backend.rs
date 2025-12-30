@@ -22,6 +22,12 @@ pub enum RateLimitError {
     Serialization(String),
 }
 
+impl From<diesel::result::Error> for RateLimitError {
+    fn from(e: diesel::result::Error) -> Self {
+        RateLimitError::Database(e.to_string())
+    }
+}
+
 /// State for a domain's rate limiting.
 #[derive(Debug, Clone)]
 pub struct DomainRateState {

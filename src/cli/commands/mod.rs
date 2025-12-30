@@ -26,6 +26,19 @@ use crate::config::{load_settings_with_options, LoadOptions};
 // Re-export ReloadMode for use by other modules
 pub use scrape::ReloadMode;
 
+/// Backend type for rate limiting storage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum RateLimitBackendType {
+    /// In-memory (single process, not persisted)
+    Memory,
+    /// Database via Diesel (SQLite or PostgreSQL, persisted, multi-process)
+    #[default]
+    Database,
+    /// Redis (distributed, requires redis-backend feature)
+    #[cfg(feature = "redis-backend")]
+    Redis,
+}
+
 #[derive(Parser)]
 #[command(name = "foiacquire")]
 #[command(about = "FOIA document acquisition and research system")]
@@ -135,6 +148,9 @@ enum Commands {
         /// Config reload behavior in daemon mode
         #[arg(short = 'r', long, value_enum, default_value = "next-run")]
         reload: ReloadMode,
+        /// Rate limit backend: memory, database (default), or redis
+        #[arg(long, value_enum, default_value = "database")]
+        rate_limit_backend: RateLimitBackendType,
     },
 
     /// Show system status
@@ -599,6 +615,7 @@ pub async fn run() -> anyhow::Result<()> {
             daemon,
             interval,
             reload,
+            rate_limit_backend,
         } => {
             scrape::cmd_scrape(
                 &settings,
@@ -610,6 +627,7 @@ pub async fn run() -> anyhow::Result<()> {
                 daemon,
                 interval,
                 reload,
+                rate_limit_backend,
             )
             .await
         }

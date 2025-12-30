@@ -39,6 +39,7 @@ pub struct DieselServiceStatusRepository {
     pool: DbPool,
 }
 
+#[allow(dead_code)]
 impl DieselServiceStatusRepository {
     /// Create a new repository with an existing pool.
     pub fn new(pool: DbPool) -> Self {

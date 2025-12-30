@@ -112,6 +112,7 @@ pub struct ServiceStatus {
     pub error_count: i32,
 }
 
+#[allow(dead_code)]
 impl ServiceStatus {
     /// Create a new scraper status.
     pub fn new_scraper(source_id: &str) -> Self {

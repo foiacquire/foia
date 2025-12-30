@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use console::style;
 
+use crate::cli::commands::RateLimitBackendType;
 use crate::config::{Config, Settings};
 use crate::llm::LlmClient;
 use crate::models::{ScraperStats, ServiceStatus, Source, SourceType};
 use crate::scrapers::{
-    load_rate_limit_state, save_rate_limit_state, ConfigurableScraper, RateLimiter,
+    ConfigurableScraper, DieselRateLimitBackend, InMemoryRateLimitBackend, RateLimiter,
 };
 
 /// Reload mode for daemon operation.
@@ -36,6 +37,7 @@ pub async fn cmd_scrape(
     daemon: bool,
     interval: u64,
     reload: ReloadMode,
+    rate_limit_backend_type: RateLimitBackendType,
 ) -> anyhow::Result<()> {
     // Set up config watcher for stop-process and inplace modes
     // Try file watching first, fall back to DB polling if no config file
@@ -46,12 +48,35 @@ pub async fn cmd_scrape(
             None
         };
 
-    // Create shared rate limiter and load persisted state
-    let rate_limiter = Arc::new(RateLimiter::new());
-    let db_path = settings.database_path();
-    if let Err(e) = load_rate_limit_state(&rate_limiter, &db_path).await {
-        tracing::warn!("Failed to load rate limit state: {}", e);
-    }
+    // Create rate limiter with selected backend
+    let base_delay_ms = settings.request_delay_ms;
+    let rate_limiter = match rate_limit_backend_type {
+        RateLimitBackendType::Memory => {
+            tracing::debug!("Using in-memory rate limit backend");
+            let backend = Arc::new(InMemoryRateLimitBackend::new(base_delay_ms));
+            Arc::new(RateLimiter::new(backend))
+        }
+        RateLimitBackendType::Database => {
+            tracing::debug!("Using database rate limit backend");
+            let ctx = settings.create_db_context()?;
+            let backend = Arc::new(DieselRateLimitBackend::new(
+                ctx.pool().clone(),
+                base_delay_ms,
+            ));
+            Arc::new(RateLimiter::new(backend))
+        }
+        #[cfg(feature = "redis-backend")]
+        RateLimitBackendType::Redis => {
+            tracing::debug!("Using Redis rate limit backend");
+            // TODO: Get Redis URL from config
+            let redis_url =
+                std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+            let backend = Arc::new(
+                crate::scrapers::RedisRateLimitBackend::new(&redis_url, base_delay_ms).await?,
+            );
+            Arc::new(RateLimiter::new(backend))
+        }
+    };
 
     // Use DbContext for config history
     let ctx = settings.create_db_context()?;
@@ -247,12 +272,8 @@ pub async fn cmd_scrape(
         let _ =
             crate::cli::tui::set_status(0, &format!("{} Scraping complete", style("✓").green()));
 
-        // Save rate limit state to database
-        if let Err(e) = save_rate_limit_state(&rate_limiter, &db_path).await {
-            tracing::warn!("Failed to save rate limit state: {}", e);
-        }
-
         // TUI cleanup happens automatically when tui_guard is dropped
+        // Note: Rate limit state is persisted automatically by the Diesel backend
         drop(tui_guard);
 
         if !daemon {

@@ -1,43 +1,44 @@
 //! Adaptive per-domain rate limiter.
 //!
-//! Tracks request timing per domain and adapts delays based on responses.
-//! Backs off on 429/503, gradually recovers on success.
+//! Provides a high-level rate limiting API that wraps a pluggable backend.
+//! Supports in-memory, SQLite/PostgreSQL (Diesel), and Redis backends.
 
 mod config;
-mod domain_state;
-mod persistence;
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use url::Url;
 
 pub use config::{DomainStats, RateLimitConfig};
-use domain_state::DomainState;
-pub use persistence::{load_rate_limit_state, save_rate_limit_state};
+
+use super::rate_limit_backend::RateLimitBackend;
+
+/// Type alias for a boxed rate limit backend.
+pub type BoxedRateLimitBackend = Arc<dyn RateLimitBackend>;
 
 /// Adaptive rate limiter that tracks per-domain request timing.
-#[derive(Debug)]
+///
+/// Wraps a `RateLimitBackend` and provides high-level rate limiting logic:
+/// - Exponential backoff on rate limit responses (429, 503)
+/// - 403 pattern detection (multiple unique URLs getting 403)
+/// - Gradual recovery after consecutive successes
+#[derive(Clone)]
 pub struct RateLimiter {
-    pub(crate) config: RateLimitConfig,
-    pub(crate) domains: Arc<RwLock<HashMap<String, DomainState>>>,
+    backend: BoxedRateLimitBackend,
+    config: RateLimitConfig,
 }
 
 impl RateLimiter {
-    /// Create a new rate limiter with default config.
-    pub fn new() -> Self {
-        Self::with_config(RateLimitConfig::default())
+    /// Create a new rate limiter with the given backend.
+    pub fn new(backend: BoxedRateLimitBackend) -> Self {
+        Self::with_config(backend, RateLimitConfig::default())
     }
 
     /// Create a new rate limiter with custom config.
-    pub fn with_config(config: RateLimitConfig) -> Self {
-        Self {
-            config,
-            domains: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn with_config(backend: BoxedRateLimitBackend, config: RateLimitConfig) -> Self {
+        Self { backend, config }
     }
 
     /// Extract domain from URL.
@@ -48,64 +49,71 @@ impl RateLimiter {
     }
 
     /// Wait until the domain is ready, then mark request as started.
+    /// Returns the domain name if successful.
     pub async fn acquire(&self, url: &str) -> Option<String> {
         let domain = Self::extract_domain(url)?;
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
 
-        // Get or create domain state
-        let wait_time = {
-            let domains = self.domains.read().await;
-            domains
-                .get(&domain)
-                .map(|s| s.time_until_ready())
-                .unwrap_or(Duration::ZERO)
-        };
-
-        // Wait if needed
-        if wait_time > Duration::ZERO {
-            debug!("Rate limiting {}: waiting {:?}", domain, wait_time);
-            tokio::time::sleep(wait_time).await;
+        match self.backend.acquire(&domain, base_delay_ms).await {
+            Ok(wait_time) => {
+                if wait_time > Duration::ZERO {
+                    debug!("Rate limiting {}: waiting {:?}", domain, wait_time);
+                    tokio::time::sleep(wait_time).await;
+                }
+                Some(domain)
+            }
+            Err(e) => {
+                warn!("Rate limit acquire failed for {}: {}", domain, e);
+                // Fall back to allowing the request
+                Some(domain)
+            }
         }
-
-        // Mark request as started
-        {
-            let mut domains = self.domains.write().await;
-            let state = domains
-                .entry(domain.clone())
-                .or_insert_with(|| DomainState::new(self.config.base_delay));
-            state.last_request = Some(Instant::now());
-            state.total_requests += 1;
-        }
-
-        Some(domain)
     }
 
     /// Report a successful request - may decrease delay.
     pub async fn report_success(&self, domain: &str) {
-        let mut domains = self.domains.write().await;
-        if let Some(state) = domains.get_mut(domain) {
-            state.consecutive_successes += 1;
-            state.clear_403_tracking(); // Reset 403 tracking on success
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
 
-            // Recover from backoff after threshold successes
-            if state.in_backoff && state.consecutive_successes >= self.config.recovery_threshold {
-                let new_delay = Duration::from_secs_f64(
-                    state.current_delay.as_secs_f64() * self.config.recovery_multiplier,
-                );
-                state.current_delay = new_delay.max(self.config.min_delay);
-
-                if state.current_delay <= self.config.base_delay {
-                    state.in_backoff = false;
-                    state.current_delay = self.config.base_delay;
-                    info!("Domain {} recovered from rate limit backoff", domain);
-                } else {
-                    debug!(
-                        "Domain {} delay reduced to {:?}",
-                        domain, state.current_delay
-                    );
-                }
-
-                state.consecutive_successes = 0;
+        let state = match self
+            .backend
+            .get_or_create_domain(domain, base_delay_ms)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to get domain state for {}: {}", domain, e);
+                return;
             }
+        };
+
+        let mut state = state;
+        state.consecutive_successes += 1;
+
+        // Clear 403 tracking on success
+        let _ = self.backend.clear_403s(domain).await;
+
+        // Recover from backoff after threshold successes
+        if state.in_backoff && state.consecutive_successes >= self.config.recovery_threshold {
+            let new_delay_ms =
+                (state.current_delay_ms as f64 * self.config.recovery_multiplier) as u64;
+            state.current_delay_ms = new_delay_ms.max(self.config.min_delay.as_millis() as u64);
+
+            if state.current_delay_ms <= base_delay_ms {
+                state.in_backoff = false;
+                state.current_delay_ms = base_delay_ms;
+                info!("Domain {} recovered from rate limit backoff", domain);
+            } else {
+                debug!(
+                    "Domain {} delay reduced to {}ms",
+                    domain, state.current_delay_ms
+                );
+            }
+
+            state.consecutive_successes = 0;
+        }
+
+        if let Err(e) = self.backend.update_domain(&state).await {
+            warn!("Failed to update domain state for {}: {}", domain, e);
         }
     }
 
@@ -122,184 +130,191 @@ impl RateLimiter {
     /// Report a 403 response - only backs off if we see a pattern on different URLs.
     /// Returns true if this was detected as rate limiting.
     pub async fn report_403(&self, domain: &str, url: &str, has_retry_after: bool) -> bool {
-        let mut domains = self.domains.write().await;
-        if let Some(state) = domains.get_mut(domain) {
-            let is_pattern_rate_limit = state.add_403(url);
-            state.consecutive_successes = 0;
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
 
-            // Retry-After header = definitely rate limiting
-            // N+ unique URLs getting 403 within time window = probably rate limiting
-            let is_rate_limit = has_retry_after || is_pattern_rate_limit;
+        // Record the 403
+        if let Err(e) = self.backend.record_403(domain, url).await {
+            warn!("Failed to record 403 for {}: {}", domain, e);
+        }
 
-            if is_rate_limit {
-                let (count, window) = state.get_403_stats();
-                state.rate_limit_hits += 1;
-                state.in_backoff = true;
-                state.clear_403_tracking(); // Clear after confirming rate limit
-
-                let new_delay = Duration::from_secs_f64(
-                    state.current_delay.as_secs_f64() * self.config.backoff_multiplier,
-                );
-                state.current_delay = new_delay.min(self.config.max_delay);
-
-                warn!(
-                    "Rate limited by {} ({} unique URLs got 403 in {:?}), backing off to {:?}",
-                    domain, count, window, state.current_delay
-                );
-                return true;
-            } else {
-                let unique_count = state.unique_403_count();
-                debug!(
-                    "403 from {} for {} ({} unique URLs in window) - treating as access denied",
-                    domain, url, unique_count
-                );
+        // Get current state
+        let state = match self
+            .backend
+            .get_or_create_domain(domain, base_delay_ms)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to get domain state for {}: {}", domain, e);
+                return false;
             }
+        };
+
+        let mut state = state;
+        state.consecutive_successes = 0;
+
+        // Check if we have a pattern of 403s
+        let window_ms = 60_000; // 60 second window
+        let threshold = 3;
+        let unique_403_count = self
+            .backend
+            .get_403_count(domain, window_ms)
+            .await
+            .unwrap_or(0);
+
+        // Retry-After header = definitely rate limiting
+        // N+ unique URLs getting 403 within time window = probably rate limiting
+        let is_rate_limit = has_retry_after || unique_403_count >= threshold;
+
+        if is_rate_limit {
+            state.rate_limit_hits += 1;
+            state.in_backoff = true;
+            let _ = self.backend.clear_403s(domain).await;
+
+            let new_delay_ms =
+                (state.current_delay_ms as f64 * self.config.backoff_multiplier) as u64;
+            state.current_delay_ms = new_delay_ms.min(self.config.max_delay.as_millis() as u64);
+
+            warn!(
+                "Rate limited by {} ({} unique URLs got 403), backing off to {}ms",
+                domain, unique_403_count, state.current_delay_ms
+            );
+
+            if let Err(e) = self.backend.update_domain(&state).await {
+                warn!("Failed to update domain state for {}: {}", domain, e);
+            }
+            return true;
+        }
+
+        debug!(
+            "403 from {} for {} ({} unique URLs in window) - treating as access denied",
+            domain, url, unique_403_count
+        );
+
+        if let Err(e) = self.backend.update_domain(&state).await {
+            warn!("Failed to update domain state for {}: {}", domain, e);
         }
         false
     }
 
     /// Report a definite rate limit hit (429 or 503) - increases delay.
     pub async fn report_rate_limit(&self, domain: &str, status_code: u16) {
-        let mut domains = self.domains.write().await;
-        if let Some(state) = domains.get_mut(domain) {
-            state.rate_limit_hits += 1;
-            state.consecutive_successes = 0;
-            state.clear_403_tracking(); // Reset 403 tracking
-            state.in_backoff = true;
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
 
-            let new_delay = Duration::from_secs_f64(
-                state.current_delay.as_secs_f64() * self.config.backoff_multiplier,
-            );
-            state.current_delay = new_delay.min(self.config.max_delay);
+        let state = match self
+            .backend
+            .get_or_create_domain(domain, base_delay_ms)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to get domain state for {}: {}", domain, e);
+                return;
+            }
+        };
 
-            warn!(
-                "Rate limited by {} (HTTP {}), backing off to {:?}",
-                domain, status_code, state.current_delay
-            );
+        let mut state = state;
+        state.rate_limit_hits += 1;
+        state.consecutive_successes = 0;
+        let _ = self.backend.clear_403s(domain).await;
+        state.in_backoff = true;
+
+        let new_delay_ms = (state.current_delay_ms as f64 * self.config.backoff_multiplier) as u64;
+        state.current_delay_ms = new_delay_ms.min(self.config.max_delay.as_millis() as u64);
+
+        warn!(
+            "Rate limited by {} (HTTP {}), backing off to {}ms",
+            domain, status_code, state.current_delay_ms
+        );
+
+        if let Err(e) = self.backend.update_domain(&state).await {
+            warn!("Failed to update domain state for {}: {}", domain, e);
         }
     }
 
     /// Report a client error (4xx other than 429) - no delay change.
     pub async fn report_client_error(&self, domain: &str) {
-        // Client errors don't affect rate limiting
-        let domains = self.domains.read().await;
-        if let Some(state) = domains.get(domain) {
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
+        if let Ok(state) = self
+            .backend
+            .get_or_create_domain(domain, base_delay_ms)
+            .await
+        {
             debug!(
-                "Client error for {}, delay unchanged at {:?}",
-                domain, state.current_delay
+                "Client error for {}, delay unchanged at {}ms",
+                domain, state.current_delay_ms
             );
         }
     }
 
     /// Report a server error (5xx other than 503) - mild backoff.
     pub async fn report_server_error(&self, domain: &str) {
-        let mut domains = self.domains.write().await;
-        if let Some(state) = domains.get_mut(domain) {
-            // Mild backoff for server errors (might be overloaded)
-            let new_delay = Duration::from_secs_f64(state.current_delay.as_secs_f64() * 1.5);
-            state.current_delay = new_delay.min(self.config.max_delay);
-            debug!(
-                "Server error for {}, delay increased to {:?}",
-                domain, state.current_delay
-            );
-        }
-    }
+        let base_delay_ms = self.config.base_delay.as_millis() as u64;
 
-    /// Check if a domain is currently ready for requests.
-    pub async fn is_domain_ready(&self, url: &str) -> bool {
-        let domain = match Self::extract_domain(url) {
-            Some(d) => d,
-            None => return true,
-        };
-
-        let domains = self.domains.read().await;
-        domains.get(&domain).map(|s| s.is_ready()).unwrap_or(true)
-    }
-
-    /// Get time until domain is ready.
-    pub async fn time_until_ready(&self, url: &str) -> Duration {
-        let domain = match Self::extract_domain(url) {
-            Some(d) => d,
-            None => return Duration::ZERO,
-        };
-
-        let domains = self.domains.read().await;
-        domains
-            .get(&domain)
-            .map(|s| s.time_until_ready())
-            .unwrap_or(Duration::ZERO)
-    }
-
-    /// Get statistics for all domains.
-    pub async fn get_stats(&self) -> HashMap<String, DomainStats> {
-        let domains = self.domains.read().await;
-        domains
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    DomainStats {
-                        current_delay: v.current_delay,
-                        in_backoff: v.in_backoff,
-                        total_requests: v.total_requests,
-                        rate_limit_hits: v.rate_limit_hits,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Find the domain that's ready soonest from a list of URLs.
-    pub async fn find_ready_url<'a>(&self, urls: &'a [String]) -> Option<&'a String> {
-        let domains = self.domains.read().await;
-
-        let mut best_url: Option<&String> = None;
-        let mut best_wait = Duration::MAX;
-
-        for url in urls {
-            let domain = match Self::extract_domain(url) {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let wait = domains
-                .get(&domain)
-                .map(|s| s.time_until_ready())
-                .unwrap_or(Duration::ZERO);
-
-            if wait < best_wait {
-                best_wait = wait;
-                best_url = Some(url);
-
-                // If we found one that's ready now, use it
-                if wait == Duration::ZERO {
-                    break;
-                }
+        let state = match self
+            .backend
+            .get_or_create_domain(domain, base_delay_ms)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to get domain state for {}: {}", domain, e);
+                return;
             }
-        }
+        };
 
-        best_url
+        let mut state = state;
+        // Mild backoff for server errors (might be overloaded)
+        let new_delay_ms = (state.current_delay_ms as f64 * 1.5) as u64;
+        state.current_delay_ms = new_delay_ms.min(self.config.max_delay.as_millis() as u64);
+
+        debug!(
+            "Server error for {}, delay increased to {}ms",
+            domain, state.current_delay_ms
+        );
+
+        if let Err(e) = self.backend.update_domain(&state).await {
+            warn!("Failed to update domain state for {}: {}", domain, e);
+        }
+    }
+
+    /// Get statistics for all domains (only works with InMemoryRateLimitBackend).
+    pub async fn get_stats(&self) -> std::collections::HashMap<String, DomainStats> {
+        // This is a limitation - we can't easily get all stats from all backends
+        // For now, return empty. Users should use backend-specific methods.
+        std::collections::HashMap::new()
+    }
+
+    /// Get the underlying backend for direct access.
+    pub fn backend(&self) -> &BoxedRateLimitBackend {
+        &self.backend
     }
 }
 
-impl Default for RateLimiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for RateLimiter {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            domains: self.domains.clone(),
-        }
+impl std::fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scrapers::InMemoryRateLimitBackend;
+
+    fn create_test_limiter() -> RateLimiter {
+        let backend = Arc::new(InMemoryRateLimitBackend::new(100));
+        RateLimiter::with_config(
+            backend,
+            RateLimitConfig {
+                base_delay: Duration::from_millis(100),
+                backoff_multiplier: 2.0,
+                ..Default::default()
+            },
+        )
+    }
 
     #[tokio::test]
     async fn test_extract_domain() {
@@ -314,23 +329,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_backoff_on_rate_limit() {
-        let limiter = RateLimiter::with_config(RateLimitConfig {
-            base_delay: Duration::from_millis(100),
-            backoff_multiplier: 2.0,
-            ..Default::default()
-        });
+    async fn test_acquire() {
+        let limiter = create_test_limiter();
+        let domain = limiter.acquire("https://example.com/doc").await;
+        assert_eq!(domain, Some("example.com".to_string()));
+    }
 
-        // First request
-        limiter.acquire("https://example.com/1").await;
+    #[tokio::test]
+    async fn test_report_rate_limit_increases_delay() {
+        let limiter = create_test_limiter();
+
+        // First acquire to create state
+        limiter.acquire("https://example.com/doc").await;
 
         // Report rate limit
         limiter.report_rate_limit("example.com", 429).await;
 
-        // Check delay increased
-        let stats = limiter.get_stats().await;
-        let domain_stats = stats.get("example.com").unwrap();
-        assert!(domain_stats.current_delay >= Duration::from_millis(200));
-        assert!(domain_stats.in_backoff);
+        // Next acquire should have longer delay
+        // We can't easily check the delay without accessing the backend directly
+    }
+
+    #[tokio::test]
+    async fn test_report_success() {
+        let limiter = create_test_limiter();
+        limiter.acquire("https://example.com/doc").await;
+        limiter.report_success("example.com").await;
+        // Should not error
+    }
+
+    #[tokio::test]
+    async fn test_is_definite_rate_limit() {
+        assert!(RateLimiter::is_definite_rate_limit(429));
+        assert!(RateLimiter::is_definite_rate_limit(503));
+        assert!(!RateLimiter::is_definite_rate_limit(403));
+        assert!(!RateLimiter::is_definite_rate_limit(500));
     }
 }

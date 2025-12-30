@@ -8,6 +8,7 @@ pub mod configurable;
 pub mod google_drive;
 mod http_client;
 pub mod rate_limit_backend;
+pub mod rate_limit_memory;
 #[cfg(feature = "redis-backend")]
 pub mod rate_limit_redis;
 pub mod rate_limit_sqlite;
@@ -19,11 +20,18 @@ pub use browser::{BrowserEngineConfig, BrowserEngineType};
 pub use config::ScraperConfig;
 pub use configurable::ConfigurableScraper;
 pub use http_client::{HttpClient, HttpResponse};
-pub use rate_limiter::{load_rate_limit_state, save_rate_limit_state, RateLimiter};
-// ScrapeStream is defined in this file, no need to re-export
+
+// Rate limiting exports
+// Re-export for external use
 #[allow(unused_imports)]
+pub use rate_limit_backend::{DomainRateState, RateLimitBackend, RateLimitError};
+pub use rate_limit_memory::InMemoryRateLimitBackend;
 #[cfg(feature = "redis-backend")]
 pub use rate_limit_redis::RedisRateLimitBackend;
+pub use rate_limit_sqlite::DieselRateLimitBackend;
+
+// Legacy RateLimiter (wraps backend with high-level API)
+pub use rate_limiter::RateLimiter;
 
 use crate::models::{CrawlUrl, DiscoveryMethod};
 use chrono::{DateTime, Utc};

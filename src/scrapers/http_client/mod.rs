@@ -18,6 +18,7 @@ use chrono::Utc;
 use reqwest::{Client, StatusCode};
 
 use super::rate_limiter::RateLimiter;
+use super::InMemoryRateLimitBackend;
 use crate::models::{CrawlRequest, CrawlUrl, UrlStatus};
 use crate::repository::DieselCrawlRepository;
 
@@ -57,13 +58,17 @@ impl HttpClient {
             .build()
             .expect("Failed to create HTTP client");
 
+        // Default in-memory backend with request_delay as base
+        let backend = Arc::new(InMemoryRateLimitBackend::new(
+            request_delay.as_millis() as u64
+        ));
         Self {
             client,
             crawl_repo: None,
             source_id: source_id.to_string(),
             request_delay,
             referer: None,
-            rate_limiter: RateLimiter::new(),
+            rate_limiter: RateLimiter::new(backend),
         }
     }
 

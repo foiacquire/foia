@@ -47,6 +47,7 @@ pub use source::SourceRepository;
 pub use diesel_config_history::DieselConfigHistoryRepository;
 pub use diesel_crawl::DieselCrawlRepository;
 pub use diesel_document::DieselDocumentRepository;
+#[allow(unused_imports)]
 pub use diesel_service_status::DieselServiceStatusRepository;
 pub use diesel_source::DieselSourceRepository;
 pub use migration::{DatabaseExporter, DatabaseImporter};
@@ -61,7 +62,7 @@ pub use document::{extract_filename_parts, sanitize_filename, DocumentSummary};
 pub use models::{
     ConfigHistoryRecord, CrawlConfigRecord, CrawlRequestRecord, CrawlUrlRecord, DocumentPageRecord,
     DocumentRecord, DocumentVersionRecord, NewConfigHistory, NewCrawlRequest, NewCrawlUrl,
-    NewDocument, NewDocumentPage, NewDocumentVersion, NewSource, NewVirtualFile,
+    NewDocument, NewDocumentPage, NewDocumentVersion, NewRateLimitState, NewSource, NewVirtualFile,
     RateLimitStateRecord, SourceRecord, VirtualFileRecord,
 };
 
