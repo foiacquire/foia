@@ -295,6 +295,8 @@ pub async fn api_type_stats(
     State(state): State<AppState>,
     Query(_params): Query<SourceFilterParams>,
 ) -> impl IntoResponse {
+    use crate::utils::MimeCategory;
+
     let stats = state
         .doc_repo
         .get_category_stats()
@@ -304,8 +306,13 @@ pub async fn api_type_stats(
     let stats_json: Vec<_> = stats
         .into_iter()
         .map(|(category, count)| {
+            // Look up display name from MimeCategory
+            let display_name = MimeCategory::from_id(&category)
+                .map(|c| c.display_name())
+                .unwrap_or(&category);
             serde_json::json!({
                 "category": category,
+                "name": display_name,
                 "count": count
             })
         })

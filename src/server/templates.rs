@@ -1484,20 +1484,7 @@ pub fn browse_page(
         const activeTypes = {};
         const activeSource = {};
 
-        // Type categories mapping
-        const TYPE_CATEGORIES = {{
-            'pdf': 'Documents',
-            'image': 'Images',
-            'word': 'Word Documents',
-            'excel': 'Spreadsheets',
-            'email': 'Email',
-            'html': 'Web Pages',
-            'text': 'Text Files',
-            'archive': 'Archives',
-            'other': 'Other'
-        }};
-
-        // Load type stats
+        // Load type stats from API (categories come from server, no hardcoded mapping)
         async function loadTypes() {{
             const container = document.querySelector('.type-toggles');
             const loading = document.getElementById('types-loading');
@@ -1507,23 +1494,15 @@ pub fn browse_page(
                 const res = await fetch('/api/types');
                 const data = await res.json();
 
-                // Aggregate counts by category
-                const catCounts = {{}};
-                data.forEach(item => {{
-                    const cat = item.category;
-                    catCounts[cat] = (catCounts[cat] || 0) + item.count;
-                }});
-
-                // Build toggles HTML
+                // Build toggles HTML from API response
                 let html = '';
-                for (const [catId, catName] of Object.entries(TYPE_CATEGORIES)) {{
-                    const count = catCounts[catId] || 0;
-                    if (count > 0) {{
-                        const checked = activeTypes.length === 0 || activeTypes.includes(catId) ? 'checked' : '';
+                for (const item of data) {{
+                    if (item.count > 0) {{
+                        const checked = activeTypes.length === 0 || activeTypes.includes(item.category) ? 'checked' : '';
                         html += `<label class="type-toggle">
-                            <input type="checkbox" name="type" value="${{catId}}" ${{checked}} data-count="${{count}}">
-                            <span class="toggle-label">${{catName}}</span>
-                            <span class="toggle-count">${{count}}</span>
+                            <input type="checkbox" name="type" value="${{item.category}}" ${{checked}} data-count="${{item.count}}">
+                            <span class="toggle-label">${{item.name}}</span>
+                            <span class="toggle-count">${{item.count}}</span>
                         </label>`;
                     }}
                 }}
