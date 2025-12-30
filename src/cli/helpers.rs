@@ -139,3 +139,115 @@ pub fn save_version_content(
 
     Ok(content_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_content_storage_path() {
+        let docs_dir = Path::new("/docs");
+        let hash = "abcdef1234567890abcdef1234567890";
+        let path = content_storage_path(docs_dir, hash, "pdf");
+        assert_eq!(path, PathBuf::from("/docs/ab/abcdef12.pdf"));
+    }
+
+    #[test]
+    fn test_content_storage_path_with_name() {
+        let docs_dir = Path::new("/docs");
+        let hash = "abcdef1234567890abcdef1234567890";
+        let path = content_storage_path_with_name(docs_dir, hash, "report", "pdf");
+        assert_eq!(path, PathBuf::from("/docs/ab/report-abcdef12.pdf"));
+    }
+
+    #[test]
+    fn test_content_storage_path_with_name_sanitizes() {
+        let docs_dir = Path::new("/docs");
+        let hash = "abcdef1234567890abcdef1234567890";
+        // Filename with spaces and special chars should be sanitized
+        let path = content_storage_path_with_name(docs_dir, hash, "My Report (2024)", "pdf");
+        // The exact sanitization depends on sanitize_filename implementation
+        assert!(path.to_string_lossy().contains("abcdef12.pdf"));
+    }
+
+    #[test]
+    fn test_mime_to_extension_pdf() {
+        assert_eq!(mime_to_extension("application/pdf"), "pdf");
+    }
+
+    #[test]
+    fn test_mime_to_extension_html() {
+        assert_eq!(mime_to_extension("text/html"), "html");
+    }
+
+    #[test]
+    fn test_mime_to_extension_text() {
+        assert_eq!(mime_to_extension("text/plain"), "txt");
+    }
+
+    #[test]
+    fn test_mime_to_extension_json() {
+        assert_eq!(mime_to_extension("application/json"), "json");
+    }
+
+    #[test]
+    fn test_mime_to_extension_xml() {
+        assert_eq!(mime_to_extension("application/xml"), "xml");
+        assert_eq!(mime_to_extension("text/xml"), "xml");
+    }
+
+    #[test]
+    fn test_mime_to_extension_images() {
+        assert_eq!(mime_to_extension("image/jpeg"), "jpg");
+        assert_eq!(mime_to_extension("image/png"), "png");
+        assert_eq!(mime_to_extension("image/gif"), "gif");
+    }
+
+    #[test]
+    fn test_mime_to_extension_office() {
+        assert_eq!(mime_to_extension("application/msword"), "doc");
+        assert_eq!(
+            mime_to_extension("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            "docx"
+        );
+        assert_eq!(mime_to_extension("application/vnd.ms-excel"), "xls");
+        assert_eq!(
+            mime_to_extension("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            "xlsx"
+        );
+    }
+
+    #[test]
+    fn test_mime_to_extension_archives() {
+        assert_eq!(mime_to_extension("application/zip"), "zip");
+        assert_eq!(mime_to_extension("application/gzip"), "gz");
+    }
+
+    #[test]
+    fn test_mime_to_extension_unknown() {
+        assert_eq!(mime_to_extension("application/unknown"), "bin");
+        assert_eq!(mime_to_extension("some/random"), "bin");
+    }
+
+    #[test]
+    fn test_save_version_content() {
+        let dir = tempdir().unwrap();
+        let content = b"test document content";
+
+        let path = save_version_content(content, "application/pdf", dir.path()).unwrap();
+
+        // Verify file was created
+        assert!(path.exists());
+
+        // Verify content
+        let saved = std::fs::read(&path).unwrap();
+        assert_eq!(saved, content);
+
+        // Verify path structure (hash-based subdirectory)
+        let parent = path.parent().unwrap();
+        let parent_name = parent.file_name().unwrap().to_str().unwrap();
+        assert_eq!(parent_name.len(), 2); // 2-char hash prefix
+    }
+}

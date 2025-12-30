@@ -118,3 +118,99 @@ impl DomainState {
         self.time_until_ready() == Duration::ZERO
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_domain_state_new() {
+        let state = DomainState::new(Duration::from_millis(100));
+        assert_eq!(state.current_delay, Duration::from_millis(100));
+        assert!(state.last_request.is_none());
+        assert_eq!(state.consecutive_successes, 0);
+        assert!(!state.in_backoff);
+        assert_eq!(state.total_requests, 0);
+    }
+
+    #[test]
+    fn test_is_ready_no_previous_request() {
+        let state = DomainState::new(Duration::from_millis(100));
+        assert!(state.is_ready());
+        assert_eq!(state.time_until_ready(), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_is_ready_after_delay() {
+        let mut state = DomainState::new(Duration::from_millis(10));
+        state.last_request = Some(Instant::now() - Duration::from_millis(20));
+        assert!(state.is_ready());
+    }
+
+    #[test]
+    fn test_not_ready_during_delay() {
+        let mut state = DomainState::new(Duration::from_secs(10));
+        state.last_request = Some(Instant::now());
+        assert!(!state.is_ready());
+        assert!(state.time_until_ready() > Duration::ZERO);
+    }
+
+    #[test]
+    fn test_add_403_single() {
+        let mut state = DomainState::new(Duration::from_millis(100));
+        // Single 403 should not trigger rate limit (threshold is 3)
+        let triggered = state.add_403("https://example.com/doc1.pdf");
+        assert!(!triggered);
+        assert_eq!(state.unique_403_count(), 1);
+    }
+
+    #[test]
+    fn test_add_403_threshold() {
+        let mut state = DomainState::new(Duration::from_millis(100));
+        // Add 403s from different URLs to reach threshold
+        state.add_403("https://example.com/doc1.pdf");
+        state.add_403("https://example.com/doc2.pdf");
+        let triggered = state.add_403("https://example.com/doc3.pdf");
+        assert!(triggered); // Should trigger at threshold of 3
+    }
+
+    #[test]
+    fn test_add_403_same_url() {
+        let mut state = DomainState::new(Duration::from_millis(100));
+        // Same URL multiple times should only count as 1 unique
+        state.add_403("https://example.com/doc1.pdf");
+        state.add_403("https://example.com/doc1.pdf");
+        state.add_403("https://example.com/doc1.pdf");
+        assert_eq!(state.unique_403_count(), 1);
+    }
+
+    #[test]
+    fn test_clear_403_tracking() {
+        let mut state = DomainState::new(Duration::from_millis(100));
+        state.add_403("https://example.com/doc1.pdf");
+        state.add_403("https://example.com/doc2.pdf");
+        assert_eq!(state.unique_403_count(), 2);
+
+        state.clear_403_tracking();
+        assert_eq!(state.unique_403_count(), 0);
+        assert!(state.recent_403s.is_empty());
+    }
+
+    #[test]
+    fn test_get_403_stats_empty() {
+        let state = DomainState::new(Duration::from_millis(100));
+        let (count, span) = state.get_403_stats();
+        assert_eq!(count, 0);
+        assert_eq!(span, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_get_403_stats_with_entries() {
+        let mut state = DomainState::new(Duration::from_millis(100));
+        state.add_403("https://example.com/doc1.pdf");
+        state.add_403("https://example.com/doc2.pdf");
+        let (count, _span) = state.get_403_stats();
+        assert_eq!(count, 2);
+        // Span should be very small since we just added them
+    }
+}

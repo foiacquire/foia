@@ -125,3 +125,167 @@ pub fn extract_single_url(
 pub fn extract_url(item: &serde_json::Value, extraction: &UrlExtractionConfig) -> Option<String> {
     extract_urls(item, extraction).into_iter().next()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_resolve_url_absolute() {
+        assert_eq!(
+            resolve_url("https://example.com", "https://other.com/doc.pdf"),
+            "https://other.com/doc.pdf"
+        );
+        assert_eq!(
+            resolve_url("https://example.com", "http://other.com/doc.pdf"),
+            "http://other.com/doc.pdf"
+        );
+    }
+
+    #[test]
+    fn test_resolve_url_relative() {
+        assert_eq!(
+            resolve_url("https://example.com", "/docs/file.pdf"),
+            "https://example.com/docs/file.pdf"
+        );
+        assert_eq!(
+            resolve_url("https://example.com/api", "/docs/file.pdf"),
+            "https://example.com/api/docs/file.pdf"
+        );
+    }
+
+    #[test]
+    fn test_extract_path_simple() {
+        let data = json!({"name": "test", "url": "https://example.com"});
+        assert_eq!(extract_path(&data, "name"), &json!("test"));
+        assert_eq!(extract_path(&data, "url"), &json!("https://example.com"));
+    }
+
+    #[test]
+    fn test_extract_path_nested() {
+        let data = json!({
+            "data": {
+                "items": [
+                    {"url": "https://example.com/1"},
+                    {"url": "https://example.com/2"}
+                ]
+            }
+        });
+        assert_eq!(
+            extract_path(&data, "data.items.0.url"),
+            &json!("https://example.com/1")
+        );
+        assert_eq!(
+            extract_path(&data, "data.items.1.url"),
+            &json!("https://example.com/2")
+        );
+    }
+
+    #[test]
+    fn test_extract_path_empty() {
+        let data = json!({"name": "test"});
+        assert_eq!(extract_path(&data, ""), &data);
+    }
+
+    #[test]
+    fn test_extract_path_missing() {
+        let data = json!({"name": "test"});
+        assert_eq!(extract_path(&data, "missing"), &json!(null));
+        assert_eq!(extract_path(&data, "a.b.c"), &json!(null));
+    }
+
+    #[test]
+    fn test_extract_single_url_string() {
+        let item = json!("https://example.com/doc.pdf");
+        let config = UrlExtractionConfig::default();
+        assert_eq!(
+            extract_single_url(&item, &config),
+            Some("https://example.com/doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_single_url_object_field() {
+        let item = json!({"url": "https://example.com/doc.pdf", "title": "Test"});
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_single_url(&item, &config),
+            Some("https://example.com/doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_single_url_template() {
+        let item = json!({"id": "123", "type": "pdf"});
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            url_template: Some("https://example.com/docs/{id}.{type}".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_single_url(&item, &config),
+            Some("https://example.com/docs/123.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_single_url_fallback() {
+        let item = json!({"link": "https://example.com/doc.pdf"});
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            fallback_field: Some("link".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_single_url(&item, &config),
+            Some("https://example.com/doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_urls_simple() {
+        let item = json!({"url": "https://example.com/doc.pdf"});
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            ..Default::default()
+        };
+        let urls = extract_urls(&item, &config);
+        assert_eq!(urls, vec!["https://example.com/doc.pdf"]);
+    }
+
+    #[test]
+    fn test_extract_urls_nested_arrays() {
+        let item = json!({
+            "files": [
+                {"url": "https://example.com/1.pdf"},
+                {"url": "https://example.com/2.pdf"}
+            ]
+        });
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            nested_arrays: vec!["files".to_string()],
+            ..Default::default()
+        };
+        let urls = extract_urls(&item, &config);
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"https://example.com/1.pdf".to_string()));
+        assert!(urls.contains(&"https://example.com/2.pdf".to_string()));
+    }
+
+    #[test]
+    fn test_extract_url_legacy() {
+        let item = json!({"url": "https://example.com/doc.pdf"});
+        let config = UrlExtractionConfig {
+            url_field: "url".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_url(&item, &config),
+            Some("https://example.com/doc.pdf".to_string())
+        );
+    }
+}
