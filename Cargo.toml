@@ -116,7 +116,7 @@ dirs = "5"
 
 # Browser automation (optional, for JS-heavy sites)
 # Using git version for compatibility with newer Chrome versions (fixes WS message parsing)
-chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "6f2392f", optional = true, features = ["tokio-runtime"] }
+chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "c671c3b", optional = true, features = ["tokio-runtime"] }
 futures = "0.3"
 
 # Redis client (optional, for distributed rate limiting)

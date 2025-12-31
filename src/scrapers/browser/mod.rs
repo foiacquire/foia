@@ -152,7 +152,7 @@ impl BrowserFetcher {
 
         // Add custom args
         for arg in &self.config.chrome_args {
-            builder = builder.arg(arg);
+            builder = builder.arg(arg.as_str());
         }
 
         let config = builder
