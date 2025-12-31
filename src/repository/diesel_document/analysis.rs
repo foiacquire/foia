@@ -1,5 +1,8 @@
 //! Document analysis result operations.
 
+// Analysis result types not yet used externally
+#![allow(dead_code)]
+
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -68,7 +71,8 @@ impl From<DocumentAnalysisResultRecord> for AnalysisResultEntry {
             confidence: r.confidence,
             processing_time_ms: r.processing_time_ms.map(|ms| ms as u64),
             error: r.error,
-            status: AnalysisResultStatus::from_str(&r.status).unwrap_or(AnalysisResultStatus::Pending),
+            status: AnalysisResultStatus::from_str(&r.status)
+                .unwrap_or(AnalysisResultStatus::Pending),
             created_at: r.created_at,
             metadata: r.metadata.and_then(|s| serde_json::from_str(&s).ok()),
         }
@@ -77,6 +81,7 @@ impl From<DocumentAnalysisResultRecord> for AnalysisResultEntry {
 
 impl DieselDocumentRepository {
     /// Store an analysis result for a page.
+    #[allow(clippy::too_many_arguments)]
     pub async fn store_analysis_result_for_page(
         &self,
         page_id: i64,
@@ -164,6 +169,7 @@ impl DieselDocumentRepository {
     }
 
     /// Store an analysis result for a document (document-level, no page).
+    #[allow(clippy::too_many_arguments)]
     pub async fn store_analysis_result_for_document(
         &self,
         document_id: &str,
@@ -412,10 +418,7 @@ impl DieselDocumentRepository {
     }
 
     /// Count pending analysis for a specific type.
-    pub async fn count_pending_analysis(
-        &self,
-        analysis_type: &str,
-    ) -> Result<u64, DieselError> {
+    pub async fn count_pending_analysis(&self, analysis_type: &str) -> Result<u64, DieselError> {
         use diesel::dsl::count_star;
         with_conn!(self.pool, conn, {
             let count: i64 = document_analysis_results::table

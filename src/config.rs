@@ -34,6 +34,7 @@ impl AnalysisConfig {
     }
 
     /// Get default methods, falling back to ["ocr"] if not configured.
+    #[allow(dead_code)]
     pub fn get_default_methods(&self) -> Vec<String> {
         if self.default_methods.is_empty() {
             vec!["ocr".to_string()]

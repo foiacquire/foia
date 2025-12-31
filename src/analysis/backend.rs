@@ -135,8 +135,7 @@ pub fn mimetype_matches(pattern: &str, mimetype: &str) -> bool {
     if pattern == "*" || pattern == "*/*" {
         return true;
     }
-    if pattern.ends_with("/*") {
-        let prefix = &pattern[..pattern.len() - 2];
+    if let Some(prefix) = pattern.strip_suffix("/*") {
         mimetype.starts_with(prefix) && mimetype.contains('/')
     } else {
         pattern == mimetype

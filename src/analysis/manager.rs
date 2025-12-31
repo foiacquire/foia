@@ -45,8 +45,7 @@ impl AnalysisManager {
     /// Register built-in OCR backends (currently just Tesseract as default).
     pub fn register_ocr_backends(&mut self) {
         let tesseract = OcrAnalysisAdapter::new(TesseractBackend::new());
-        self.backends
-            .insert("ocr".to_string(), Arc::new(tesseract));
+        self.backends.insert("ocr".to_string(), Arc::new(tesseract));
 
         // Also register with specific backend name for explicit selection
         let tesseract2 = OcrAnalysisAdapter::new(TesseractBackend::new());
@@ -58,8 +57,7 @@ impl AnalysisManager {
         {
             use crate::ocr::OcrsBackend;
             let ocrs = OcrAnalysisAdapter::new(OcrsBackend::new());
-            self.backends
-                .insert("ocr:ocrs".to_string(), Arc::new(ocrs));
+            self.backends.insert("ocr:ocrs".to_string(), Arc::new(ocrs));
         }
 
         #[cfg(feature = "ocr-paddle")]
@@ -79,9 +77,7 @@ impl AnalysisManager {
 
     /// Register Whisper backend.
     pub fn register_whisper(&mut self, config: Option<WhisperConfig>) {
-        let backend = config
-            .map(WhisperBackend::with_config)
-            .unwrap_or_else(WhisperBackend::new);
+        let backend = config.map(WhisperBackend::with_config).unwrap_or_default();
         self.backends
             .insert("whisper".to_string(), Arc::new(backend));
     }
@@ -231,7 +227,9 @@ impl AnalysisManager {
     pub fn is_valid_method(&self, method: &str) -> bool {
         let method_lower = method.to_lowercase();
         self.backends.contains_key(&method_lower)
-            || self.backends.contains_key(&format!("custom:{}", method_lower))
+            || self
+                .backends
+                .contains_key(&format!("custom:{}", method_lower))
             || self.backends.contains_key(&format!("ocr:{}", method_lower))
     }
 }

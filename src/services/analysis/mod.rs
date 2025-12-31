@@ -35,6 +35,7 @@ impl AnalysisService {
     }
 
     /// Create a new analysis service with a custom AnalysisManager.
+    #[allow(dead_code)]
     pub fn with_manager(doc_repo: DieselDocumentRepository, manager: AnalysisManager) -> Self {
         Self {
             doc_repo,
@@ -43,6 +44,7 @@ impl AnalysisService {
     }
 
     /// Get a reference to the analysis manager.
+    #[allow(dead_code)]
     pub fn manager(&self) -> &AnalysisManager {
         &self.analysis_manager
     }
@@ -92,9 +94,7 @@ impl AnalysisService {
         }
 
         // Check if any page-level (OCR) methods are requested
-        let has_ocr_methods = methods.iter().any(|m| {
-            m == "ocr" || m.starts_with("ocr:")
-        });
+        let has_ocr_methods = methods.iter().any(|m| m == "ocr" || m.starts_with("ocr:"));
         let mut result = AnalysisResult {
             mime_checked: 0,
             mime_fixed: 0,

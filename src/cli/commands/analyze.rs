@@ -831,7 +831,9 @@ pub async fn cmd_analyze(
         });
 
         // Run service
-        let _result = service.process(source_id, &methods, workers, limit, event_tx).await?;
+        let _result = service
+            .process(source_id, &methods, workers, limit, event_tx)
+            .await?;
 
         // Wait for event handler to finish
         let _ = event_handler.await;

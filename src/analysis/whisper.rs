@@ -38,6 +38,7 @@ impl Default for WhisperConfig {
 }
 
 /// Whisper transcription backend.
+#[derive(Default)]
 pub struct WhisperBackend {
     config: WhisperConfig,
 }
@@ -45,9 +46,7 @@ pub struct WhisperBackend {
 impl WhisperBackend {
     /// Create a new Whisper backend with default configuration.
     pub fn new() -> Self {
-        Self {
-            config: WhisperConfig::default(),
-        }
+        Self::default()
     }
 
     /// Create with custom configuration.
@@ -92,12 +91,6 @@ impl WhisperBackend {
             "video/avi",
             "video/quicktime",
         ]
-    }
-}
-
-impl Default for WhisperBackend {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -165,7 +158,10 @@ impl AnalysisBackend for WhisperBackend {
         }
 
         // Find the output file (whisper names it based on input file)
-        let input_stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let input_stem = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
         let transcript_file = temp_dir.path().join(format!("{}.txt", input_stem));
 
         let text = if transcript_file.exists() {
@@ -177,7 +173,12 @@ impl AnalysisBackend for WhisperBackend {
             let mut found_text = None;
             if let Ok(entries) = std::fs::read_dir(temp_dir.path()) {
                 for entry in entries.flatten() {
-                    if entry.path().extension().map(|e| e == "txt").unwrap_or(false) {
+                    if entry
+                        .path()
+                        .extension()
+                        .map(|e| e == "txt")
+                        .unwrap_or(false)
+                    {
                         if let Ok(content) = std::fs::read_to_string(entry.path()) {
                             found_text = Some(content);
                             break;
