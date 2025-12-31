@@ -160,7 +160,7 @@ impl AnalysisBackend for CustomBackend {
                 }
                 #[cfg(not(unix))]
                 {
-                    Ok(false)
+                    Ok::<bool, std::io::Error>(false)
                 }
             })
             .unwrap_or(false)
