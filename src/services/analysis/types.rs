@@ -1,9 +1,9 @@
-//! OCR service types and events.
+//! Analysis service types and events.
 
 /// Events emitted during document analysis.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub enum OcrEvent {
+pub enum AnalysisEvent {
     /// Phase 0: MIME detection started
     MimeCheckStarted { total_documents: usize },
     /// Document MIME type was corrected
@@ -65,7 +65,7 @@ pub enum OcrEvent {
 /// Result of document analysis.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct OcrResult {
+pub struct AnalysisResult {
     pub mime_checked: usize,
     pub mime_fixed: usize,
     pub phase1_succeeded: usize,

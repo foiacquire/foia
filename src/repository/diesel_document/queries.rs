@@ -295,11 +295,10 @@ impl DieselDocumentRepository {
         let offset = offset as i64;
 
         let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
-            let mut query = documents::table
-                .order(documents::updated_at.desc())
-                .limit(limit)
-                .offset(offset)
-                .into_boxed();
+            // Build query with filters first, then order and paginate
+            let mut query = documents::table.into_boxed();
+
+            // Apply filters
             if let Some(sid) = source_id {
                 query = query.filter(documents::source_id.eq(sid));
             }
@@ -314,7 +313,14 @@ impl DieselDocumentRepository {
                 let pattern = format!("%{}%", tag);
                 query = query.filter(documents::tags.like(pattern));
             }
-            query.load(&mut conn).await
+
+            // Order and paginate after filtering
+            query
+                .order(documents::updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .load(&mut conn)
+                .await
         })?;
 
         // Batch load all versions in a single query

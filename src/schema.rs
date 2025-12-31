@@ -61,6 +61,24 @@ diesel::table! {
 }
 
 diesel::table! {
+    document_analysis_results (id) {
+        id -> Integer,
+        page_id -> Nullable<Integer>,
+        document_id -> Text,
+        version_id -> Integer,
+        analysis_type -> Text,
+        backend -> Text,
+        result_text -> Nullable<Text>,
+        confidence -> Nullable<Float>,
+        processing_time_ms -> Nullable<Integer>,
+        error -> Nullable<Text>,
+        status -> Text,
+        created_at -> Text,
+        metadata -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     document_pages (id) {
         id -> Integer,
         document_id -> Text,
@@ -179,11 +197,16 @@ diesel::joinable!(document_versions -> documents (document_id));
 diesel::joinable!(documents -> sources (source_id));
 diesel::joinable!(virtual_files -> documents (document_id));
 
+diesel::joinable!(document_analysis_results -> documents (document_id));
+diesel::joinable!(document_analysis_results -> document_pages (page_id));
+diesel::joinable!(document_analysis_results -> document_versions (version_id));
+
 diesel::allow_tables_to_appear_in_same_query!(
     configuration_history,
     crawl_config,
     crawl_requests,
     crawl_urls,
+    document_analysis_results,
     document_pages,
     document_versions,
     documents,

@@ -13,23 +13,41 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::analysis::AnalysisManager;
 use crate::repository::DieselDocumentRepository;
 
 pub use processing::{extract_document_text_per_page, ocr_document_page};
-pub use types::{OcrEvent, OcrResult};
+pub use types::{AnalysisEvent, AnalysisResult};
 
-/// Service for OCR processing.
-pub struct OcrService {
+/// Service for document analysis (MIME detection, text extraction, OCR).
+pub struct AnalysisService {
     doc_repo: DieselDocumentRepository,
+    analysis_manager: AnalysisManager,
 }
 
-impl OcrService {
-    /// Create a new OCR service.
+impl AnalysisService {
+    /// Create a new analysis service.
     pub fn new(doc_repo: DieselDocumentRepository) -> Self {
-        Self { doc_repo }
+        Self {
+            doc_repo,
+            analysis_manager: AnalysisManager::with_defaults(),
+        }
     }
 
-    /// Get count of documents needing OCR processing.
+    /// Create a new analysis service with a custom AnalysisManager.
+    pub fn with_manager(doc_repo: DieselDocumentRepository, manager: AnalysisManager) -> Self {
+        Self {
+            doc_repo,
+            analysis_manager: manager,
+        }
+    }
+
+    /// Get a reference to the analysis manager.
+    pub fn manager(&self) -> &AnalysisManager {
+        &self.analysis_manager
+    }
+
+    /// Get count of documents needing analysis.
     pub async fn count_needing_processing(
         &self,
         source_id: Option<&str>,
@@ -39,15 +57,45 @@ impl OcrService {
         Ok((docs, pages))
     }
 
-    /// Analyze documents: detect MIME types, extract text, and run OCR.
+    /// Analyze documents: detect MIME types, extract text, and run analysis.
+    ///
+    /// The `methods` parameter specifies which analysis methods to run (e.g., ["ocr", "whisper"]).
+    /// If empty, defaults to ["ocr"].
     pub async fn process(
         &self,
         source_id: Option<&str>,
+        methods: &[String],
         workers: usize,
         limit: usize,
-        event_tx: mpsc::Sender<OcrEvent>,
-    ) -> anyhow::Result<OcrResult> {
-        let mut result = OcrResult {
+        event_tx: mpsc::Sender<AnalysisEvent>,
+    ) -> anyhow::Result<AnalysisResult> {
+        // Use default methods if none specified
+        let methods = if methods.is_empty() {
+            vec!["ocr".to_string()]
+        } else {
+            methods.to_vec()
+        };
+
+        // Log available backends for requested methods
+        tracing::debug!("Analysis methods requested: {:?}", methods);
+        for method in &methods {
+            if let Some(backend) = self.analysis_manager.get(method) {
+                tracing::debug!(
+                    "  {} -> {} (available: {})",
+                    method,
+                    backend.backend_id(),
+                    backend.is_available()
+                );
+            } else {
+                tracing::warn!("  {} -> no backend registered", method);
+            }
+        }
+
+        // Check if any page-level (OCR) methods are requested
+        let has_ocr_methods = methods.iter().any(|m| {
+            m == "ocr" || m.starts_with("ocr:")
+        });
+        let mut result = AnalysisResult {
             mime_checked: 0,
             mime_fixed: 0,
             phase1_succeeded: 0,
@@ -68,16 +116,23 @@ impl OcrService {
             );
         }
 
-        // ==================== PHASE 0: MIME Detection ====================
-        self.process_phase0_mime(source_id, limit, &event_tx, &mut result)
-            .await?;
+        // Only run OCR phases if OCR methods are requested
+        if has_ocr_methods {
+            // ==================== PHASE 0: MIME Detection ====================
+            self.process_phase0_mime(source_id, limit, &event_tx, &mut result)
+                .await?;
 
-        // ==================== PHASE 1: Text Extraction ====================
-        self.process_phase1(source_id, workers, limit, &event_tx, &mut result)
-            .await?;
+            // ==================== PHASE 1: Text Extraction ====================
+            self.process_phase1(source_id, workers, limit, &event_tx, &mut result)
+                .await?;
 
-        // ==================== PHASE 2: OCR All Pages ====================
-        self.process_phase2(workers, &event_tx, &mut result).await?;
+            // ==================== PHASE 2: OCR All Pages ====================
+            self.process_phase2(workers, &event_tx, &mut result).await?;
+        }
+
+        // TODO: Add document-level analysis phase for methods like Whisper
+        // This would process audio/video files using the analysis backends
+        // that have granularity == AnalysisGranularity::Document
 
         // Documents are finalized incrementally as their last page completes.
         // No separate Phase 3 needed.
@@ -90,8 +145,8 @@ impl OcrService {
         &self,
         source_id: Option<&str>,
         limit: usize,
-        event_tx: &mpsc::Sender<OcrEvent>,
-        result: &mut OcrResult,
+        event_tx: &mpsc::Sender<AnalysisEvent>,
+        result: &mut AnalysisResult,
     ) -> anyhow::Result<()> {
         // Get documents needing OCR (same as Phase 1) - we check MIME before processing
         let total_count = self.doc_repo.count_needing_ocr(source_id).await?;
@@ -107,7 +162,7 @@ impl OcrService {
         };
 
         let _ = event_tx
-            .send(OcrEvent::MimeCheckStarted {
+            .send(AnalysisEvent::MimeCheckStarted {
                 total_documents: effective_limit,
             })
             .await;
@@ -135,7 +190,7 @@ impl OcrService {
                         {
                             fixed += 1;
                             let _ = event_tx
-                                .send(OcrEvent::MimeFixed {
+                                .send(AnalysisEvent::MimeFixed {
                                     document_id: doc.id.clone(),
                                     old_mime,
                                     new_mime: detected_mime,
@@ -151,7 +206,7 @@ impl OcrService {
         result.mime_fixed = fixed;
 
         let _ = event_tx
-            .send(OcrEvent::MimeCheckComplete { checked, fixed })
+            .send(AnalysisEvent::MimeCheckComplete { checked, fixed })
             .await;
 
         Ok(())
@@ -213,8 +268,8 @@ impl OcrService {
         source_id: Option<&str>,
         workers: usize,
         limit: usize,
-        event_tx: &mpsc::Sender<OcrEvent>,
-        result: &mut OcrResult,
+        event_tx: &mpsc::Sender<AnalysisEvent>,
+        result: &mut AnalysisResult,
     ) -> anyhow::Result<()> {
         let total_count = self.doc_repo.count_needing_ocr(source_id).await?;
 
@@ -229,7 +284,7 @@ impl OcrService {
         };
 
         let _ = event_tx
-            .send(OcrEvent::Phase1Started {
+            .send(AnalysisEvent::Phase1Started {
                 total_documents: effective_limit.min(total_count as usize),
             })
             .await;
@@ -270,10 +325,12 @@ impl OcrService {
                     let title = doc.title.clone();
 
                     // Send start event (blocking send since we're in spawn_blocking)
-                    let _ = futures::executor::block_on(event_tx.send(OcrEvent::DocumentStarted {
-                        document_id: doc_id.clone(),
-                        title,
-                    }));
+                    let _ = futures::executor::block_on(event_tx.send(
+                        AnalysisEvent::DocumentStarted {
+                            document_id: doc_id.clone(),
+                            title,
+                        },
+                    ));
 
                     // Get tokio runtime handle to run async code in blocking context
                     let handle = tokio::runtime::Handle::current();
@@ -283,7 +340,7 @@ impl OcrService {
                             pages_created.fetch_add(page_count, Ordering::Relaxed);
                             succeeded.fetch_add(1, Ordering::Relaxed);
                             let _ = futures::executor::block_on(event_tx.send(
-                                OcrEvent::DocumentCompleted {
+                                AnalysisEvent::DocumentCompleted {
                                     document_id: doc_id,
                                     pages_extracted: page_count,
                                 },
@@ -295,7 +352,7 @@ impl OcrService {
                                 tracing::warn!("Text extraction failed for {}: {}", doc.title, e);
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 let _ = futures::executor::block_on(event_tx.send(
-                                    OcrEvent::DocumentFailed {
+                                    AnalysisEvent::DocumentFailed {
                                         document_id: doc_id,
                                         error: err_str,
                                     },
@@ -328,7 +385,7 @@ impl OcrService {
         result.pages_created = pages_created.load(Ordering::Relaxed);
 
         let _ = event_tx
-            .send(OcrEvent::Phase1Complete {
+            .send(AnalysisEvent::Phase1Complete {
                 succeeded: result.phase1_succeeded,
                 failed: result.phase1_failed,
                 pages_created: result.pages_created,
@@ -341,8 +398,8 @@ impl OcrService {
     async fn process_phase2(
         &self,
         workers: usize,
-        event_tx: &mpsc::Sender<OcrEvent>,
-        result: &mut OcrResult,
+        event_tx: &mpsc::Sender<AnalysisEvent>,
+        result: &mut AnalysisResult,
     ) -> anyhow::Result<()> {
         let pages_needing_ocr = self.doc_repo.count_pages_needing_ocr().await?;
 
@@ -353,7 +410,7 @@ impl OcrService {
         let effective_limit = pages_needing_ocr as usize;
 
         let _ = event_tx
-            .send(OcrEvent::Phase2Started {
+            .send(AnalysisEvent::Phase2Started {
                 total_pages: effective_limit,
             })
             .await;
@@ -396,10 +453,11 @@ impl OcrService {
                     let doc_id = page.document_id.clone();
                     let page_num = page.page_number;
 
-                    let _ = futures::executor::block_on(event_tx.send(OcrEvent::PageOcrStarted {
-                        document_id: doc_id.clone(),
-                        page_number: page_num,
-                    }));
+                    let _ =
+                        futures::executor::block_on(event_tx.send(AnalysisEvent::PageOcrStarted {
+                            document_id: doc_id.clone(),
+                            page_number: page_num,
+                        }));
 
                     // Get tokio runtime handle to run async code in blocking context
                     let handle = tokio::runtime::Handle::current();
@@ -412,7 +470,7 @@ impl OcrService {
                                 ocr_skipped.fetch_add(1, Ordering::Relaxed);
                             }
                             let _ = futures::executor::block_on(event_tx.send(
-                                OcrEvent::PageOcrCompleted {
+                                AnalysisEvent::PageOcrCompleted {
                                     document_id: doc_id.clone(),
                                     page_number: page_num,
                                     improved: ocr_result.improved,
@@ -422,7 +480,7 @@ impl OcrService {
                             // Emit event when document is finalized during incremental processing
                             if ocr_result.document_finalized {
                                 let _ = futures::executor::block_on(event_tx.send(
-                                    OcrEvent::DocumentFinalized {
+                                    AnalysisEvent::DocumentFinalized {
                                         document_id: doc_id,
                                     },
                                 ));
@@ -432,7 +490,7 @@ impl OcrService {
                             tracing::debug!("OCR failed for page {}: {}", page.page_number, e);
                             ocr_failed.fetch_add(1, Ordering::Relaxed);
                             let _ = futures::executor::block_on(event_tx.send(
-                                OcrEvent::PageOcrFailed {
+                                AnalysisEvent::PageOcrFailed {
                                     document_id: doc_id,
                                     page_number: page_num,
                                     error: e.to_string(),
@@ -465,7 +523,7 @@ impl OcrService {
         result.phase2_failed = ocr_failed.load(Ordering::Relaxed);
 
         let _ = event_tx
-            .send(OcrEvent::Phase2Complete {
+            .send(AnalysisEvent::Phase2Complete {
                 improved: result.phase2_improved,
                 skipped: result.phase2_skipped,
                 failed: result.phase2_failed,
@@ -479,7 +537,7 @@ impl OcrService {
     pub async fn process_single(
         &self,
         doc_id: &str,
-        _event_tx: mpsc::Sender<OcrEvent>,
+        _event_tx: mpsc::Sender<AnalysisEvent>,
     ) -> anyhow::Result<()> {
         // Get the document
         let doc = self

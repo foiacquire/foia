@@ -356,3 +356,41 @@ pub struct ServiceStatusRecord {
     pub last_error_at: Option<String>,
     pub error_count: i32,
 }
+
+/// Document analysis result record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::document_analysis_results)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct DocumentAnalysisResultRecord {
+    pub id: i32,
+    pub page_id: Option<i32>,
+    pub document_id: String,
+    pub version_id: i32,
+    pub analysis_type: String,
+    pub backend: String,
+    pub result_text: Option<String>,
+    pub confidence: Option<f32>,
+    pub processing_time_ms: Option<i32>,
+    pub error: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub metadata: Option<String>,
+}
+
+/// New document analysis result for insertion.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::document_analysis_results)]
+pub struct NewDocumentAnalysisResult<'a> {
+    pub page_id: Option<i32>,
+    pub document_id: &'a str,
+    pub version_id: i32,
+    pub analysis_type: &'a str,
+    pub backend: &'a str,
+    pub result_text: Option<&'a str>,
+    pub confidence: Option<f32>,
+    pub processing_time_ms: Option<i32>,
+    pub error: Option<&'a str>,
+    pub status: &'a str,
+    pub created_at: &'a str,
+    pub metadata: Option<&'a str>,
+}

@@ -606,13 +606,18 @@ pub async fn cmd_analyze(
     settings: &Settings,
     source_id: Option<&str>,
     doc_id: Option<&str>,
+    method: Option<&str>,
     workers: usize,
     limit: usize,
     daemon: bool,
     interval: u64,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
-    use crate::services::{OcrEvent, OcrService};
+    // Parse methods from comma-separated string (e.g., "ocr,whisper")
+    let methods: Vec<String> = method
+        .map(|m| m.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_else(|| vec!["ocr".to_string()]);
+    use crate::services::{AnalysisEvent, AnalysisService};
     use tokio::sync::mpsc;
 
     // Check for required tools upfront
@@ -648,12 +653,12 @@ pub async fn cmd_analyze(
     let config = Config::load().await;
     let mut current_config_hash = config.hash();
 
-    let service = OcrService::new(doc_repo);
+    let service = AnalysisService::new(doc_repo);
 
     // If specific doc_id provided, process just that document (no daemon mode)
     if let Some(id) = doc_id {
         println!("{} Processing single document: {}", style("→").cyan(), id);
-        let (event_tx, _event_rx) = mpsc::channel::<OcrEvent>(100);
+        let (event_tx, _event_rx) = mpsc::channel::<AnalysisEvent>(100);
         return service.process_single(id, event_tx).await;
     }
 
@@ -685,7 +690,7 @@ pub async fn cmd_analyze(
         }
 
         // Create event channel for progress tracking
-        let (event_tx, mut event_rx) = mpsc::channel::<OcrEvent>(100);
+        let (event_tx, mut event_rx) = mpsc::channel::<AnalysisEvent>(100);
 
         // State for progress bar
         let pb = Arc::new(tokio::sync::Mutex::new(None::<ProgressBar>));
@@ -703,7 +708,7 @@ pub async fn cmd_analyze(
 
             while let Some(event) = event_rx.recv().await {
                 match event {
-                    OcrEvent::Phase1Started { total_documents } => {
+                    AnalysisEvent::Phase1Started { total_documents } => {
                         println!(
                             "{} Phase 1: Extracting text from {} documents",
                             style("→").cyan(),
@@ -721,7 +726,7 @@ pub async fn cmd_analyze(
                         progress.set_message("Extracting text...");
                         *pb_clone.lock().await = Some(progress);
                     }
-                    OcrEvent::DocumentCompleted {
+                    AnalysisEvent::DocumentCompleted {
                         pages_extracted, ..
                     } => {
                         phase1_succeeded += 1;
@@ -730,13 +735,13 @@ pub async fn cmd_analyze(
                             progress.inc(1);
                         }
                     }
-                    OcrEvent::DocumentFailed { .. } => {
+                    AnalysisEvent::DocumentFailed { .. } => {
                         phase1_failed += 1;
                         if let Some(ref progress) = *pb_clone.lock().await {
                             progress.inc(1);
                         }
                     }
-                    OcrEvent::Phase1Complete { .. } => {
+                    AnalysisEvent::Phase1Complete { .. } => {
                         if let Some(ref progress) = *pb_clone.lock().await {
                             progress.finish_and_clear();
                         }
@@ -755,7 +760,7 @@ pub async fn cmd_analyze(
                             );
                         }
                     }
-                    OcrEvent::Phase2Started { total_pages } => {
+                    AnalysisEvent::Phase2Started { total_pages } => {
                         println!(
                             "{} Phase 2: Running OCR on {} pages",
                             style("→").cyan(),
@@ -773,7 +778,7 @@ pub async fn cmd_analyze(
                         progress.set_message("Running OCR...");
                         *pb_clone.lock().await = Some(progress);
                     }
-                    OcrEvent::PageOcrCompleted { improved, .. } => {
+                    AnalysisEvent::PageOcrCompleted { improved, .. } => {
                         if improved {
                             phase2_improved += 1;
                         } else {
@@ -783,13 +788,13 @@ pub async fn cmd_analyze(
                             progress.inc(1);
                         }
                     }
-                    OcrEvent::PageOcrFailed { .. } => {
+                    AnalysisEvent::PageOcrFailed { .. } => {
                         phase2_failed += 1;
                         if let Some(ref progress) = *pb_clone.lock().await {
                             progress.inc(1);
                         }
                     }
-                    OcrEvent::DocumentFinalized { .. } => {
+                    AnalysisEvent::DocumentFinalized { .. } => {
                         docs_finalized_incremental += 1;
                         if let Some(ref progress) = *pb_clone.lock().await {
                             progress.set_message(format!(
@@ -798,7 +803,7 @@ pub async fn cmd_analyze(
                             ));
                         }
                     }
-                    OcrEvent::Phase2Complete { .. } => {
+                    AnalysisEvent::Phase2Complete { .. } => {
                         if let Some(ref progress) = *pb_clone.lock().await {
                             progress.finish_and_clear();
                         }
@@ -826,7 +831,7 @@ pub async fn cmd_analyze(
         });
 
         // Run service
-        let _result = service.process(source_id, workers, limit, event_tx).await?;
+        let _result = service.process(source_id, &methods, workers, limit, event_tx).await?;
 
         // Wait for event handler to finish
         let _ = event_handler.await;

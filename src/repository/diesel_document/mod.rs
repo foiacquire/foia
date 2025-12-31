@@ -7,10 +7,14 @@
 //! - `versions.rs`: Document version operations
 //! - `pages.rs`: Document page and OCR operations
 //! - `queries.rs`: Complex queries, browsing, statistics
+//! - `analysis.rs`: Analysis result operations
 
+mod analysis;
 mod pages;
 mod queries;
 mod versions;
+
+pub use analysis::{AnalysisResultEntry, AnalysisResultStatus};
 
 use std::path::{Path, PathBuf};
 

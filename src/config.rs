@@ -15,6 +15,82 @@ use crate::scrapers::ScraperConfig;
 /// Default refresh TTL in days (14 days).
 pub const DEFAULT_REFRESH_TTL_DAYS: u64 = 14;
 
+/// Analysis configuration for text extraction methods.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnalysisConfig {
+    /// Named analysis methods (custom commands).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub methods: HashMap<String, AnalysisMethodConfig>,
+    /// Default methods to run if --method flag not specified.
+    /// Defaults to ["ocr"] if empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_methods: Vec<String>,
+}
+
+impl AnalysisConfig {
+    /// Check if this is the default (empty) config.
+    pub fn is_default(&self) -> bool {
+        self.methods.is_empty() && self.default_methods.is_empty()
+    }
+
+    /// Get default methods, falling back to ["ocr"] if not configured.
+    pub fn get_default_methods(&self) -> Vec<String> {
+        if self.default_methods.is_empty() {
+            vec!["ocr".to_string()]
+        } else {
+            self.default_methods.clone()
+        }
+    }
+}
+
+/// Configuration for a single analysis method.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisMethodConfig {
+    /// Command to execute (required for custom commands, optional for built-ins).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Arguments (can include {file} and {page} placeholders).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Mimetypes this method applies to (supports wildcards like "audio/*").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mimetypes: Vec<String>,
+    /// Analysis granularity: "page" or "document" (default: "document").
+    #[serde(default = "default_granularity")]
+    pub granularity: String,
+    /// Whether command outputs to stdout (true) or a file (false).
+    #[serde(default = "default_true")]
+    pub stdout: bool,
+    /// Output file template (if stdout is false). Can use {file} placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+    /// Model name (for whisper, ocr backends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+fn default_granularity() -> String {
+    "document".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AnalysisMethodConfig {
+    fn default() -> Self {
+        Self {
+            command: None,
+            args: Vec::new(),
+            mimetypes: Vec::new(),
+            granularity: default_granularity(),
+            stdout: true,
+            output_file: None,
+            model: None,
+        }
+    }
+}
+
 /// Default database filename.
 pub const DEFAULT_DATABASE_FILENAME: &str = "foiacquire.db";
 
@@ -263,6 +339,9 @@ pub struct Config {
     /// LLM configuration for document summarization.
     #[serde(default, skip_serializing_if = "LlmConfig::is_default")]
     pub llm: LlmConfig,
+    /// Analysis configuration for text extraction methods.
+    #[serde(default, skip_serializing_if = "AnalysisConfig::is_default")]
+    pub analysis: AnalysisConfig,
 
     /// Path to the config file this was loaded from (not serialized).
     #[serde(skip)]
@@ -293,6 +372,8 @@ impl Config {
                     .await
                     .unwrap_or_default()
                     .with_env_overrides();
+                let analysis: AnalysisConfig =
+                    pref_config.get("analysis").await.unwrap_or_default();
 
                 // Get the source path from prefer
                 let source_path = pref_config.source_path().cloned();
@@ -308,6 +389,7 @@ impl Config {
                     default_refresh_ttl_days,
                     scrapers,
                     llm,
+                    analysis,
                     source_path,
                 }
             }

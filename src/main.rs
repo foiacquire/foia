@@ -3,6 +3,7 @@
 //! A tool for acquiring, storing, and researching Freedom of Information Act
 //! documents from various government sources.
 
+mod analysis;
 mod cli;
 mod config;
 mod llm;

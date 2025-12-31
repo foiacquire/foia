@@ -171,6 +171,10 @@ enum Commands {
         /// Specific document ID to process
         #[arg(long)]
         doc_id: Option<String>,
+        /// Analysis methods to run (comma-separated: ocr,whisper,custom_name)
+        /// Default: ocr (or config default_methods)
+        #[arg(short, long)]
+        method: Option<String>,
         /// Number of workers (default: 2)
         #[arg(short, long, default_value = "2")]
         workers: usize,
@@ -635,6 +639,7 @@ pub async fn run() -> anyhow::Result<()> {
         Commands::Analyze {
             source_id,
             doc_id,
+            method,
             workers,
             limit,
             daemon,
@@ -646,6 +651,7 @@ pub async fn run() -> anyhow::Result<()> {
                 &settings,
                 source_id.as_deref(),
                 doc_id.as_deref(),
+                method.as_deref(),
                 workers,
                 limit,
                 daemon,
