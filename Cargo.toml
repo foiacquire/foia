@@ -116,6 +116,7 @@ dirs = "5"
 
 # Browser automation (optional, for JS-heavy sites)
 # Using git version for compatibility with newer Chrome versions (fixes WS message parsing)
+# Tested with Alpine 3.21 chromium package (~v131)
 chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "c671c3b", optional = true, features = ["tokio-runtime"] }
 futures = "0.3"
 
