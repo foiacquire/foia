@@ -33,6 +33,16 @@ RUST_LOG=debug cargo run -- <command>
 5. Run formatting: `cargo fmt`
 6. Submit a PR against `main`
 
+## Database Migrations
+
+**Migrations are immutable.** Once a migration has been released (included in a tagged version), it cannot be modified. This is because migrations may have already been applied to production databases.
+
+If you need to fix a released migration:
+1. Create a new migration that applies the fix
+2. Never edit existing migration files in `migrations/`
+
+The CI pipeline enforces this - commits that modify existing migrations will be rejected.
+
 ## Releases
 
 ### Version Numbering
