@@ -9,8 +9,6 @@ use tracing::{info, warn};
 use url::Url;
 
 #[cfg(feature = "browser")]
-use tracing::debug;
-#[cfg(feature = "browser")]
 use super::super::browser::BrowserEngineConfig;
 #[cfg(feature = "browser")]
 use super::super::browser::BrowserFetcher;
@@ -24,6 +22,8 @@ use super::extract::resolve_url;
 use super::ConfigurableScraper;
 use crate::models::{CrawlUrl, DiscoveryMethod};
 use crate::repository::DieselCrawlRepository;
+#[cfg(feature = "browser")]
+use tracing::debug;
 
 /// Configuration for the BFS HTML crawler, parsed from ScraperConfig.
 struct CrawlerConfig {
