@@ -95,7 +95,7 @@ impl CommonPathsSource {
 
     /// Get all paths to check.
     fn all_paths(&self) -> Vec<&str> {
-        let mut paths: Vec<&str> = COMMON_PATHS.iter().copied().collect();
+        let mut paths: Vec<&str> = COMMON_PATHS.to_vec();
         paths.extend(self.custom_paths.iter().map(|s| s.as_str()));
         paths
     }
@@ -194,7 +194,7 @@ impl DiscoverySource for CommonPathsSource {
                         DiscoveryMethod::CommonPath,
                         "common_paths".to_string(),
                     )
-                    .as_listing_page(); // All common paths are listing pages
+                    .listing_page(); // All common paths are listing pages
 
                     disc_url.detect_listing_page();
                     discovered.push(disc_url);

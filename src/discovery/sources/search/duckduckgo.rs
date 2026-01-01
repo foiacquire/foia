@@ -246,7 +246,7 @@ impl DiscoverySource for DuckDuckGoSource {
                         .with_metadata(result.title, result.snippet);
 
                         if is_listing {
-                            discovered = discovered.as_listing_page();
+                            discovered = discovered.listing_page();
                         }
 
                         discovered.detect_listing_page();

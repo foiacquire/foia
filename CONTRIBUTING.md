@@ -62,7 +62,8 @@ While in 0.x.y development, minor versions may contain breaking changes.
 ```bash
 # 1. Run all checks (required before tagging)
 cargo fmt --check
-cargo clippy
+cargo check --all-features
+cargo clippy --all-features -- -D warnings
 cargo test
 cargo build --release
 

@@ -8,7 +8,6 @@ pub mod sitemap;
 pub mod wayback;
 
 pub use common_paths::CommonPathsSource;
-pub use search::SearchEngineRegistry;
 pub use sitemap::SitemapSource;
 pub use wayback::WaybackSource;
 
