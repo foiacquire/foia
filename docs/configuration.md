@@ -48,24 +48,54 @@ Environment variables override configuration file settings:
 | `DATABASE_URL` | Full database URL, e.g., `postgres://user:pass@host/db` or `sqlite:path.db` |
 | `BROWSER_URL` | Remote Chrome DevTools WebSocket URL |
 | `LLM_ENABLED` | Enable/disable LLM (`true`/`false`) |
-| `LLM_ENDPOINT` | Ollama API endpoint URL |
+| `LLM_PROVIDER` | LLM provider: `ollama` (default), `openai`, `groq`, or `together` |
+| `LLM_ENDPOINT` | API endpoint URL (auto-detected based on provider) |
+| `LLM_API_KEY` | API key for OpenAI-compatible providers |
 | `LLM_MODEL` | Model name for annotation |
 | `LLM_MAX_TOKENS` | Maximum tokens in response |
 | `LLM_TEMPERATURE` | Generation temperature |
 | `LLM_MAX_CONTENT_CHARS` | Max document chars to send |
 | `LLM_SYNOPSIS_PROMPT` | Custom synopsis prompt template |
 | `LLM_TAGS_PROMPT` | Custom tags prompt template |
+| `GROQ_API_KEY` | Groq API key (auto-selects Groq provider) |
+| `OPENAI_API_KEY` | OpenAI API key (auto-selects OpenAI provider) |
 | `RUST_LOG` | Log level (`error`, `warn`, `info`, `debug`, `trace`) |
 
 ## LLM Configuration
 
-Configure Ollama integration for document annotation:
+Configure LLM integration for document annotation. Supports Ollama (local) and OpenAI-compatible APIs (Groq, Together.ai, OpenAI).
+
+### Using Groq (Free Tier)
+
+The simplest way to get started - just set two environment variables:
+
+```bash
+export GROQ_API_KEY="gsk_your_key_here"
+export LLM_MODEL="llama-3.1-70b-versatile"
+foiacquire annotate
+```
+
+Groq's free tier provides ~6000 tokens/minute, enough for ~1 document/minute continuously.
+
+### Using Ollama (Local)
+
+```bash
+# Start Ollama with your model
+ollama run dolphin-llama3:8b
+
+# Run annotation (Ollama is the default)
+foiacquire annotate
+```
+
+### Configuration File
 
 ```json
 {
   "llm": {
     "enabled": true,
+    "provider": "ollama",
     "endpoint": "http://localhost:11434",
+    "api_key": null,
     "model": "llama3.2",
     "max_tokens": 512,
     "temperature": 0.3,
@@ -79,13 +109,43 @@ Configure Ollama integration for document annotation:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable LLM annotation |
-| `endpoint` | string | `http://localhost:11434` | Ollama API endpoint |
+| `provider` | string | `ollama` | Provider: `ollama` or `openai` (for OpenAI-compatible APIs) |
+| `endpoint` | string | (auto) | API endpoint (auto-detected based on provider) |
+| `api_key` | string | `null` | API key for OpenAI-compatible providers |
 | `model` | string | `dolphin-llama3:8b` | Model to use |
 | `max_tokens` | integer | `512` | Maximum response tokens |
 | `temperature` | float | `0.3` | Generation temperature (0-1) |
 | `max_content_chars` | integer | `12000` | Max chars sent to LLM |
 | `synopsis_prompt` | string | (built-in) | Synopsis prompt with `{title}` and `{content}` placeholders |
 | `tags_prompt` | string | (built-in) | Tags prompt template |
+
+### Provider Endpoints
+
+| Provider | Endpoint (auto-detected) | API Key Env Var |
+|----------|--------------------------|-----------------|
+| Ollama | `http://localhost:11434` | (none) |
+| Groq | `https://api.groq.com/openai` | `GROQ_API_KEY` |
+| OpenAI | `https://api.openai.com` | `OPENAI_API_KEY` |
+| Together.ai | `https://api.together.xyz` | `LLM_API_KEY` |
+
+### Priority
+
+1. `LLM_PROVIDER` is authoritative when set - determines which provider-specific key to use
+2. `LLM_ENDPOINT` and `LLM_API_KEY` override any auto-detected values
+3. If `LLM_PROVIDER` is not set, auto-detect from available keys (`GROQ_API_KEY` checked first)
+
+Example with both keys set:
+```bash
+# Both keys are set
+export GROQ_API_KEY="gsk_..."
+export OPENAI_API_KEY="sk-..."
+
+# Use Groq (auto-detected, GROQ_API_KEY checked first)
+foiacquire annotate
+
+# Explicitly use OpenAI instead
+LLM_PROVIDER=openai foiacquire annotate
+```
 
 ## Scraper Configuration
 

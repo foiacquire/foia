@@ -6,16 +6,43 @@ use serde::{Deserialize, Serialize};
 
 use super::prompts::{DEFAULT_SYNOPSIS_PROMPT, DEFAULT_TAGS_PROMPT};
 
+/// LLM provider type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmProvider {
+    /// Ollama API (local, default)
+    #[default]
+    Ollama,
+    /// OpenAI-compatible API (OpenAI, Groq, Together.ai, etc.)
+    OpenAI,
+}
+
+impl LlmProvider {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "ollama" => Some(Self::Ollama),
+            "openai" | "groq" | "together" => Some(Self::OpenAI),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration for LLM client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmConfig {
     /// Whether LLM summarization is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Ollama API endpoint (default: http://localhost:11434)
+    /// LLM provider (ollama or openai)
+    #[serde(default)]
+    pub provider: LlmProvider,
+    /// API endpoint (provider-specific defaults apply)
     #[serde(default = "default_endpoint")]
     pub endpoint: String,
-    /// Model to use for summarization (default: llama3.2:instruct)
+    /// API key for OpenAI-compatible providers
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Model to use for summarization
     #[serde(default = "default_model")]
     pub model: String,
     /// Maximum tokens in response
@@ -63,7 +90,9 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
+            provider: LlmProvider::default(),
             endpoint: default_endpoint(),
+            api_key: None,
             model: default_model(),
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),
@@ -84,20 +113,91 @@ impl LlmConfig {
     ///
     /// Supported env vars:
     /// - `LLM_ENABLED`: "true" or "false"
-    /// - `LLM_ENDPOINT`: Ollama API endpoint
+    /// - `LLM_PROVIDER`: "ollama" (default), "openai", "groq", or "together"
+    /// - `LLM_ENDPOINT`: API endpoint (defaults based on provider)
+    /// - `LLM_API_KEY`: API key for OpenAI-compatible providers
     /// - `LLM_MODEL`: Model name
     /// - `LLM_MAX_TOKENS`: Maximum tokens in response
     /// - `LLM_TEMPERATURE`: Generation temperature (0.0-1.0)
     /// - `LLM_MAX_CONTENT_CHARS`: Max document chars to send
     /// - `LLM_SYNOPSIS_PROMPT`: Custom synopsis prompt
     /// - `LLM_TAGS_PROMPT`: Custom tags prompt
+    ///
+    /// Priority: LLM_PROVIDER wins over auto-detection from API keys.
+    /// If LLM_PROVIDER=openai, uses OPENAI_API_KEY even if GROQ_API_KEY is set.
+    ///
+    /// For Groq, you can use:
+    /// ```sh
+    /// LLM_PROVIDER=groq LLM_MODEL=llama-3.1-70b-versatile
+    /// # Or just set the key (auto-detects provider):
+    /// GROQ_API_KEY=gsk_...
+    /// ```
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(val) = std::env::var("LLM_ENABLED") {
             self.enabled = val.eq_ignore_ascii_case("true") || val == "1";
         }
-        if let Ok(val) = std::env::var("LLM_ENDPOINT") {
-            self.endpoint = val;
+
+        // Check if provider is explicitly set - this is authoritative
+        let explicit_provider = std::env::var("LLM_PROVIDER").ok();
+        if let Some(ref val) = explicit_provider {
+            if let Some(provider) = LlmProvider::from_str(val) {
+                self.provider = provider;
+            }
         }
+
+        // Explicit endpoint always wins
+        let explicit_endpoint = std::env::var("LLM_ENDPOINT").ok();
+        if let Some(ref endpoint) = explicit_endpoint {
+            self.endpoint = endpoint.clone();
+        }
+
+        // Explicit API key always wins
+        if let Ok(val) = std::env::var("LLM_API_KEY") {
+            self.api_key = Some(val);
+        }
+
+        // If provider was explicitly set, use provider-specific defaults
+        if let Some(ref provider_str) = explicit_provider {
+            let provider_lower = provider_str.to_lowercase();
+
+            // Set endpoint if not explicitly provided
+            if explicit_endpoint.is_none() {
+                match provider_lower.as_str() {
+                    "groq" => self.endpoint = "https://api.groq.com/openai".to_string(),
+                    "openai" => self.endpoint = "https://api.openai.com".to_string(),
+                    "together" => self.endpoint = "https://api.together.xyz".to_string(),
+                    _ => {} // ollama keeps default
+                }
+            }
+
+            // Set API key from provider-specific env var if not explicitly provided
+            if self.api_key.is_none() {
+                match provider_lower.as_str() {
+                    "groq" => self.api_key = std::env::var("GROQ_API_KEY").ok(),
+                    "openai" => self.api_key = std::env::var("OPENAI_API_KEY").ok(),
+                    // together uses LLM_API_KEY which we already checked
+                    _ => {}
+                }
+            }
+        } else {
+            // No explicit provider - auto-detect from available keys
+            if self.api_key.is_none() {
+                if let Ok(key) = std::env::var("GROQ_API_KEY") {
+                    self.api_key = Some(key);
+                    self.provider = LlmProvider::OpenAI;
+                    if explicit_endpoint.is_none() {
+                        self.endpoint = "https://api.groq.com/openai".to_string();
+                    }
+                } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                    self.api_key = Some(key);
+                    self.provider = LlmProvider::OpenAI;
+                    if explicit_endpoint.is_none() {
+                        self.endpoint = "https://api.openai.com".to_string();
+                    }
+                }
+            }
+        }
+
         if let Ok(val) = std::env::var("LLM_MODEL") {
             self.model = val;
         }

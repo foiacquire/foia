@@ -1,6 +1,6 @@
 //! LLM client for document summarization and tagging.
 //!
-//! Supports Ollama API for local LLM inference.
+//! Supports both Ollama (local) and OpenAI-compatible APIs (Groq, Together.ai, OpenAI).
 
 #![allow(dead_code)]
 
@@ -11,7 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-pub use config::LlmConfig;
+pub use config::{LlmConfig, LlmProvider};
 
 /// Result of summarizing a document.
 #[derive(Debug, Clone)]
@@ -27,6 +27,10 @@ pub struct LlmClient {
     config: LlmConfig,
     client: Client,
 }
+
+// ============================================================================
+// Ollama API types
+// ============================================================================
 
 /// Ollama API request format.
 #[derive(Debug, Serialize)]
@@ -51,6 +55,39 @@ struct OllamaResponse {
     done: bool,
 }
 
+// ============================================================================
+// OpenAI-compatible API types (Groq, Together.ai, OpenAI, etc.)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct OpenAIRequest {
+    model: String,
+    messages: Vec<OpenAIMessage>,
+    max_tokens: u32,
+    temperature: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAIMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIResponse {
+    choices: Vec<OpenAIChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIChoice {
+    message: OpenAIMessageResponse,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIMessageResponse {
+    content: String,
+}
+
 impl LlmClient {
     /// Create a new LLM client with the given configuration.
     pub fn new(config: LlmConfig) -> Self {
@@ -72,8 +109,18 @@ impl LlmClient {
         if !self.config.enabled {
             return false;
         }
-        let url = format!("{}/api/tags", self.config.endpoint);
-        match self.client.get(&url).send().await {
+
+        let url = match self.config.provider {
+            LlmProvider::Ollama => format!("{}/api/tags", self.config.endpoint),
+            LlmProvider::OpenAI => format!("{}/v1/models", self.config.endpoint),
+        };
+
+        let mut request = self.client.get(&url);
+        if let Some(ref api_key) = self.config.api_key {
+            request = request.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        match request.send().await {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -81,6 +128,13 @@ impl LlmClient {
 
     /// List available models.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+        match self.config.provider {
+            LlmProvider::Ollama => self.list_models_ollama().await,
+            LlmProvider::OpenAI => self.list_models_openai().await,
+        }
+    }
+
+    async fn list_models_ollama(&self) -> Result<Vec<String>, LlmError> {
         let url = format!("{}/api/tags", self.config.endpoint);
         let resp = self
             .client
@@ -111,6 +165,40 @@ impl LlmClient {
         Ok(tags.models.into_iter().map(|m| m.name).collect())
     }
 
+    async fn list_models_openai(&self) -> Result<Vec<String>, LlmError> {
+        let url = format!("{}/v1/models", self.config.endpoint);
+        let mut request = self.client.get(&url);
+        if let Some(ref api_key) = self.config.api_key {
+            request = request.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        let resp = request
+            .send()
+            .await
+            .map_err(|e| LlmError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(LlmError::Api(format!("HTTP {}", resp.status())));
+        }
+
+        #[derive(Deserialize)]
+        struct ModelsResponse {
+            data: Vec<ModelInfo>,
+        }
+
+        #[derive(Deserialize)]
+        struct ModelInfo {
+            id: String,
+        }
+
+        let models: ModelsResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Parse(e.to_string()))?;
+
+        Ok(models.data.into_iter().map(|m| m.id).collect())
+    }
+
     /// Generate synopsis for a document.
     pub async fn generate_synopsis(&self, text: &str, title: &str) -> Result<String, LlmError> {
         let truncated = self.truncate_content(text);
@@ -121,7 +209,7 @@ impl LlmClient {
             .replace("{content}", truncated);
 
         debug!("Generating synopsis for: {}", title);
-        let response = self.call_ollama(&prompt).await?;
+        let response = self.call_llm(&prompt).await?;
 
         // Clean up the response
         let synopsis = response.trim().to_string();
@@ -142,7 +230,7 @@ impl LlmClient {
             .replace("{content}", truncated);
 
         debug!("Generating tags for: {}", title);
-        let response = self.call_ollama(&prompt).await?;
+        let response = self.call_llm(&prompt).await?;
 
         // Parse tags from response
         let tags = self.parse_tags(&response);
@@ -195,7 +283,7 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
         );
 
         debug!("Expanding search terms for: {}", domain);
-        let response = self.call_ollama(&prompt).await?;
+        let response = self.call_llm(&prompt).await?;
 
         // Parse the response into individual terms
         let expanded: Vec<String> = response
@@ -223,6 +311,14 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
             end -= 1;
         }
         &text[..end]
+    }
+
+    /// Call LLM API with a prompt (provider-aware).
+    async fn call_llm(&self, prompt: &str) -> Result<String, LlmError> {
+        match self.config.provider {
+            LlmProvider::Ollama => self.call_ollama(prompt).await,
+            LlmProvider::OpenAI => self.call_openai(prompt).await,
+        }
     }
 
     /// Call Ollama API with a prompt.
@@ -258,6 +354,49 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
             .map_err(|e| LlmError::Parse(e.to_string()))?;
 
         Ok(ollama_resp.response)
+    }
+
+    /// Call OpenAI-compatible API (Groq, Together.ai, OpenAI, etc.)
+    async fn call_openai(&self, prompt: &str) -> Result<String, LlmError> {
+        let request = OpenAIRequest {
+            model: self.config.model.clone(),
+            messages: vec![OpenAIMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let url = format!("{}/v1/chat/completions", self.config.endpoint);
+        let mut req = self.client.post(&url).json(&request);
+
+        if let Some(ref api_key) = self.config.api_key {
+            req = req.header("Authorization", format!("Bearer {}", api_key));
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| LlmError::Connection(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Api(format!("HTTP {}: {}", status, body)));
+        }
+
+        let openai_resp: OpenAIResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Parse(e.to_string()))?;
+
+        openai_resp
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message.content)
+            .ok_or_else(|| LlmError::Parse("No response choices".to_string()))
     }
 
     /// Parse tags from LLM response.
