@@ -367,9 +367,15 @@ impl BrowserPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Tests that modify environment variables must be serialized
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn pool_config_from_single_url() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
         std::env::set_var("BROWSER_URL", "ws://localhost:9222");
         std::env::remove_var("BROWSER_SELECTION");
 
@@ -383,6 +389,8 @@ mod tests {
 
     #[test]
     fn pool_config_from_multiple_urls() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
         std::env::set_var("BROWSER_URL", "ws://b1:9222, ws://b2:9222, ws://b3:9222");
         std::env::set_var("BROWSER_SELECTION", "per-domain");
 
@@ -400,10 +408,44 @@ mod tests {
 
     #[test]
     fn pool_config_empty_url_returns_none() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
         std::env::set_var("BROWSER_URL", "");
         assert!(BrowserPoolConfig::from_env().is_none());
 
         std::env::remove_var("BROWSER_URL");
         assert!(BrowserPoolConfig::from_env().is_none());
+    }
+
+    #[test]
+    fn pool_config_single_helper() {
+        let config = BrowserPoolConfig::single("ws://test:9222".to_string());
+        assert_eq!(config.urls, vec!["ws://test:9222"]);
+        assert_eq!(config.strategy, SelectionStrategyType::RoundRobin);
+        assert!(!config.is_pool());
+    }
+
+    #[test]
+    fn pool_config_is_pool_requires_multiple() {
+        let single = BrowserPoolConfig {
+            urls: vec!["ws://a:9222".to_string()],
+            ..Default::default()
+        };
+        assert!(!single.is_pool());
+
+        let multi = BrowserPoolConfig {
+            urls: vec!["ws://a:9222".to_string(), "ws://b:9222".to_string()],
+            ..Default::default()
+        };
+        assert!(multi.is_pool());
+    }
+
+    #[test]
+    fn pool_config_default_values() {
+        let config = BrowserPoolConfig::default();
+        assert!(config.urls.is_empty());
+        assert_eq!(config.strategy, SelectionStrategyType::RoundRobin);
+        assert_eq!(config.unhealthy_threshold, 3);
+        assert_eq!(config.health_check_interval, Duration::from_secs(60));
     }
 }

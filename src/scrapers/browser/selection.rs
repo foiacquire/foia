@@ -306,4 +306,247 @@ mod tests {
         );
         assert_eq!(SelectionStrategyType::from_str("invalid"), None);
     }
+
+    // === Edge case tests ===
+
+    #[test]
+    fn all_strategies_return_none_for_empty_pool() {
+        let healthy: [bool; 0] = [];
+
+        assert_eq!(
+            RoundRobinStrategy::new().select("http://example.com", 0, &healthy),
+            None
+        );
+        assert_eq!(
+            RandomStrategy.select("http://example.com", 0, &healthy),
+            None
+        );
+        assert_eq!(
+            PerDomainStrategy.select("http://example.com", 0, &healthy),
+            None
+        );
+    }
+
+    #[test]
+    fn all_strategies_work_with_single_healthy_browser() {
+        let healthy = [true];
+
+        assert_eq!(
+            RoundRobinStrategy::new().select("http://example.com", 1, &healthy),
+            Some(0)
+        );
+        assert_eq!(
+            RandomStrategy.select("http://example.com", 1, &healthy),
+            Some(0)
+        );
+        assert_eq!(
+            PerDomainStrategy.select("http://example.com", 1, &healthy),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn all_strategies_return_none_for_single_unhealthy_browser() {
+        let healthy = [false];
+
+        assert_eq!(
+            RoundRobinStrategy::new().select("http://example.com", 1, &healthy),
+            None
+        );
+        assert_eq!(
+            RandomStrategy.select("http://example.com", 1, &healthy),
+            None
+        );
+        assert_eq!(
+            PerDomainStrategy.select("http://example.com", 1, &healthy),
+            None
+        );
+    }
+
+    #[test]
+    fn round_robin_with_alternating_health() {
+        let strategy = RoundRobinStrategy::new();
+        let healthy = [true, false, true, false, true];
+
+        // Should cycle through only healthy indices: 0, 2, 4
+        let results: Vec<_> = (0..6)
+            .map(|_| strategy.select("http://example.com", 5, &healthy))
+            .collect();
+
+        // Verify all results are healthy indices
+        for result in &results {
+            let idx = result.unwrap();
+            assert!(healthy[idx], "Selected unhealthy browser at index {}", idx);
+        }
+    }
+
+    #[test]
+    fn random_distributes_across_multiple_healthy() {
+        let strategy = RandomStrategy;
+        let healthy = [true, true, true, true];
+        let mut seen = [false; 4];
+
+        // With 1000 iterations, we should see all healthy browsers selected
+        for _ in 0..1000 {
+            if let Some(idx) = strategy.select("http://example.com", 4, &healthy) {
+                seen[idx] = true;
+            }
+        }
+
+        // All browsers should have been selected at least once
+        assert!(
+            seen.iter().all(|&s| s),
+            "Random strategy didn't distribute across all browsers: {:?}",
+            seen
+        );
+    }
+
+    #[test]
+    fn random_returns_none_when_all_unhealthy() {
+        let strategy = RandomStrategy;
+        let healthy = [false, false, false];
+
+        assert_eq!(strategy.select("http://example.com", 3, &healthy), None);
+    }
+
+    #[test]
+    fn per_domain_distributes_different_domains() {
+        let strategy = PerDomainStrategy;
+        let healthy = [true, true, true, true, true];
+
+        // Use many different domains to increase chance of distribution
+        let domains = [
+            "https://a.com/page",
+            "https://b.com/page",
+            "https://c.com/page",
+            "https://d.com/page",
+            "https://e.com/page",
+            "https://f.com/page",
+            "https://g.com/page",
+            "https://h.com/page",
+            "https://i.com/page",
+            "https://j.com/page",
+        ];
+
+        let mut seen = [false; 5];
+        for domain in &domains {
+            if let Some(idx) = strategy.select(domain, 5, &healthy) {
+                seen[idx] = true;
+            }
+        }
+
+        // With 10 different domains across 5 browsers, we should see multiple browsers used
+        let used_count = seen.iter().filter(|&&s| s).count();
+        assert!(
+            used_count >= 2,
+            "Per-domain strategy should distribute across browsers, only used {}",
+            used_count
+        );
+    }
+
+    #[test]
+    fn per_domain_handles_malformed_urls() {
+        let strategy = PerDomainStrategy;
+        let healthy = [true, true, true];
+
+        // Malformed URLs should still return a result (using empty domain hash)
+        let result = strategy.select("not-a-valid-url", 3, &healthy);
+        assert!(result.is_some());
+
+        // Empty URL
+        let result = strategy.select("", 3, &healthy);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn per_domain_same_host_different_paths_same_browser() {
+        let strategy = PerDomainStrategy;
+        let healthy = [true, true, true, true, true];
+
+        let urls = [
+            "https://example.com/",
+            "https://example.com/page1",
+            "https://example.com/page2/subpage",
+            "https://example.com/api/v1/users",
+            "https://example.com:443/with-port",
+        ];
+
+        let first = strategy.select(urls[0], 5, &healthy);
+        for url in &urls[1..] {
+            assert_eq!(
+                strategy.select(url, 5, &healthy),
+                first,
+                "URL {} should map to same browser as {}",
+                url,
+                urls[0]
+            );
+        }
+    }
+
+    #[test]
+    fn per_domain_subdomains_are_different() {
+        let strategy = PerDomainStrategy;
+        let healthy = [true, true, true, true, true, true, true, true, true, true];
+
+        // Subdomains should be treated as different domains
+        let www = strategy.select("https://www.example.com/page", 10, &healthy);
+        let api = strategy.select("https://api.example.com/page", 10, &healthy);
+        let bare = strategy.select("https://example.com/page", 10, &healthy);
+
+        // At least some should differ (hash collision possible but unlikely with 10 buckets)
+        let all_same = www == api && api == bare;
+        // Note: This could theoretically fail due to hash collisions, but very unlikely
+        assert!(
+            !all_same,
+            "Subdomains should generally map to different browsers"
+        );
+    }
+
+    #[test]
+    fn strategy_type_display() {
+        assert_eq!(format!("{}", SelectionStrategyType::RoundRobin), "round-robin");
+        assert_eq!(format!("{}", SelectionStrategyType::Random), "random");
+        assert_eq!(format!("{}", SelectionStrategyType::PerDomain), "per-domain");
+    }
+
+    #[test]
+    fn strategy_type_default_is_round_robin() {
+        assert_eq!(
+            SelectionStrategyType::default(),
+            SelectionStrategyType::RoundRobin
+        );
+    }
+
+    #[test]
+    fn strategy_type_creates_correct_strategy() {
+        let healthy = [true, true, true];
+
+        // Round-robin should increment
+        let rr = SelectionStrategyType::RoundRobin.create_strategy();
+        let first = rr.select("http://a.com", 3, &healthy);
+        let second = rr.select("http://a.com", 3, &healthy);
+        assert_ne!(first, second, "Round-robin should cycle");
+
+        // Per-domain should be consistent
+        let pd = SelectionStrategyType::PerDomain.create_strategy();
+        let first = pd.select("http://a.com", 3, &healthy);
+        let second = pd.select("http://a.com", 3, &healthy);
+        assert_eq!(first, second, "Per-domain should be consistent");
+    }
+
+    #[test]
+    fn strategy_type_from_str_case_insensitive() {
+        assert_eq!(
+            SelectionStrategyType::from_str("ROUND-ROBIN"),
+            Some(SelectionStrategyType::RoundRobin)
+        );
+        assert_eq!(
+            SelectionStrategyType::from_str("Random"),
+            Some(SelectionStrategyType::Random)
+        );
+        assert_eq!(
+            SelectionStrategyType::from_str("PER-DOMAIN"),
+            Some(SelectionStrategyType::PerDomain)
+        );
+    }
 }
