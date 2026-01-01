@@ -1,0 +1,80 @@
+# Contributing to FOIAcquire
+
+## Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/monokrome/foiacquire
+cd foiacquire
+
+# Build
+cargo build
+
+# Run tests
+cargo test
+
+# Run with verbose logging
+RUST_LOG=debug cargo run -- <command>
+```
+
+## Code Style
+
+- Run `cargo fmt` before committing
+- Run `cargo clippy` and address warnings
+- Follow existing patterns in the codebase
+- Keep functions focused and under 50 lines when possible
+
+## Pull Requests
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Make your changes
+4. Run tests: `cargo test`
+5. Run formatting: `cargo fmt`
+6. Submit a PR against `main`
+
+## Releases
+
+### Version Numbering
+
+FOIAcquire follows [Semantic Versioning](https://semver.org/):
+
+- **MAJOR** (x.0.0): Breaking changes to core functionality, database schema migrations required
+- **MINOR** (0.x.0): New features, CLI changes, backwards-incompatible config changes
+- **PATCH** (0.0.x): Bug fixes, documentation, minor improvements
+
+While in 0.x.y development, minor versions may contain breaking changes.
+
+### Release Checklist
+
+**Pre-release:**
+- [ ] All tests pass: `cargo test`
+- [ ] Code compiles: `cargo build --release`
+- [ ] Clippy passes: `cargo clippy`
+- [ ] Format check: `cargo fmt --check`
+- [ ] Update version in `Cargo.toml`
+
+**Release:**
+```bash
+git add Cargo.toml Cargo.lock
+git commit -m "chore: bump version to 0.x.y"
+git tag v0.x.y
+git push origin main
+git push origin v0.x.y
+```
+
+**Post-release:**
+- [ ] Verify CI/CD pipeline succeeds
+- [ ] Verify Docker images published to docker.io/monokrome
+
+### Breaking Changes
+
+Requires **minor** version bump:
+- CLI argument/subcommand changes
+- Config file format changes
+- Changing default behavior
+
+Requires **patch** version bump:
+- Bug fixes
+- New optional features
+- Documentation updates

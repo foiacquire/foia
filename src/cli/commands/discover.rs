@@ -551,13 +551,15 @@ async fn get_source_base_url(settings: &Settings, source_id: &str) -> anyhow::Re
     use crate::config::Config;
 
     let config = Config::load().await;
-    let scraper = config.scrapers.get(source_id).ok_or_else(|| {
-        anyhow::anyhow!("Source '{}' not found in configuration", source_id)
-    })?;
+    let scraper = config
+        .scrapers
+        .get(source_id)
+        .ok_or_else(|| anyhow::anyhow!("Source '{}' not found in configuration", source_id))?;
 
-    scraper.base_url.clone().ok_or_else(|| {
-        anyhow::anyhow!("Source '{}' has no base_url configured", source_id)
-    })
+    scraper
+        .base_url
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Source '{}' has no base_url configured", source_id))
 }
 
 /// Helper to add discovered URLs to the crawl queue.
@@ -640,7 +642,9 @@ pub async fn cmd_discover_search(
 ) -> anyhow::Result<()> {
     use crate::config::Config;
     use crate::discovery::sources::search::create_search_engine;
-    use crate::discovery::term_extraction::{LlmTermExtractor, TemplateTermExtractor, ExtractionContext, TermExtractor};
+    use crate::discovery::term_extraction::{
+        ExtractionContext, LlmTermExtractor, TemplateTermExtractor, TermExtractor,
+    };
 
     let base_url = get_source_base_url(settings, source_id).await?;
     let domain = url::Url::parse(&base_url)?
@@ -681,7 +685,10 @@ pub async fn cmd_discover_search(
 
     // Template-based term extraction
     if template {
-        println!("\n{} Extracting terms from HTML templates...", style("📝").cyan());
+        println!(
+            "\n{} Extracting terms from HTML templates...",
+            style("📝").cyan()
+        );
         let extractor = TemplateTermExtractor::with_defaults();
         let context = ExtractionContext::for_domain(&domain);
 
@@ -740,24 +747,18 @@ pub async fn cmd_discover_search(
     };
 
     for engine_name in engine_list {
-        println!(
-            "\n{} Searching with {}...",
-            style("→").cyan(),
-            engine_name
-        );
+        println!("\n{} Searching with {}...", style("→").cyan(), engine_name);
 
         match create_search_engine(engine_name) {
-            Ok(engine) => {
-                match engine.discover(&domain, &search_terms, &config).await {
-                    Ok(urls) => {
-                        println!("  Found {} URLs", urls.len());
-                        all_urls.extend(urls);
-                    }
-                    Err(e) => {
-                        println!("  {} Search failed: {}", style("!").yellow(), e);
-                    }
+            Ok(engine) => match engine.discover(&domain, &search_terms, &config).await {
+                Ok(urls) => {
+                    println!("  Found {} URLs", urls.len());
+                    all_urls.extend(urls);
                 }
-            }
+                Err(e) => {
+                    println!("  {} Search failed: {}", style("!").yellow(), e);
+                }
+            },
             Err(e) => {
                 println!("  {} {}", style("!").yellow(), e);
             }
@@ -860,10 +861,14 @@ pub async fn cmd_discover_wayback(
 
     // Add date range to custom params
     if let Some(f) = from {
-        config.custom_params.insert("from".to_string(), serde_json::Value::String(f.to_string()));
+        config
+            .custom_params
+            .insert("from".to_string(), serde_json::Value::String(f.to_string()));
     }
     if let Some(t) = to {
-        config.custom_params.insert("to".to_string(), serde_json::Value::String(t.to_string()));
+        config
+            .custom_params
+            .insert("to".to_string(), serde_json::Value::String(t.to_string()));
     }
 
     match source.discover(&base_url, &[], &config).await {
@@ -986,7 +991,11 @@ pub async fn cmd_discover_all(
     println!("\n{} Search engine discovery...", style("→").cyan());
     use crate::discovery::sources::search::DuckDuckGoSource;
     let search_source = DuckDuckGoSource::new();
-    let terms = vec!["FOIA".to_string(), "documents".to_string(), "reports".to_string()];
+    let terms = vec![
+        "FOIA".to_string(),
+        "documents".to_string(),
+        "reports".to_string(),
+    ];
     if let Ok(urls) = search_source.discover(&base_url, &terms, &config).await {
         println!("  Found {} search URLs", urls.len());
         total_urls.extend(urls);
@@ -1003,7 +1012,11 @@ pub async fn cmd_discover_all(
     );
 
     let listings = total_urls.iter().filter(|u| u.is_listing_page).count();
-    println!("  {} listing pages, {} document URLs", listings, total_urls.len() - listings);
+    println!(
+        "  {} listing pages, {} document URLs",
+        listings,
+        total_urls.len() - listings
+    );
 
     // Add to queue
     let added = add_discovered_urls(settings, source_id, total_urls, dry_run).await?;

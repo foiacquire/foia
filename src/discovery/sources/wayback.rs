@@ -182,17 +182,16 @@ impl DiscoverySource for WaybackSource {
 
         // Parse JSON response
         // CDX returns array of arrays: [["original", "mimetype", "statuscode", "timestamp"], ...]
-        let rows: Vec<Vec<String>> = serde_json::from_str(&text).map_err(|e| {
-            DiscoveryError::Parse(format!("Failed to parse CDX response: {}", e))
-        })?;
+        let rows: Vec<Vec<String>> = serde_json::from_str(&text)
+            .map_err(|e| DiscoveryError::Parse(format!("Failed to parse CDX response: {}", e)))?;
 
         // Skip header row
-        let data_rows = if !rows.is_empty() && rows[0].get(0).map(|s| s.as_str()) == Some("original")
-        {
-            &rows[1..]
-        } else {
-            &rows[..]
-        };
+        let data_rows =
+            if !rows.is_empty() && rows[0].get(0).map(|s| s.as_str()) == Some("original") {
+                &rows[1..]
+            } else {
+                &rows[..]
+            };
 
         let mut urls: Vec<String> = Vec::new();
 
@@ -225,11 +224,8 @@ impl DiscoverySource for WaybackSource {
             .into_iter()
             .map(|url| {
                 let is_listing = Self::is_likely_listing(&url);
-                let mut discovered = DiscoveredUrl::new(
-                    url,
-                    DiscoveryMethod::WaybackMachine,
-                    "wayback".to_string(),
-                );
+                let mut discovered =
+                    DiscoveredUrl::new(url, DiscoveryMethod::WaybackMachine, "wayback".to_string());
 
                 if is_listing {
                     discovered = discovered.as_listing_page();
@@ -277,7 +273,9 @@ mod tests {
         assert!(WaybackSource::is_document_mimetype("application/msword"));
 
         assert!(!WaybackSource::is_document_mimetype("image/png"));
-        assert!(!WaybackSource::is_document_mimetype("application/javascript"));
+        assert!(!WaybackSource::is_document_mimetype(
+            "application/javascript"
+        ));
     }
 
     #[test]

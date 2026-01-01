@@ -238,8 +238,7 @@ mod tests {
 
     #[test]
     fn custom_paths() {
-        let source =
-            CommonPathsSource::new().with_custom_paths(vec!["/custom/path/".to_string()]);
+        let source = CommonPathsSource::new().with_custom_paths(vec!["/custom/path/".to_string()]);
         let paths = source.all_paths();
 
         assert!(paths.contains(&"/custom/path/"));

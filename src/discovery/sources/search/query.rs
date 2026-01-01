@@ -155,12 +155,7 @@ impl CommonQueries {
     pub fn listing_queries(domain: &str) -> Vec<String> {
         Self::listing_page_terms()
             .iter()
-            .map(|term| {
-                QueryBuilder::new()
-                    .site(domain)
-                    .phrase(term)
-                    .build()
-            })
+            .map(|term| QueryBuilder::new().site(domain).phrase(term).build())
             .collect()
     }
 
@@ -168,12 +163,7 @@ impl CommonQueries {
     pub fn custom_queries(domain: &str, terms: &[String]) -> Vec<String> {
         terms
             .iter()
-            .map(|term| {
-                QueryBuilder::new()
-                    .site(domain)
-                    .term(term)
-                    .build()
-            })
+            .map(|term| QueryBuilder::new().site(domain).term(term).build())
             .collect()
     }
 }
@@ -190,10 +180,7 @@ mod tests {
 
     #[test]
     fn site_with_term() {
-        let query = QueryBuilder::new()
-            .site("example.gov")
-            .term("FOIA")
-            .build();
+        let query = QueryBuilder::new().site("example.gov").term("FOIA").build();
         assert_eq!(query, "site:example.gov FOIA");
     }
 

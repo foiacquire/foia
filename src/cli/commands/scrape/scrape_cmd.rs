@@ -429,12 +429,8 @@ async fn cmd_scrape_single_tui(
         update_status(&format!("{} running discovery...", source_id));
 
         if let Some(base_url) = &scraper_config.base_url {
-            let discovery_urls = run_external_discovery(
-                base_url,
-                &scraper_config.discovery,
-                source_id,
-            )
-            .await;
+            let discovery_urls =
+                run_external_discovery(base_url, &scraper_config.discovery, source_id).await;
 
             if !discovery_urls.is_empty() {
                 let mut added = 0usize;
@@ -655,7 +651,11 @@ async fn run_external_discovery(
         let source = SitemapSource::new();
         match source.discover(base_url, &[], &config).await {
             Ok(urls) => {
-                tracing::info!("Sitemap discovery found {} URLs for {}", urls.len(), source_id);
+                tracing::info!(
+                    "Sitemap discovery found {} URLs for {}",
+                    urls.len(),
+                    source_id
+                );
                 all_urls.extend(urls);
             }
             Err(e) => {
@@ -670,7 +670,11 @@ async fn run_external_discovery(
         let source = WaybackSource::new();
         match source.discover(base_url, &[], &config).await {
             Ok(urls) => {
-                tracing::info!("Wayback discovery found {} URLs for {}", urls.len(), source_id);
+                tracing::info!(
+                    "Wayback discovery found {} URLs for {}",
+                    urls.len(),
+                    source_id
+                );
                 all_urls.extend(urls);
             }
             Err(e) => {
@@ -714,13 +718,12 @@ async fn run_external_discovery(
         match engine_config.engine.to_lowercase().as_str() {
             "duckduckgo" | "ddg" => {
                 let source = DuckDuckGoSource::new();
-                match source.discover(base_url, &terms, &engine_source_config).await {
+                match source
+                    .discover(base_url, &terms, &engine_source_config)
+                    .await
+                {
                     Ok(urls) => {
-                        tracing::info!(
-                            "DuckDuckGo found {} URLs for {}",
-                            urls.len(),
-                            source_id
-                        );
+                        tracing::info!("DuckDuckGo found {} URLs for {}", urls.len(), source_id);
                         all_urls.extend(urls);
                     }
                     Err(e) => {

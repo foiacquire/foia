@@ -872,7 +872,10 @@ pub async fn run() -> anyhow::Result<()> {
                 limit,
                 dry_run,
                 min_examples,
-            } => discover::cmd_discover_pattern(&settings, &source_id, limit, dry_run, min_examples).await,
+            } => {
+                discover::cmd_discover_pattern(&settings, &source_id, limit, dry_run, min_examples)
+                    .await
+            }
             DiscoverCommands::Search {
                 source_id,
                 engines,
@@ -920,7 +923,10 @@ pub async fn run() -> anyhow::Result<()> {
                 source_id,
                 extra_paths,
                 dry_run,
-            } => discover::cmd_discover_paths(&settings, &source_id, extra_paths.as_deref(), dry_run).await,
+            } => {
+                discover::cmd_discover_paths(&settings, &source_id, extra_paths.as_deref(), dry_run)
+                    .await
+            }
             DiscoverCommands::All {
                 source_id,
                 dry_run,

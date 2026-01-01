@@ -58,9 +58,8 @@ impl DuckDuckGoSource {
         let document = Html::parse_document(html);
 
         // DuckDuckGo HTML results are in <a class="result__a"> elements
-        let result_selector = Selector::parse("a.result__a").map_err(|e| {
-            DiscoveryError::Parse(format!("Failed to parse selector: {:?}", e))
-        })?;
+        let result_selector = Selector::parse("a.result__a")
+            .map_err(|e| DiscoveryError::Parse(format!("Failed to parse selector: {:?}", e)))?;
 
         // Snippet is in <a class="result__snippet">
         let _snippet_selector = Selector::parse("a.result__snippet").ok();

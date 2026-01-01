@@ -504,9 +504,15 @@ mod tests {
 
     #[test]
     fn strategy_type_display() {
-        assert_eq!(format!("{}", SelectionStrategyType::RoundRobin), "round-robin");
+        assert_eq!(
+            format!("{}", SelectionStrategyType::RoundRobin),
+            "round-robin"
+        );
         assert_eq!(format!("{}", SelectionStrategyType::Random), "random");
-        assert_eq!(format!("{}", SelectionStrategyType::PerDomain), "per-domain");
+        assert_eq!(
+            format!("{}", SelectionStrategyType::PerDomain),
+            "per-domain"
+        );
     }
 
     #[test]
