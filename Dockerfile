@@ -1,5 +1,5 @@
 # FOIAcquire - FOIA document acquisition and research system
-FROM alpine:latest
+FROM alpine:3.21
 
 ARG TARGETARCH
 ARG WITH_TESSERACT="false"
