@@ -145,8 +145,8 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 300)
         #[arg(long, default_value = "300")]
         interval: u64,
-        /// Config reload behavior in daemon mode
-        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        /// Config reload behavior in daemon mode [default: next-run, or inplace if flag used without value]
+        #[arg(short = 'r', long, value_enum, num_args = 0..=1, default_value = "next-run", default_missing_value = "inplace", require_equals = true)]
         reload: ReloadMode,
         /// Rate limit backend: memory, database (default), or redis
         #[arg(long, value_enum, default_value = "database")]
@@ -190,8 +190,8 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 60)
         #[arg(long, default_value = "60")]
         interval: u64,
-        /// Config reload behavior in daemon mode
-        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        /// Config reload behavior in daemon mode [default: next-run, or inplace if flag used without value]
+        #[arg(short = 'r', long, value_enum, num_args = 0..=1, default_value = "next-run", default_missing_value = "inplace", require_equals = true)]
         reload: ReloadMode,
     },
 
@@ -261,8 +261,8 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 60)
         #[arg(long, default_value = "60")]
         interval: u64,
-        /// Config reload behavior in daemon mode
-        #[arg(short = 'r', long, value_enum, default_value = "next-run")]
+        /// Config reload behavior in daemon mode [default: next-run, or inplace if flag used without value]
+        #[arg(short = 'r', long, value_enum, num_args = 0..=1, default_value = "next-run", default_missing_value = "inplace", require_equals = true)]
         reload: ReloadMode,
     },
 
