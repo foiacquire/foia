@@ -1081,7 +1081,10 @@ pub async fn cmd_db_dedup(
     let total_groups = groups.len();
     let total_duplicates: i64 = groups.iter().map(|g| g.doc_count - 1).sum();
 
-    println!("\n  Found {} duplicate groups ({} documents to remove)", total_groups, total_duplicates);
+    println!(
+        "\n  Found {} duplicate groups ({} documents to remove)",
+        total_groups, total_duplicates
+    );
 
     let pb = ProgressBar::new(total_groups as u64);
     pb.set_style(
@@ -1146,7 +1149,11 @@ pub async fn cmd_db_dedup(
                         .max_by_key(|(_, d)| {
                             let text_len = d.extracted_text.as_ref().map(|t| t.len()).unwrap_or(0);
                             let has_synopsis = d.synopsis.is_some() as usize * 1000;
-                            let has_tags = d.tags.as_ref().map(|t| if t != "[]" { 500 } else { 0 }).unwrap_or(0);
+                            let has_tags = d
+                                .tags
+                                .as_ref()
+                                .map(|t| if t != "[]" { 500 } else { 0 })
+                                .unwrap_or(0);
                             text_len + has_synopsis + has_tags
                         })
                         .map(|(i, _)| i)
@@ -1196,32 +1203,26 @@ pub async fn cmd_db_dedup(
                     // Delete in order respecting foreign keys
                     // 1. document_pages (references document_versions)
                     crate::with_conn!(pool, conn, {
-                        diesel::sql_query(
-                            "DELETE FROM document_pages WHERE document_id = $1",
-                        )
-                        .bind::<diesel::sql_types::Text, _>(*dup_id)
-                        .execute(&mut conn)
-                        .await
+                        diesel::sql_query("DELETE FROM document_pages WHERE document_id = $1")
+                            .bind::<diesel::sql_types::Text, _>(*dup_id)
+                            .execute(&mut conn)
+                            .await
                     })?;
 
                     // 2. virtual_files
                     crate::with_conn!(pool, conn, {
-                        diesel::sql_query(
-                            "DELETE FROM virtual_files WHERE document_id = $1",
-                        )
-                        .bind::<diesel::sql_types::Text, _>(*dup_id)
-                        .execute(&mut conn)
-                        .await
+                        diesel::sql_query("DELETE FROM virtual_files WHERE document_id = $1")
+                            .bind::<diesel::sql_types::Text, _>(*dup_id)
+                            .execute(&mut conn)
+                            .await
                     })?;
 
                     // 3. document_versions
                     crate::with_conn!(pool, conn, {
-                        diesel::sql_query(
-                            "DELETE FROM document_versions WHERE document_id = $1",
-                        )
-                        .bind::<diesel::sql_types::Text, _>(*dup_id)
-                        .execute(&mut conn)
-                        .await
+                        diesel::sql_query("DELETE FROM document_versions WHERE document_id = $1")
+                            .bind::<diesel::sql_types::Text, _>(*dup_id)
+                            .execute(&mut conn)
+                            .await
                     })?;
 
                     // 4. document_analysis_results (should be moved, but delete any remaining)
@@ -1236,22 +1237,18 @@ pub async fn cmd_db_dedup(
 
                     // 5. document_annotations (should be moved, but delete any remaining)
                     crate::with_conn!(pool, conn, {
-                        diesel::sql_query(
-                            "DELETE FROM document_annotations WHERE document_id = $1",
-                        )
-                        .bind::<diesel::sql_types::Text, _>(*dup_id)
-                        .execute(&mut conn)
-                        .await
+                        diesel::sql_query("DELETE FROM document_annotations WHERE document_id = $1")
+                            .bind::<diesel::sql_types::Text, _>(*dup_id)
+                            .execute(&mut conn)
+                            .await
                     })?;
 
                     // 6. Finally delete the document
                     crate::with_conn!(pool, conn, {
-                        diesel::sql_query(
-                            "DELETE FROM documents WHERE id = $1",
-                        )
-                        .bind::<diesel::sql_types::Text, _>(*dup_id)
-                        .execute(&mut conn)
-                        .await
+                        diesel::sql_query("DELETE FROM documents WHERE id = $1")
+                            .bind::<diesel::sql_types::Text, _>(*dup_id)
+                            .execute(&mut conn)
+                            .await
                     })?;
 
                     total_deleted += 1;

@@ -74,5 +74,4 @@ impl DbContext {
     pub fn config_history(&self) -> DieselConfigHistoryRepository {
         DieselConfigHistoryRepository::new(self.pool.clone())
     }
-
 }

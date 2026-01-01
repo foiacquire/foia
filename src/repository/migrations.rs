@@ -89,7 +89,9 @@ static POSTGRES_MIGRATION_FILES: &[(&str, &str)] = &[
     ),
     (
         "2025-01-01-000000",
-        include_str!("../../migrations/postgres/2025-01-01-000000_add_missing_unique_constraints/up.sql"),
+        include_str!(
+            "../../migrations/postgres/2025-01-01-000000_add_missing_unique_constraints/up.sql"
+        ),
     ),
 ];
 
