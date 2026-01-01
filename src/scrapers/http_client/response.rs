@@ -4,14 +4,48 @@ use std::collections::HashMap;
 
 use reqwest::{Response, StatusCode};
 
+/// Response body source - either pending (reqwest) or already fetched (browser).
+pub(crate) enum ResponseBody {
+    /// Pending response from reqwest.
+    Pending(Response),
+    /// Already fetched content (from browser).
+    Ready(Vec<u8>),
+}
+
 /// HTTP response wrapper.
 pub struct HttpResponse {
     pub status: StatusCode,
     pub headers: HashMap<String, String>,
-    pub(crate) response: Response,
+    pub(crate) body: ResponseBody,
 }
 
 impl HttpResponse {
+    /// Create from a reqwest response.
+    pub(crate) fn from_reqwest(
+        status: StatusCode,
+        headers: HashMap<String, String>,
+        response: Response,
+    ) -> Self {
+        Self {
+            status,
+            headers,
+            body: ResponseBody::Pending(response),
+        }
+    }
+
+    /// Create from already-fetched content (browser).
+    pub(crate) fn from_bytes(
+        status: StatusCode,
+        headers: HashMap<String, String>,
+        content: Vec<u8>,
+    ) -> Self {
+        Self {
+            status,
+            headers,
+            body: ResponseBody::Ready(content),
+        }
+    }
+
     /// Check if the response is 304 Not Modified.
     pub fn is_not_modified(&self) -> bool {
         self.status == StatusCode::NOT_MODIFIED
@@ -53,12 +87,21 @@ impl HttpResponse {
 
     /// Get response body as bytes.
     pub async fn bytes(self) -> Result<Vec<u8>, reqwest::Error> {
-        self.response.bytes().await.map(|b| b.to_vec())
+        match self.body {
+            ResponseBody::Pending(response) => response.bytes().await.map(|b| b.to_vec()),
+            ResponseBody::Ready(bytes) => Ok(bytes),
+        }
     }
 
     /// Get response body as text.
     pub async fn text(self) -> Result<String, reqwest::Error> {
-        self.response.text().await
+        match self.body {
+            ResponseBody::Pending(response) => response.text().await,
+            ResponseBody::Ready(bytes) => {
+                // Best effort UTF-8 conversion
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
+            }
+        }
     }
 }
 

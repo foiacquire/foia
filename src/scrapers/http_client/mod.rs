@@ -1,4 +1,7 @@
 //! HTTP client with ETag and conditional request support.
+//!
+//! When `BROWSER_URL` environment variable is set, requests are routed through
+//! the stealth browser for bot detection bypass.
 
 #![allow(dead_code)]
 
@@ -16,13 +19,21 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use reqwest::{Client, StatusCode};
+use tokio::sync::Mutex;
+use tracing::debug;
 
 use super::rate_limiter::RateLimiter;
 use super::InMemoryRateLimitBackend;
 use crate::models::{CrawlRequest, CrawlUrl, UrlStatus};
 use crate::repository::DieselCrawlRepository;
 
+#[cfg(feature = "browser")]
+use super::browser::{BrowserEngineConfig, BrowserFetcher};
+
 /// HTTP client with request logging and conditional request support.
+///
+/// When browser is configured (via `BROWSER_URL` env var), requests are
+/// automatically routed through the stealth browser.
 #[derive(Clone)]
 pub struct HttpClient {
     client: Client,
@@ -31,9 +42,23 @@ pub struct HttpClient {
     request_delay: Duration,
     referer: Option<String>,
     rate_limiter: RateLimiter,
+    #[cfg(feature = "browser")]
+    browser: Option<Arc<Mutex<BrowserFetcher>>>,
 }
 
 impl HttpClient {
+    /// Check if browser mode is available via BROWSER_URL env var.
+    #[cfg(feature = "browser")]
+    fn create_browser_fetcher() -> Option<Arc<Mutex<BrowserFetcher>>> {
+        if let Ok(url) = std::env::var("BROWSER_URL") {
+            debug!("BROWSER_URL set, enabling browser mode: {}", url);
+            let config = BrowserEngineConfig::default().with_env_overrides();
+            Some(Arc::new(Mutex::new(BrowserFetcher::new(config))))
+        } else {
+            None
+        }
+    }
+
     /// Create a new HTTP client.
     pub fn new(source_id: &str, timeout: Duration, request_delay: Duration) -> Self {
         Self::with_user_agent(source_id, timeout, request_delay, None)
@@ -69,6 +94,8 @@ impl HttpClient {
             request_delay,
             referer: None,
             rate_limiter: RateLimiter::new(backend),
+            #[cfg(feature = "browser")]
+            browser: Self::create_browser_fetcher(),
         }
     }
 
@@ -112,6 +139,8 @@ impl HttpClient {
             request_delay,
             referer: None,
             rate_limiter,
+            #[cfg(feature = "browser")]
+            browser: Self::create_browser_fetcher(),
         }
     }
 
@@ -134,7 +163,101 @@ impl HttpClient {
 
     /// Make a GET request with optional conditional headers.
     /// Uses adaptive rate limiting per domain.
+    /// When BROWSER_URL is configured, routes through stealth browser.
     pub async fn get(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Check if browser mode is enabled
+        #[cfg(feature = "browser")]
+        if let Some(ref browser) = self.browser {
+            return self.get_via_browser(browser, url).await;
+        }
+
+        self.get_via_reqwest(url, etag, last_modified).await
+    }
+
+    /// Fetch via stealth browser.
+    #[cfg(feature = "browser")]
+    async fn get_via_browser(
+        &self,
+        browser: &Arc<Mutex<BrowserFetcher>>,
+        url: &str,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Wait for rate limiter
+        let domain = self.rate_limiter.acquire(url).await;
+
+        let start = Instant::now();
+
+        // Fetch via browser
+        let mut fetcher = browser.lock().await;
+        let result = fetcher.fetch(url).await;
+        drop(fetcher); // Release lock early
+
+        let duration = start.elapsed();
+
+        match result {
+            Ok(browser_response) => {
+                let status_code = browser_response.status;
+
+                // Create request log
+                let mut request_log =
+                    CrawlRequest::new(self.source_id.clone(), url.to_string(), "GET".to_string());
+                request_log.response_at = Some(Utc::now());
+                request_log.duration_ms = Some(duration.as_millis() as u64);
+                request_log.response_status = Some(status_code);
+
+                // Log the request
+                if let Some(repo) = &self.crawl_repo {
+                    let _ = repo.log_request(&request_log).await;
+                }
+
+                // Report success to rate limiter
+                if let Some(ref domain) = domain {
+                    if (200..400).contains(&status_code) {
+                        self.rate_limiter.report_success(domain).await;
+                    } else if status_code == 429 || status_code == 503 {
+                        self.rate_limiter
+                            .report_rate_limit(domain, status_code)
+                            .await;
+                    }
+                }
+
+                // Apply base delay
+                tokio::time::sleep(self.request_delay).await;
+
+                // Build response headers
+                let mut headers = HashMap::new();
+                headers.insert("content-type".to_string(), browser_response.content_type);
+
+                Ok(HttpResponse::from_bytes(
+                    StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK),
+                    headers,
+                    browser_response.content.into_bytes(),
+                ))
+            }
+            Err(e) => {
+                // Browser fetch failed - log and fall back to reqwest
+                debug!(
+                    "Browser fetch failed for {}: {}, falling back to reqwest",
+                    url, e
+                );
+
+                // Report to rate limiter
+                if let Some(ref domain) = domain {
+                    self.rate_limiter.report_server_error(domain).await;
+                }
+
+                // Fall back to direct request
+                self.get_via_reqwest(url, None, None).await
+            }
+        }
+    }
+
+    /// Fetch via reqwest (direct HTTP).
+    async fn get_via_reqwest(
         &self,
         url: &str,
         etag: Option<&str>,
@@ -217,17 +340,17 @@ impl HttpClient {
         // Apply base delay (rate limiter handles additional adaptive delay)
         tokio::time::sleep(self.request_delay).await;
 
-        Ok(HttpResponse {
-            status: response.status(),
-            headers: response_headers,
+        Ok(HttpResponse::from_reqwest(
+            response.status(),
+            response_headers,
             response,
-        })
+        ))
     }
 
     /// Get page content as text.
     pub async fn get_text(&self, url: &str) -> Result<String, reqwest::Error> {
         let response = self.get(url, None, None).await?;
-        response.response.text().await
+        response.text().await
     }
 
     /// Make a HEAD request to check headers without downloading content.
