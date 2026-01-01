@@ -9,6 +9,7 @@ use super::browser::{
     default_headless, default_timeout, BrowserEngineConfig, BrowserEngineType,
     SelectionStrategyType,
 };
+use crate::discovery::config::ExternalDiscoveryConfig;
 
 /// Scraper configuration from JSON.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -183,6 +184,17 @@ pub struct DiscoveryConfig {
     /// Whether to expand search queries using LLM (generates related terms)
     #[serde(default)]
     pub expand_search_terms: bool,
+
+    /// External discovery configuration (search engines, sitemaps, Wayback, etc.)
+    #[serde(default, skip_serializing_if = "ExternalDiscoveryConfig::is_default")]
+    pub external: ExternalDiscoveryConfig,
+}
+
+impl ExternalDiscoveryConfig {
+    /// Check if this config is all defaults (for skip_serializing_if).
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl DiscoveryConfig {

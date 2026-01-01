@@ -3,7 +3,7 @@
 //! This module provides a pluggable architecture for discovering documents
 //! through search engines, sitemaps, Wayback Machine, and intelligent term extraction.
 
-mod config;
+pub mod config;
 mod result;
 
 pub mod sources;
