@@ -3,12 +3,16 @@
 //! This module provides a pluggable architecture for discovering documents
 //! through search engines, sitemaps, Wayback Machine, and intelligent term extraction.
 
+#![allow(dead_code)] // Discovery module has extensibility APIs for future use
+
 pub mod config;
 mod result;
 
 pub mod sources;
 pub mod term_extraction;
 
+// Re-export config types for public API
+#[allow(unused_imports)]
 pub use config::{
     DiscoverySourceConfig, ExternalDiscoveryConfig, SearchEngineSourceConfig, TermExtractionConfig,
 };

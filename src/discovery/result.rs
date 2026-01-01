@@ -57,7 +57,7 @@ impl DiscoveredUrl {
     }
 
     /// Mark this URL as a listing page.
-    pub fn as_listing_page(mut self) -> Self {
+    pub fn listing_page(mut self) -> Self {
         self.is_listing_page = true;
         self.confidence = (self.confidence + 0.2).min(1.0);
         self
@@ -153,7 +153,7 @@ mod tests {
             "google".to_string(),
         )
         .with_query("site:example.gov reports".to_string())
-        .as_listing_page()
+        .listing_page()
         .with_confidence(0.9);
 
         assert_eq!(url.query_used, Some("site:example.gov reports".to_string()));

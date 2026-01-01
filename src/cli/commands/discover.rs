@@ -547,7 +547,7 @@ pub async fn cmd_browser_test(
 }
 
 /// Helper to get base URL for a source from config.
-async fn get_source_base_url(settings: &Settings, source_id: &str) -> anyhow::Result<String> {
+async fn get_source_base_url(_settings: &Settings, source_id: &str) -> anyhow::Result<String> {
     use crate::config::Config;
 
     let config = Config::load().await;

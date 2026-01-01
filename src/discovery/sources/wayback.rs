@@ -187,7 +187,7 @@ impl DiscoverySource for WaybackSource {
 
         // Skip header row
         let data_rows =
-            if !rows.is_empty() && rows[0].get(0).map(|s| s.as_str()) == Some("original") {
+            if rows.first().and_then(|r| r.first()).map(|s| s.as_str()) == Some("original") {
                 &rows[1..]
             } else {
                 &rows[..]
@@ -228,7 +228,7 @@ impl DiscoverySource for WaybackSource {
                     DiscoveredUrl::new(url, DiscoveryMethod::WaybackMachine, "wayback".to_string());
 
                 if is_listing {
-                    discovered = discovered.as_listing_page();
+                    discovered = discovered.listing_page();
                 }
 
                 discovered.detect_listing_page();

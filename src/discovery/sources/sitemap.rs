@@ -283,7 +283,7 @@ impl DiscoverySource for SitemapSource {
                     DiscoveredUrl::new(url, DiscoveryMethod::Sitemap, "sitemap".to_string());
 
                 if is_listing {
-                    discovered = discovered.as_listing_page();
+                    discovered = discovered.listing_page();
                 }
 
                 discovered.detect_listing_page();
