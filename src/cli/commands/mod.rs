@@ -239,9 +239,13 @@ enum Commands {
         force: bool,
     },
 
-    /// Annotate documents using local LLM (generates synopsis and tags)
+    /// Annotate documents using LLM (generates synopsis and tags)
     Annotate {
+        #[command(subcommand)]
+        command: Option<AnnotateCommands>,
+
         /// Source ID (optional, processes all sources if not specified)
+        #[arg(long)]
         source_id: Option<String>,
         /// Specific document ID to process
         #[arg(long)]
@@ -561,6 +565,19 @@ enum DiscoverCommands {
 }
 
 #[derive(Subcommand)]
+enum AnnotateCommands {
+    /// Reset annotations to allow re-processing
+    Reset {
+        /// Source ID (optional, resets all sources if not specified)
+        #[arg(long)]
+        source_id: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DbCommands {
     /// Run database migrations
     Migrate {
@@ -786,6 +803,7 @@ pub async fn run() -> anyhow::Result<()> {
             force,
         } => scrape::cmd_refresh(&settings, source_id.as_deref(), workers, limit, force).await,
         Commands::Annotate {
+            command,
             source_id,
             doc_id,
             limit,
@@ -794,19 +812,24 @@ pub async fn run() -> anyhow::Result<()> {
             daemon,
             interval,
             reload,
-        } => {
-            annotate::cmd_annotate(
-                &settings,
-                source_id.as_deref(),
-                doc_id.as_deref(),
-                limit,
-                endpoint,
-                model,
-                daemon,
-                interval,
-                reload,
-            )
-            .await
+        } => match command {
+            Some(AnnotateCommands::Reset { source_id, confirm }) => {
+                annotate::cmd_annotate_reset(&settings, source_id.as_deref(), confirm).await
+            }
+            None => {
+                annotate::cmd_annotate(
+                    &settings,
+                    source_id.as_deref(),
+                    doc_id.as_deref(),
+                    limit,
+                    endpoint,
+                    model,
+                    daemon,
+                    interval,
+                    reload,
+                )
+                .await
+            }
         }
         Commands::DetectDates {
             source_id,

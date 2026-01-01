@@ -543,11 +543,15 @@ impl Config {
         let ctx = DieselDbContext::from_sqlite_path(db_path, &docs_dir).ok()?;
         let entry = ctx.config_history().get_latest().await.ok()??;
 
-        match entry.format.to_lowercase().as_str() {
-            "json" => serde_json::from_str(&entry.data).ok(),
-            "toml" => toml::from_str(&entry.data).ok(),
-            _ => serde_json::from_str(&entry.data).ok(),
-        }
+        let mut config: Config = match entry.format.to_lowercase().as_str() {
+            "json" => serde_json::from_str(&entry.data).ok()?,
+            "toml" => toml::from_str(&entry.data).ok()?,
+            _ => serde_json::from_str(&entry.data).ok()?,
+        };
+
+        // Apply environment variable overrides
+        config.llm = config.llm.with_env_overrides();
+        Some(config)
     }
 
     /// Save configuration to database history if it has changed.

@@ -464,3 +464,56 @@ pub async fn cmd_detect_dates(
 
     Ok(())
 }
+
+/// Reset annotations for documents, allowing them to be re-annotated.
+pub async fn cmd_annotate_reset(
+    settings: &Settings,
+    source_id: Option<&str>,
+    confirm: bool,
+) -> anyhow::Result<()> {
+    let ctx = settings.create_db_context()?;
+    let doc_repo = ctx.documents();
+
+    // Count how many documents would be affected
+    let count = doc_repo.count_annotated(source_id).await?;
+
+    if count == 0 {
+        println!("{} No annotated documents found to reset", style("!").yellow());
+        return Ok(());
+    }
+
+    let scope = source_id.unwrap_or("all sources");
+    println!(
+        "{} Found {} annotated documents in {}",
+        style("→").cyan(),
+        count,
+        scope
+    );
+
+    if !confirm {
+        print!(
+            "Reset annotations for {} documents? This will clear synopses and tags. [y/N] ",
+            count
+        );
+        use std::io::Write;
+        std::io::stdout().flush()?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{} Cancelled", style("!").yellow());
+            return Ok(());
+        }
+    }
+
+    let reset_count = doc_repo.reset_annotations(source_id).await?;
+
+    println!(
+        "{} Reset {} documents - they will be re-annotated on next run",
+        style("✓").green(),
+        reset_count
+    );
+
+    Ok(())
+}

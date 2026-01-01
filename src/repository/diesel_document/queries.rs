@@ -907,4 +907,44 @@ impl DieselDocumentRepository {
 
         Ok(count)
     }
+
+    /// Reset annotations for documents, allowing them to be re-annotated.
+    /// Sets status back to ocr_complete and clears synopsis/tags.
+    pub async fn reset_annotations(&self, source_id: Option<&str>) -> Result<u64, DieselError> {
+        let count: u64 = with_conn!(self.pool, conn, {
+            let mut query = diesel::update(documents::table)
+                .filter(documents::status.eq("indexed"))
+                .into_boxed();
+
+            if let Some(sid) = source_id {
+                query = query.filter(documents::source_id.eq(sid));
+            }
+
+            query
+                .set((
+                    documents::status.eq("ocr_complete"),
+                    documents::synopsis.eq(None::<String>),
+                    documents::tags.eq(None::<String>),
+                ))
+                .execute(&mut conn)
+                .await
+        })? as u64;
+
+        Ok(count)
+    }
+
+    /// Count documents that have been annotated (status = indexed).
+    pub async fn count_annotated(&self, source_id: Option<&str>) -> Result<u64, DieselError> {
+        with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .filter(documents::status.eq("indexed"))
+                .into_boxed();
+
+            if let Some(sid) = source_id {
+                query = query.filter(documents::source_id.eq(sid));
+            }
+
+            query.count().get_result::<i64>(&mut conn).await.map(|c| c as u64)
+        })
+    }
 }
