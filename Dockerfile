@@ -11,7 +11,7 @@ RUN apk add --no-cache ca-certificates su-exec python3 py3-pip poppler-utils \
          apk add --no-cache tesseract-ocr tesseract-ocr-data-eng; \
        fi \
     && if [ "$WITH_TOR" = "true" ]; then \
-         apk add --no-cache tor obfs4proxy; \
+         apk add --no-cache tor snowflake; \
        fi
 
 ENV TARGET_PATH=/opt/foiacquire
