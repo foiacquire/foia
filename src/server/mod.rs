@@ -567,4 +567,415 @@ mod tests {
         // When idle, status is "idle" and document_id is empty string
         assert!(json["status"] == "idle" || json["status"] == "complete");
     }
+
+    // ==========================================
+    // New API endpoint tests (v0.8.0)
+    // ==========================================
+
+    #[tokio::test]
+    async fn test_api_documents_list() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Check paginated response structure
+        assert!(json["items"].is_array());
+        assert!(json["page"].is_number());
+        assert!(json["per_page"].is_number());
+        assert!(json["total"].is_number());
+        assert!(json["total_pages"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_api_documents_list_with_filters() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents?source=test-source&per_page=10&page=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["per_page"], 10);
+        assert_eq!(json["page"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_api_documents_get() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        // First get a document ID from the list
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let doc_id = json["items"][0]["id"].as_str().unwrap();
+
+        // Now get that specific document
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/api/documents/{}", doc_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["id"], doc_id);
+        assert!(json["source_id"].is_string());
+        assert!(json["title"].is_string());
+        assert!(json["status"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_api_documents_get_not_found() {
+        let (app, _dir) = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents/nonexistent-doc-id")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_api_documents_versions() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        // Get a document ID first
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let doc_id = json["items"][0]["id"].as_str().unwrap();
+
+        // Get versions
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/api/documents/{}/versions", doc_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["document_id"], doc_id);
+        assert!(json["versions"].is_array());
+        assert!(json["version_count"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_api_annotations_list() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/annotations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["items"].is_array());
+        assert!(json["stats"]["annotated"].is_number());
+        assert!(json["stats"]["needing_annotation"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_api_annotations_stats() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/annotations/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["total_documents"].is_number());
+        assert!(json["annotated"].is_number());
+        assert!(json["needing_annotation"].is_number());
+        assert!(json["by_source"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_api_scrapers_list() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/scrapers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json.is_array());
+        // Should have at least the test source
+        let arr = json.as_array().unwrap();
+        assert!(!arr.is_empty());
+        assert!(arr[0]["id"].is_string());
+        assert!(arr[0]["name"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_api_scrapers_status() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/scrapers/test-source")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["source_id"], "test-source");
+        assert!(json["name"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_api_scrapers_queue() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/scrapers/queue?source=test-source")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["items"].is_array());
+        assert!(json["per_page"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_api_export_documents_json() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export/documents?format=json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap_or(""));
+        assert!(content_type.unwrap_or("").contains("json"));
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.is_array());
+    }
+
+    #[tokio::test]
+    async fn test_api_export_documents_csv() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export/documents?format=csv")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap_or(""));
+        assert!(content_type.unwrap_or("").contains("csv"));
+    }
+
+    #[tokio::test]
+    async fn test_api_export_stats() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["total_documents"].is_number());
+        assert!(json["by_type"].is_object());
+        assert!(json["by_source"].is_object());
+        assert!(json["by_status"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_api_export_annotations() {
+        let (app, _dir) = setup_test_app_with_data().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/export/annotations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap_or(""));
+        assert!(content_type.unwrap_or("").contains("json"));
+    }
+
+    #[tokio::test]
+    async fn test_api_versions_hash_not_found() {
+        let (app, _dir) = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/versions/hash/0000000000000000000000000000000000000000000000000000000000000000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert!(json["sources"].is_array());
+        assert!(json["sources"].as_array().unwrap().is_empty());
+    }
 }
