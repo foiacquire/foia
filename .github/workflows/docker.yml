@@ -102,77 +102,6 @@ jobs:
           docker stop chromium-test || true
           docker rm chromium-test || true
 
-  build-amd64:
-    name: Build amd64 Binaries
-    needs: lint
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - features: browser,postgres
-            artifact: foiacquire-browser-amd64
-          - features: browser,postgres,redis-backend
-            artifact: foiacquire-redis-amd64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake perl
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.artifact }}
-
-      - name: Build
-        run: cargo build --release --features "${{ matrix.features }}" --target x86_64-unknown-linux-musl
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: target/x86_64-unknown-linux-musl/release/foia
-
-  build-arm64:
-    name: Build arm64 Binaries
-    needs: lint
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - features: browser,postgres
-            artifact: foiacquire-browser-arm64
-          - features: browser,postgres,redis-backend
-            artifact: foiacquire-redis-arm64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.artifact }}
-
-      - name: Build
-        run: |
-          cross build --release --features "${{ matrix.features }}" --target aarch64-unknown-linux-musl
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: target/aarch64-unknown-linux-musl/release/foia
-
   chromium:
     name: Build Chromium Image
     needs: lint
@@ -253,35 +182,23 @@ jobs:
 
   foiacquire:
     name: Build FOIAcquire Image
-    needs: [build-amd64, build-arm64]
+    needs: lint
     runs-on: ubuntu-latest
     environment: release
     strategy:
       matrix:
         include:
           - tag: latest
-            artifact: foiacquire-browser
+            features: "browser,postgres"
             tesseract: "false"
           - tag: tesseract
-            artifact: foiacquire-browser
+            features: "browser,postgres"
             tesseract: "true"
           - tag: redis
-            artifact: foiacquire-redis
+            features: "browser,postgres,redis-backend"
             tesseract: "false"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download amd64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}-amd64
-          path: dist/amd64/
-
-      - name: Download arm64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}-arm64
-          path: dist/arm64/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -311,6 +228,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
           build-args: |
+            FEATURES=${{ matrix.features }}
             WITH_TESSERACT=${{ matrix.tesseract }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
