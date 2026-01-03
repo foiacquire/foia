@@ -11,9 +11,28 @@ These options apply to all commands:
 -c, --config <PATH>    Configuration file path
     --cwd              Resolve relative paths from current directory
 -v, --verbose          Enable verbose logging
+-D, --direct           Disable Tor (direct connection)
+    --no-obfuscation   Use Tor without pluggable transports
 -h, --help             Print help
 -V, --version          Print version
 ```
+
+### Privacy Modes
+
+By default, foiacquire routes traffic through Tor with obfuscation when the embedded-tor feature is enabled. Override with:
+
+| Flag | Description |
+|------|-------------|
+| `--direct` / `-D` | Disable Tor entirely (direct connection) |
+| `--no-obfuscation` | Use Tor without pluggable transports |
+
+Or via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `FOIACQUIRE_DIRECT=1` | Same as `--direct` |
+| `FOIACQUIRE_NO_OBFUSCATION=1` | Same as `--no-obfuscation` |
+| `SOCKS_PROXY` | Use external SOCKS5 proxy instead of embedded Tor |
 
 ## Initialization
 
@@ -190,10 +209,14 @@ foiacquire refresh [SOURCE_ID] [OPTIONS]
 
 ### import
 
+Import documents from various sources.
+
+#### import warc
+
 Import documents from WARC archive files.
 
 ```bash
-foiacquire import <FILES...> [OPTIONS]
+foiacquire import warc <FILES...> [OPTIONS]
 ```
 
 | Option | Description |
@@ -208,7 +231,49 @@ foiacquire import <FILES...> [OPTIONS]
 
 **Example:**
 ```bash
-foiacquire import archive.warc.gz --source archive_org --filter "\.pdf$"
+foiacquire import warc archive.warc.gz --source archive_org --filter "\.pdf$"
+```
+
+#### import url
+
+Import a single document from a URL.
+
+```bash
+foiacquire import url <URL> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source <ID>` | Source ID to assign (default: "manual") |
+| `--title <TITLE>` | Document title |
+
+**Example:**
+```bash
+foiacquire import url https://example.gov/document.pdf --source manual --title "FOIA Response"
+```
+
+#### import stdin
+
+Import document content from stdin.
+
+```bash
+foiacquire import stdin [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source <ID>` | Source ID to assign (default: "manual") |
+| `--title <TITLE>` | Document title (required) |
+| `--url <URL>` | Original URL (optional) |
+| `--mimetype <TYPE>` | MIME type (default: auto-detect) |
+
+**Examples:**
+```bash
+# Import a PDF from stdin
+cat document.pdf | foiacquire import stdin --title "My Document" --mimetype application/pdf
+
+# Pipe from curl
+curl -s https://example.gov/doc.pdf | foiacquire import stdin --title "Downloaded Doc" --url https://example.gov/doc.pdf
 ```
 
 ## Document Processing
@@ -288,14 +353,36 @@ foiacquire annotate [SOURCE_ID] [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--limit <N>` | Maximum documents |
-| `--endpoint <URL>` | Ollama endpoint |
+| `--endpoint <URL>` | LLM endpoint URL |
 | `--model <NAME>` | Model name |
 | `--daemon` | Run continuously |
 | `--interval <SECS>` | Daemon interval |
 
+**Examples:**
+```bash
+# Using Ollama (default)
+foiacquire annotate --limit 50 --model llama3.2
+
+# Using Groq (via environment)
+GROQ_API_KEY=gsk_... LLM_MODEL=llama-3.1-70b-versatile foiacquire annotate
+```
+
+### annotate reset
+
+Clear annotations to allow re-annotation.
+
+```bash
+foiacquire annotate reset [SOURCE_ID] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--limit <N>` | Maximum documents to reset |
+
 **Example:**
 ```bash
-foiacquire annotate --limit 50 --model llama3.2
+# Reset all annotations for a source
+foiacquire annotate reset fbi_vault
 ```
 
 ### detect-dates

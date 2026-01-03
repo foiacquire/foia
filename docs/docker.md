@@ -332,33 +332,64 @@ If you see permission errors:
 
 ## Building Custom Images
 
-### With Additional OCR Backends
+The Dockerfile supports build-time arguments for customization:
 
-```dockerfile
-FROM monokrome/foiacquire:latest
+### Build Arguments
 
-# Add Tesseract with additional languages
-RUN apk add --no-cache \
-    tesseract-ocr \
-    tesseract-ocr-data-eng \
-    tesseract-ocr-data-deu \
-    tesseract-ocr-data-fra
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `FEATURES` | `browser,postgres` | Cargo features to enable |
+| `WITH_TESSERACT` | `false` | Include Tesseract OCR |
+| `WITH_TOR` | `false` | Include Tor and Snowflake |
+
+### Examples
+
+```bash
+# Default build (browser + postgres)
+docker build -t foiacquire:local .
+
+# With Tesseract OCR
+docker build --build-arg WITH_TESSERACT=true -t foiacquire:tesseract .
+
+# With Tor support for privacy routing
+docker build --build-arg WITH_TOR=true -t foiacquire:tor .
+
+# Minimal build (no browser, no postgres)
+docker build --build-arg FEATURES="" -t foiacquire:minimal .
+
+# With Redis rate limiting
+docker build --build-arg FEATURES="browser,postgres,redis-backend" -t foiacquire:redis .
+
+# Full build with everything
+docker build \
+  --build-arg FEATURES="browser,postgres,redis-backend" \
+  --build-arg WITH_TESSERACT=true \
+  --build-arg WITH_TOR=true \
+  -t foiacquire:full .
 ```
 
-### Development Image
+### Multi-Platform Builds
+
+For cross-platform images (amd64 + arm64):
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg WITH_TESSERACT=true \
+  -t myregistry/foiacquire:custom \
+  --push .
+```
+
+### With Additional OCR Languages
 
 ```dockerfile
-FROM rust:latest as builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release --features postgres,browser
+FROM monokrome/foiacquire:tesseract
 
-FROM alpine:latest
-RUN apk add --no-cache ca-certificates su-exec
-COPY --from=builder /app/target/release/foiacquire /usr/local/bin/
-COPY bin/foiacquire-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
+# Add more Tesseract languages
+RUN apk add --no-cache \
+    tesseract-ocr-data-deu \
+    tesseract-ocr-data-fra \
+    tesseract-ocr-data-spa
 ```
 
 ## Health Checks

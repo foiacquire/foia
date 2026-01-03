@@ -43,10 +43,36 @@ The configuration file is discovered in this order:
 
 Environment variables override configuration file settings:
 
+### Database & Browser
+
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | Full database URL, e.g., `postgres://user:pass@host/db` or `sqlite:path.db` |
-| `BROWSER_URL` | Remote Chrome DevTools WebSocket URL |
+| `BROWSER_URL` | Remote Chrome DevTools WebSocket URL (comma-separated for pool) |
+| `BROWSER_SELECTION` | Browser selection strategy: `round-robin`, `random`, or `per-domain` |
+
+### Privacy & Networking
+
+| Variable | Description |
+|----------|-------------|
+| `SOCKS_PROXY` | External SOCKS5 proxy URL (e.g., `socks5://127.0.0.1:9050`) |
+| `FOIACQUIRE_DIRECT` | Set to `1` to disable Tor (direct connections) |
+| `FOIACQUIRE_NO_OBFUSCATION` | Set to `1` to use Tor without pluggable transports |
+
+When embedded Tor is enabled (default), traffic is routed through Tor with obfuscation. Use these variables to override:
+
+```bash
+# Use external Tor instance
+SOCKS_PROXY=socks5://localhost:9050 foiacquire scrape fbi_vault
+
+# Direct connection (no Tor)
+FOIACQUIRE_DIRECT=1 foiacquire scrape fbi_vault
+```
+
+### LLM Configuration
+
+| Variable | Description |
+|----------|-------------|
 | `LLM_ENABLED` | Enable/disable LLM (`true`/`false`) |
 | `LLM_PROVIDER` | LLM provider: `ollama` (default), `openai`, `groq`, or `together` |
 | `LLM_ENDPOINT` | API endpoint URL (auto-detected based on provider) |
@@ -59,6 +85,11 @@ Environment variables override configuration file settings:
 | `LLM_TAGS_PROMPT` | Custom tags prompt template |
 | `GROQ_API_KEY` | Groq API key (auto-selects Groq provider) |
 | `OPENAI_API_KEY` | OpenAI API key (auto-selects OpenAI provider) |
+
+### General
+
+| Variable | Description |
+|----------|-------------|
 | `RUST_LOG` | Log level (`error`, `warn`, `info`, `debug`, `trace`) |
 
 ## LLM Configuration

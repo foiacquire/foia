@@ -5,14 +5,16 @@ A command-line tool for acquiring, organizing, and searching FOIA documents from
 ## Features
 
 - **Multi-source scraping** - Configurable scrapers for FBI Vault, CIA Reading Room, MuckRock, DocumentCloud, and custom sources
+- **Privacy by default** - Routes traffic through Tor with pluggable transports; supports external SOCKS proxies
 - **Smart rate limiting** - Adaptive delays with exponential backoff to avoid blocks, with optional Redis backend for distributed deployments
 - **Content-addressable storage** - Documents stored by SHA-256 + BLAKE3 hash for deduplication
 - **Multiple OCR backends** - Tesseract (default), OCRS (pure Rust), PaddleOCR (GPU), or DeepSeek (VLM)
 - **Browser automation** - Chromium-based scraping for JavaScript-heavy sites with stealth mode for bot detection bypass
+- **Browser pool** - Load balance across multiple browser instances with round-robin, random, or per-domain strategies
 - **WARC import** - Import documents from Web Archive files with filtering and checkpointing
 - **Full-text search** - Search across document content and metadata
 - **Web UI** - Browse, search, and view documents through a local web interface
-- **LLM annotation** - Generate summaries and tags using Ollama
+- **LLM annotation** - Generate summaries and tags using Ollama, Groq, OpenAI, or Together.ai
 - **Database flexibility** - SQLite (default) or PostgreSQL for larger deployments
 - **Docker support** - Pre-built images for easy deployment
 
@@ -149,9 +151,12 @@ See [docs/configuration.md](docs/configuration.md) for full options.
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | Database connection (e.g., `postgres://user:pass@host/db`) |
-| `BROWSER_URL` | Remote Chrome DevTools URL (e.g., `ws://localhost:9222`) |
-| `LLM_ENDPOINT` | Ollama API endpoint |
+| `BROWSER_URL` | Remote Chrome DevTools URL (e.g., `ws://localhost:9222`), comma-separated for pool |
+| `SOCKS_PROXY` | External SOCKS5 proxy (e.g., `socks5://localhost:9050`) |
+| `FOIACQUIRE_DIRECT` | Set to `1` to disable Tor routing |
+| `LLM_PROVIDER` | LLM provider: `ollama`, `openai`, `groq`, or `together` |
 | `LLM_MODEL` | Model for annotation |
+| `GROQ_API_KEY` | Groq API key (auto-selects Groq provider) |
 | `RUST_LOG` | Log level (e.g., `debug`, `info`) |
 
 ## Docker
