@@ -9,6 +9,8 @@
 //! - Can be configured to bypass proxy for specific sources
 
 #![allow(dead_code)]
+// This module is the privacy wrapper - it's allowed to use reqwest directly
+#![allow(clippy::disallowed_methods)]
 
 mod response;
 mod user_agent;
@@ -156,13 +158,15 @@ impl HttpClient {
         Ok((client, mode))
     }
 
-    /// Create a new HTTP client with direct connections (no privacy routing).
+    /// Create a new HTTP client with privacy configuration from environment.
+    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
+    /// This makes privacy opt-out instead of opt-in for better security.
     pub fn new(source_id: &str, timeout: Duration, request_delay: Duration) -> Self {
         Self::with_user_agent(source_id, timeout, request_delay, None)
     }
 
     /// Create a new HTTP client with custom user agent configuration.
-    /// Uses direct connections (no privacy routing).
+    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
     /// - None: Use default FOIAcquire user agent
     /// - Some("impersonate"): Use random real browser user agent
     /// - Some(custom): Use custom user agent string
@@ -173,9 +177,20 @@ impl HttpClient {
         user_agent_config: Option<&str>,
     ) -> Self {
         let user_agent = resolve_user_agent(user_agent_config);
-        // None privacy config = Direct mode, which never fails
-        let (client, privacy_mode) = Self::build_client(&user_agent, timeout, None)
-            .expect("Direct mode client creation should never fail");
+
+        // Read privacy config from environment (SOCKS_PROXY, etc.)
+        // If no env vars set, this defaults to Direct mode (backward compatible)
+        let default_privacy = PrivacyConfig::default().with_env_overrides();
+
+        // Build client with env privacy config
+        // If SOCKS_PROXY is set but invalid, fall back to direct mode with warning
+        let (client, privacy_mode) = Self::build_client(&user_agent, timeout, Some(&default_privacy))
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to configure privacy from environment: {}", e);
+                eprintln!("         Falling back to direct connections (no privacy)");
+                Self::build_client(&user_agent, timeout, None)
+                    .expect("Direct mode fallback should never fail")
+            });
 
         // Default in-memory backend with request_delay as base
         let backend = Arc::new(InMemoryRateLimitBackend::new(
@@ -230,6 +245,7 @@ impl HttpClient {
     }
 
     /// Create a new HTTP client with a shared rate limiter.
+    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
     pub fn with_rate_limiter(
         source_id: &str,
         timeout: Duration,
@@ -246,7 +262,7 @@ impl HttpClient {
     }
 
     /// Create a new HTTP client with a shared rate limiter and custom user agent.
-    /// Uses direct connections (no privacy routing).
+    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
     pub fn with_rate_limiter_and_user_agent(
         source_id: &str,
         timeout: Duration,
@@ -255,9 +271,18 @@ impl HttpClient {
         user_agent_config: Option<&str>,
     ) -> Self {
         let user_agent = resolve_user_agent(user_agent_config);
-        // None privacy config = Direct mode, which never fails
-        let (client, privacy_mode) = Self::build_client(&user_agent, timeout, None)
-            .expect("Direct mode client creation should never fail");
+
+        // Read privacy config from environment (SOCKS_PROXY, etc.)
+        let default_privacy = PrivacyConfig::default().with_env_overrides();
+
+        // Build client with env privacy config
+        let (client, privacy_mode) = Self::build_client(&user_agent, timeout, Some(&default_privacy))
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to configure privacy from environment: {}", e);
+                eprintln!("         Falling back to direct connections (no privacy)");
+                Self::build_client(&user_agent, timeout, None)
+                    .expect("Direct mode fallback should never fail")
+            });
 
         Self {
             client,
@@ -516,6 +541,309 @@ impl HttpClient {
     pub async fn get_text(&self, url: &str) -> Result<String, reqwest::Error> {
         let response = self.get(url, None, None).await?;
         response.text().await
+    }
+
+    /// GET request with custom headers.
+    pub async fn get_with_headers(
+        &self,
+        url: &str,
+        headers: HashMap<String, String>,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Wait for rate limiter before making request
+        let domain = self.rate_limiter.acquire(url).await;
+
+        let mut request = self.client.get(url);
+        for (name, value) in &headers {
+            request = request.header(name, value);
+        }
+
+        // Create request log
+        let mut request_log =
+            CrawlRequest::new(self.source_id.clone(), url.to_string(), "GET".to_string());
+        request_log.request_headers = headers.clone();
+
+        let start = Instant::now();
+        let response = request.send().await?;
+        let duration = start.elapsed();
+
+        let status_code = response.status().as_u16();
+
+        // Update request log
+        request_log.response_at = Some(Utc::now());
+        request_log.duration_ms = Some(duration.as_millis() as u64);
+        request_log.response_status = Some(status_code);
+
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (name, value) in response.headers() {
+            if let Ok(v) = value.to_str() {
+                response_headers.insert(name.to_string(), v.to_string());
+            }
+        }
+        request_log.response_headers = response_headers.clone();
+
+        // Log the request
+        if let Some(repo) = &self.crawl_repo {
+            let _ = repo.log_request(&request_log).await;
+        }
+
+        // Report status to rate limiter for adaptive backoff
+        if let Some(ref domain) = domain {
+            if status_code == 429 || status_code == 503 {
+                self.rate_limiter
+                    .report_rate_limit(domain, status_code)
+                    .await;
+            } else if status_code >= 500 {
+                self.rate_limiter.report_server_error(domain).await;
+            } else if response.status().is_success() {
+                self.rate_limiter.report_success(domain).await;
+            }
+        }
+
+        // Apply base delay
+        tokio::time::sleep(self.request_delay).await;
+
+        Ok(HttpResponse::from_reqwest(
+            response.status(),
+            response_headers,
+            response,
+        ))
+    }
+
+    /// Make a POST request with form data.
+    ///
+    /// Note: Browser pool is not used for POST requests - they always go through reqwest.
+    pub async fn post<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        form: &T,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        self.post_via_reqwest(url, form).await
+    }
+
+    /// Make a POST request with JSON body.
+    ///
+    /// Note: Browser pool is not used for POST requests - they always go through reqwest.
+    pub async fn post_json<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        json: &T,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        self.post_json_via_reqwest(url, json).await
+    }
+
+    /// POST JSON request with custom headers.
+    pub async fn post_json_with_headers<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        json: &T,
+        headers: HashMap<String, String>,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Wait for rate limiter before making request
+        let domain = self.rate_limiter.acquire(url).await;
+
+        let mut request = self.client.post(url).json(json);
+        for (name, value) in &headers {
+            request = request.header(name, value);
+        }
+
+        // Create request log
+        let mut request_log =
+            CrawlRequest::new(self.source_id.clone(), url.to_string(), "POST".to_string());
+        request_log.request_headers = headers.clone();
+
+        let start = Instant::now();
+        let response = request.send().await?;
+        let duration = start.elapsed();
+
+        let status_code = response.status().as_u16();
+
+        // Update request log
+        request_log.response_at = Some(Utc::now());
+        request_log.duration_ms = Some(duration.as_millis() as u64);
+        request_log.response_status = Some(status_code);
+
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (name, value) in response.headers() {
+            if let Ok(v) = value.to_str() {
+                response_headers.insert(name.to_string(), v.to_string());
+            }
+        }
+        request_log.response_headers = response_headers.clone();
+
+        // Log the request
+        if let Some(repo) = &self.crawl_repo {
+            let _ = repo.log_request(&request_log).await;
+        }
+
+        // Report status to rate limiter for adaptive backoff
+        if let Some(ref domain) = domain {
+            if status_code == 429 || status_code == 503 {
+                self.rate_limiter
+                    .report_rate_limit(domain, status_code)
+                    .await;
+            } else if status_code >= 500 {
+                self.rate_limiter.report_server_error(domain).await;
+            } else if response.status().is_success() {
+                self.rate_limiter.report_success(domain).await;
+            }
+        }
+
+        // Apply base delay
+        tokio::time::sleep(self.request_delay).await;
+
+        Ok(HttpResponse::from_reqwest(
+            response.status(),
+            response_headers,
+            response,
+        ))
+    }
+
+    /// POST via reqwest (direct HTTP).
+    async fn post_via_reqwest<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        form: &T,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Wait for rate limiter before making request
+        let domain = self.rate_limiter.acquire(url).await;
+
+        let request = self.client.post(url).form(form);
+
+        // Create request log
+        let mut request_log =
+            CrawlRequest::new(self.source_id.clone(), url.to_string(), "POST".to_string());
+
+        let start = Instant::now();
+        let response = request.send().await?;
+        let duration = start.elapsed();
+
+        let status_code = response.status().as_u16();
+
+        // Update request log
+        request_log.response_at = Some(Utc::now());
+        request_log.duration_ms = Some(duration.as_millis() as u64);
+        request_log.response_status = Some(status_code);
+
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (name, value) in response.headers() {
+            if let Ok(v) = value.to_str() {
+                response_headers.insert(name.to_string(), v.to_string());
+            }
+        }
+        request_log.response_headers = response_headers.clone();
+
+        // Log the request
+        if let Some(repo) = &self.crawl_repo {
+            let _ = repo.log_request(&request_log).await;
+        }
+
+        // Report status to rate limiter for adaptive backoff
+        if let Some(ref domain) = domain {
+            let has_retry_after = response_headers.contains_key("retry-after");
+
+            if status_code == 429 || status_code == 503 {
+                // Definite rate limit
+                self.rate_limiter
+                    .report_rate_limit(domain, status_code)
+                    .await;
+            } else if status_code == 403 {
+                // Possible rate limit - needs pattern detection
+                self.rate_limiter
+                    .report_403(domain, url, has_retry_after)
+                    .await;
+            } else if status_code >= 500 {
+                // Server error - mild backoff
+                self.rate_limiter.report_server_error(domain).await;
+            } else if response.status().is_success() {
+                // Success - may recover from backoff
+                self.rate_limiter.report_success(domain).await;
+            }
+        }
+
+        // Apply base delay (rate limiter handles additional adaptive delay)
+        tokio::time::sleep(self.request_delay).await;
+
+        Ok(HttpResponse::from_reqwest(
+            response.status(),
+            response_headers,
+            response,
+        ))
+    }
+
+    /// POST JSON via reqwest (direct HTTP).
+    async fn post_json_via_reqwest<T: serde::Serialize + ?Sized>(
+        &self,
+        url: &str,
+        json: &T,
+    ) -> Result<HttpResponse, reqwest::Error> {
+        // Wait for rate limiter before making request
+        let domain = self.rate_limiter.acquire(url).await;
+
+        let request = self.client.post(url).json(json);
+
+        // Create request log
+        let mut request_log =
+            CrawlRequest::new(self.source_id.clone(), url.to_string(), "POST".to_string());
+
+        let start = Instant::now();
+        let response = request.send().await?;
+        let duration = start.elapsed();
+
+        let status_code = response.status().as_u16();
+
+        // Update request log
+        request_log.response_at = Some(Utc::now());
+        request_log.duration_ms = Some(duration.as_millis() as u64);
+        request_log.response_status = Some(status_code);
+
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (name, value) in response.headers() {
+            if let Ok(v) = value.to_str() {
+                response_headers.insert(name.to_string(), v.to_string());
+            }
+        }
+        request_log.response_headers = response_headers.clone();
+
+        // Log the request
+        if let Some(repo) = &self.crawl_repo {
+            let _ = repo.log_request(&request_log).await;
+        }
+
+        // Report status to rate limiter for adaptive backoff
+        if let Some(ref domain) = domain {
+            let has_retry_after = response_headers.contains_key("retry-after");
+
+            if status_code == 429 || status_code == 503 {
+                // Definite rate limit
+                self.rate_limiter
+                    .report_rate_limit(domain, status_code)
+                    .await;
+            } else if status_code == 403 {
+                // Possible rate limit - needs pattern detection
+                self.rate_limiter
+                    .report_403(domain, url, has_retry_after)
+                    .await;
+            } else if status_code >= 500 {
+                // Server error - mild backoff
+                self.rate_limiter.report_server_error(domain).await;
+            } else if response.status().is_success() {
+                // Success - may recover from backoff
+                self.rate_limiter.report_success(domain).await;
+            }
+        }
+
+        // Apply base delay (rate limiter handles additional adaptive delay)
+        tokio::time::sleep(self.request_delay).await;
+
+        Ok(HttpResponse::from_reqwest(
+            response.status(),
+            response_headers,
+            response,
+        ))
     }
 
     /// Make a HEAD request to check headers without downloading content.

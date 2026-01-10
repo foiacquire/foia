@@ -1,0 +1,82 @@
+#!/bin/bash
+# Pre-commit hook to catch privacy violations before they're committed
+#
+# To install:
+#   ln -sf ../../scripts/pre-commit-hook .git/hooks/pre-commit
+#
+# Or copy:
+#   cp scripts/pre-commit-hook .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+
+echo "Running pre-commit privacy checks..."
+
+# Run the privacy check script in quick mode (just staged files)
+# Get list of staged Rust files
+STAGED_RS_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$')
+
+if [ -z "$STAGED_RS_FILES" ]; then
+    echo "✓ No Rust files staged, skipping privacy checks"
+    exit 0
+fi
+
+echo "Checking staged files: $STAGED_RS_FILES"
+echo ""
+
+VIOLATIONS=0
+
+# Quick check for direct reqwest usage
+echo "Checking for direct reqwest::Client usage..."
+for file in $STAGED_RS_FILES; do
+    if git diff --cached "$file" | grep -E '^\+.*reqwest::Client::' \
+        | grep -v "allow(clippy::disallowed_methods)" \
+        | grep -v "http_client/mod.rs" > /dev/null; then
+        echo "❌ Found direct reqwest::Client usage in $file"
+        git diff --cached "$file" | grep -E '^\+.*reqwest::Client::'
+        VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+done
+
+if [ $VIOLATIONS -eq 0 ]; then
+    echo "✓ No direct reqwest usage in staged files"
+fi
+echo ""
+
+# Quick check for Command::new with network tools
+echo "Checking for network commands without proxy handling..."
+for file in $STAGED_RS_FILES; do
+    if git diff --cached "$file" | grep -E '^\+.*Command::new.*(curl|wget|yt-dlp)' > /dev/null; then
+        # Check if the file has proxy handling
+        if ! grep -q "SOCKS_PROXY\|proxy" "$file"; then
+            echo "⚠️  Found network command in $file - ensure it handles SOCKS_PROXY"
+            git diff --cached "$file" | grep -E '^\+.*Command::new.*(curl|wget|yt-dlp)'
+        fi
+    fi
+done
+echo ""
+
+# Run clippy on staged files to catch disallowed methods
+echo "Running clippy on staged files..."
+if cargo clippy --all-features -- -D clippy::disallowed-methods 2>&1 | grep "error.*disallowed" > /dev/null; then
+    echo "❌ Clippy found disallowed methods"
+    cargo clippy --all-features -- -D clippy::disallowed-methods 2>&1 | grep -A 5 "error.*disallowed"
+    VIOLATIONS=$((VIOLATIONS + 1))
+else
+    echo "✓ No disallowed methods detected"
+fi
+echo ""
+
+if [ $VIOLATIONS -gt 0 ]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "❌ Pre-commit check failed with $VIOLATIONS violation(s)"
+    echo ""
+    echo "Fix the issues above or:"
+    echo "  - Add appropriate #[allow(clippy::disallowed_methods)] with justification"
+    echo "  - Skip this hook with: git commit --no-verify (not recommended)"
+    echo ""
+    echo "See CONTRIBUTING.md for privacy guidelines"
+    exit 1
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ Pre-commit privacy checks passed!"
+exit 0

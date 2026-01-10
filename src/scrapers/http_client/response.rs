@@ -103,6 +103,20 @@ impl HttpResponse {
             }
         }
     }
+
+    /// Deserialize response body as JSON.
+    ///
+    /// Note: This should only be called on streaming (Pending) responses.
+    /// Cached responses don't support JSON deserialization.
+    pub async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T, reqwest::Error> {
+        match self.body {
+            ResponseBody::Pending(response) => response.json().await,
+            ResponseBody::Ready(_) => {
+                // JSON API responses are never cached, so this should never happen
+                panic!("Cannot deserialize JSON from cached response - JSON responses should not be cached")
+            }
+        }
+    }
 }
 
 /// HEAD response wrapper (no body, just headers).

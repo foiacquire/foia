@@ -693,6 +693,10 @@ pub async fn cmd_discover_search(
         let context = ExtractionContext::for_domain(&domain);
 
         // Fetch the homepage for template extraction
+        // ALLOWED: One-off homepage fetch in CLI command for term extraction
+        // This is a lightweight operation outside the main scraping pipeline
+        // TODO: Consider passing privacy config through CLI arguments if needed
+        #[allow(clippy::disallowed_methods)]
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (compatible; FOIAcquire/1.0)")
             .timeout(std::time::Duration::from_secs(30))

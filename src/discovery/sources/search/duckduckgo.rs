@@ -4,52 +4,59 @@
 
 use async_trait::async_trait;
 use scraper::{Html, Selector};
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use super::QueryBuilder;
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::models::DiscoveryMethod;
+use crate::scrapers::HttpClient;
 
 /// DuckDuckGo search URL.
 const DDG_SEARCH_URL: &str = "https://html.duckduckgo.com/html/";
 
 /// Discovery source using DuckDuckGo search.
-pub struct DuckDuckGoSource {
-    client: reqwest::Client,
-}
+pub struct DuckDuckGoSource {}
 
 impl DuckDuckGoSource {
     /// Create a new DuckDuckGo source.
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+        Self {}
     }
 
     /// Search DuckDuckGo and extract result URLs.
-    async fn search(&self, query: &str) -> Result<Vec<SearchResult>, DiscoveryError> {
+    async fn search(
+        &self,
+        query: &str,
+        config: &DiscoverySourceConfig,
+    ) -> Result<Vec<SearchResult>, DiscoveryError> {
         debug!("DuckDuckGo search: {}", query);
 
-        let response = self
-            .client
-            .post(DDG_SEARCH_URL)
-            .form(&[("q", query), ("kl", "us-en")])
-            .send()
+        // Create HTTP client with privacy configuration
+        let client = HttpClient::with_privacy(
+            "duckduckgo",
+            Duration::from_secs(30),
+            Duration::from_millis(config.rate_limit_ms),
+            Some("impersonate"), // Use realistic browser user agent
+            &config.privacy,
+        )
+        .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))?;
+
+        let response = client
+            .post(DDG_SEARCH_URL, &[("q", query), ("kl", "us-en")])
             .await
             .map_err(DiscoveryError::Http)?;
 
-        if !response.status().is_success() {
+        if !response.status.is_success() {
             return Err(DiscoveryError::Unavailable(format!(
                 "DuckDuckGo returned {}",
-                response.status()
+                response.status
             )));
         }
 
-        let html = response.text().await.map_err(DiscoveryError::Http)?;
+        let html = response.text().await.map_err(|e| {
+            DiscoveryError::Parse(format!("Failed to read response text: {}", e))
+        })?;
         self.parse_results(&html)
     }
 
@@ -222,7 +229,7 @@ impl DiscoverySource for DuckDuckGoSource {
             // Build query with site: restriction
             let query = QueryBuilder::new().site(&domain).term(term).build();
 
-            match self.search(&query).await {
+            match self.search(&query, config).await {
                 Ok(results) => {
                     for result in results {
                         // Filter to target domain

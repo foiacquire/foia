@@ -52,7 +52,7 @@ impl Default for BrowserPoolConfig {
         Self {
             urls: Vec::new(),
             strategy: SelectionStrategyType::default(),
-            base_config: BrowserEngineConfig::default(),
+            base_config: BrowserEngineConfig::default().with_env_overrides(),
             unhealthy_threshold: 3,
             health_check_interval: Duration::from_secs(60),
         }
@@ -72,6 +72,7 @@ impl BrowserPoolConfig {
     ///
     /// - `BROWSER_URL` - Comma-separated list of browser URLs
     /// - `BROWSER_SELECTION` - Selection strategy (round-robin, random, per-domain)
+    /// - `SOCKS_PROXY` - Proxy server for browser traffic
     pub fn from_env() -> Option<Self> {
         let url_str = std::env::var("BROWSER_URL").ok()?;
         if url_str.is_empty() {
@@ -96,7 +97,7 @@ impl BrowserPoolConfig {
         Some(Self {
             urls,
             strategy,
-            base_config: BrowserEngineConfig::default(),
+            base_config: BrowserEngineConfig::default().with_env_overrides(),
             ..Default::default()
         })
     }

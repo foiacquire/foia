@@ -78,6 +78,33 @@ jobs:
       - name: Run cargo check (all features)
         run: cargo check --release --all-features
 
+  privacy-check:
+    name: Privacy Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git grep
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-privacy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-privacy-
+
+      - name: Run privacy checks
+        run: ./scripts/check-privacy.sh
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

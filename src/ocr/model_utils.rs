@@ -73,12 +73,26 @@ impl ModelDirConfig {
 }
 
 /// Download a file from a URL to a local path using curl or wget.
+/// Respects SOCKS_PROXY environment variable for privacy routing.
 pub fn download_file(url: &str, dest: &Path) -> Result<(), OcrError> {
-    let output = Command::new("curl")
-        .args(["-fSL", "--progress-bar", "-o"])
-        .arg(dest)
-        .arg(url)
-        .status();
+    // Check for SOCKS proxy configuration
+    let socks_proxy = std::env::var("SOCKS_PROXY").ok();
+
+    let mut curl_cmd = Command::new("curl");
+    curl_cmd.args(["-fSL", "--progress-bar", "-o"]);
+    curl_cmd.arg(dest);
+    curl_cmd.arg(url);
+
+    // Add proxy args for curl if SOCKS_PROXY is set
+    if let Some(ref proxy) = socks_proxy {
+        curl_cmd.args(["--proxy", proxy]);
+        // Use socks5h:// to force DNS through proxy (prevent DNS leaks)
+        if !proxy.starts_with("socks5h://") && proxy.starts_with("socks5://") {
+            eprintln!("Warning: Use socks5h:// instead of socks5:// to prevent DNS leaks");
+        }
+    }
+
+    let output = curl_cmd.status();
 
     match output {
         Ok(status) if status.success() => Ok(()),
@@ -88,11 +102,23 @@ pub fn download_file(url: &str, dest: &Path) -> Result<(), OcrError> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Try wget as fallback
-            let output = Command::new("wget")
-                .args(["-q", "--show-progress", "-O"])
-                .arg(dest)
-                .arg(url)
-                .status();
+            let mut wget_cmd = Command::new("wget");
+            wget_cmd.args(["-q", "--show-progress", "-O"]);
+            wget_cmd.arg(dest);
+            wget_cmd.arg(url);
+
+            // Add proxy environment variables for wget
+            if let Some(ref proxy) = socks_proxy {
+                // wget uses http_proxy/https_proxy env vars, not command-line args
+                // Convert socks5:// to http:// for wget (it doesn't support SOCKS directly)
+                // If SOCKS is required, user should use curl
+                eprintln!("Note: wget doesn't support SOCKS proxy directly. Using curl is recommended for privacy.");
+                // Set as env vars anyway in case wget is built with SOCKS support
+                wget_cmd.env("http_proxy", proxy);
+                wget_cmd.env("https_proxy", proxy);
+            }
+
+            let output = wget_cmd.status();
 
             match output {
                 Ok(status) if status.success() => Ok(()),

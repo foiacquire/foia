@@ -62,6 +62,9 @@ async fn fetch_and_display_api_status(
     source_id: Option<&str>,
     json: bool,
 ) -> anyhow::Result<()> {
+    // ALLOWED: Fetching from local foiacquire API server (localhost)
+    // Privacy/Tor routing is not applicable for local API calls
+    #[allow(clippy::disallowed_methods)]
     let client = reqwest::Client::new();
 
     let url = if let Some(sid) = source_id {

@@ -7,9 +7,13 @@
 mod config;
 mod prompts;
 
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
 use tracing::{debug, info};
+
+use crate::privacy::PrivacyConfig;
+use crate::scrapers::HttpClient;
 
 pub use config::{LlmConfig, LlmProvider};
 
@@ -25,7 +29,7 @@ pub struct SummarizeResult {
 /// LLM client for document processing.
 pub struct LlmClient {
     config: LlmConfig,
-    client: Client,
+    privacy: PrivacyConfig,
 }
 
 // ============================================================================
@@ -90,18 +94,38 @@ struct OpenAIMessageResponse {
 
 impl LlmClient {
     /// Create a new LLM client with the given configuration.
+    ///
+    /// Uses default privacy configuration (no Tor/proxy).
     pub fn new(config: LlmConfig) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // 5 min timeout for slow models
-            .build()
-            .expect("Failed to create HTTP client");
+        Self {
+            config,
+            privacy: PrivacyConfig::default(),
+        }
+    }
 
-        Self { config, client }
+    /// Create a new LLM client with privacy configuration.
+    ///
+    /// External LLM services (OpenAI, Groq, etc.) will route through Tor/SOCKS if configured.
+    /// Local Ollama instances are not affected by privacy settings.
+    pub fn with_privacy(config: LlmConfig, privacy: PrivacyConfig) -> Self {
+        Self { config, privacy }
     }
 
     /// Get the config.
     pub fn config(&self) -> &LlmConfig {
         &self.config
+    }
+
+    /// Create an HTTP client for LLM requests.
+    fn create_client(&self) -> Result<HttpClient, Box<dyn std::error::Error>> {
+        HttpClient::with_privacy(
+            "llm",
+            Duration::from_secs(300), // 5 min timeout for slow models
+            Duration::from_millis(0), // No rate limiting for LLM
+            None,                     // Use default user agent
+            &self.privacy,
+        )
+        .map_err(|e| e.into())
     }
 
     /// Check if the LLM service is available.
@@ -110,18 +134,26 @@ impl LlmClient {
             return false;
         }
 
+        let client = match self.create_client() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
         let url = match self.config.provider {
             LlmProvider::Ollama => format!("{}/api/tags", self.config.endpoint),
             LlmProvider::OpenAI => format!("{}/v1/models", self.config.endpoint),
         };
 
-        let mut request = self.client.get(&url);
-        if let Some(ref api_key) = self.config.api_key {
-            request = request.header("Authorization", format!("Bearer {}", api_key));
-        }
+        let response = if let Some(ref api_key) = self.config.api_key {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
+            client.get_with_headers(&url, headers).await
+        } else {
+            client.get(&url, None, None).await
+        };
 
-        match request.send().await {
-            Ok(resp) => resp.status().is_success(),
+        match response {
+            Ok(resp) => resp.status.is_success(),
             Err(_) => false,
         }
     }
@@ -135,16 +167,18 @@ impl LlmClient {
     }
 
     async fn list_models_ollama(&self) -> Result<Vec<String>, LlmError> {
+        let client = self
+            .create_client()
+            .map_err(|e| LlmError::Connection(e.to_string()))?;
+
         let url = format!("{}/api/tags", self.config.endpoint);
-        let resp = self
-            .client
-            .get(&url)
-            .send()
+        let resp = client
+            .get(&url, None, None)
             .await
             .map_err(|e| LlmError::Connection(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            return Err(LlmError::Api(format!("HTTP {}", resp.status())));
+        if !resp.status.is_success() {
+            return Err(LlmError::Api(format!("HTTP {}", resp.status)));
         }
 
         #[derive(Deserialize)]
@@ -166,19 +200,23 @@ impl LlmClient {
     }
 
     async fn list_models_openai(&self) -> Result<Vec<String>, LlmError> {
-        let url = format!("{}/v1/models", self.config.endpoint);
-        let mut request = self.client.get(&url);
-        if let Some(ref api_key) = self.config.api_key {
-            request = request.header("Authorization", format!("Bearer {}", api_key));
-        }
-
-        let resp = request
-            .send()
-            .await
+        let client = self
+            .create_client()
             .map_err(|e| LlmError::Connection(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            return Err(LlmError::Api(format!("HTTP {}", resp.status())));
+        let url = format!("{}/v1/models", self.config.endpoint);
+
+        let resp = if let Some(ref api_key) = self.config.api_key {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
+            client.get_with_headers(&url, headers).await
+        } else {
+            client.get(&url, None, None).await
+        }
+        .map_err(|e| LlmError::Connection(e.to_string()))?;
+
+        if !resp.status.is_success() {
+            return Err(LlmError::Api(format!("HTTP {}", resp.status)));
         }
 
         #[derive(Deserialize)]
@@ -323,6 +361,10 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
 
     /// Call Ollama API with a prompt.
     async fn call_ollama(&self, prompt: &str) -> Result<String, LlmError> {
+        let client = self
+            .create_client()
+            .map_err(|e| LlmError::Connection(e.to_string()))?;
+
         let request = OllamaRequest {
             model: self.config.model.clone(),
             prompt: prompt.to_string(),
@@ -334,16 +376,13 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
         };
 
         let url = format!("{}/api/generate", self.config.endpoint);
-        let resp = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
+        let resp = client
+            .post_json(&url, &request)
             .await
             .map_err(|e| LlmError::Connection(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        if !resp.status.is_success() {
+            let status = resp.status;
             let body = resp.text().await.unwrap_or_default();
             return Err(LlmError::Api(format!("HTTP {}: {}", status, body)));
         }
@@ -358,6 +397,10 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
 
     /// Call OpenAI-compatible API (Groq, Together.ai, OpenAI, etc.)
     async fn call_openai(&self, prompt: &str) -> Result<String, LlmError> {
+        let client = self
+            .create_client()
+            .map_err(|e| LlmError::Connection(e.to_string()))?;
+
         let request = OpenAIRequest {
             model: self.config.model.clone(),
             messages: vec![OpenAIMessage {
@@ -369,19 +412,18 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
         };
 
         let url = format!("{}/v1/chat/completions", self.config.endpoint);
-        let mut req = self.client.post(&url).json(&request);
 
-        if let Some(ref api_key) = self.config.api_key {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
+        let resp = if let Some(ref api_key) = self.config.api_key {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
+            client.post_json_with_headers(&url, &request, headers).await
+        } else {
+            client.post_json(&url, &request).await
         }
+        .map_err(|e| LlmError::Connection(e.to_string()))?;
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| LlmError::Connection(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
+        if !resp.status.is_success() {
+            let status = resp.status;
             let body = resp.text().await.unwrap_or_default();
             return Err(LlmError::Api(format!("HTTP {}: {}", status, body)));
         }

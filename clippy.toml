@@ -1,0 +1,13 @@
+# Clippy configuration for foiacquire
+
+# Ban direct reqwest::Client usage - all HTTP operations must go through
+# HttpClient wrapper to ensure privacy (Tor/SOCKS proxy) is properly handled
+#
+# Note: HttpClient module itself uses #[allow(clippy::disallowed_methods)]
+# since it's the wrapper implementation
+disallowed-methods = [
+    # Ban direct Client construction
+    { path = "reqwest::Client::new", reason = "Use crate::scrapers::http_client::HttpClient instead to ensure privacy/Tor support" },
+    { path = "reqwest::Client::builder", reason = "Use crate::scrapers::http_client::HttpClient instead to ensure privacy/Tor support" },
+    { path = "reqwest::ClientBuilder::build", reason = "Use crate::scrapers::http_client::HttpClient instead to ensure privacy/Tor support" },
+]
