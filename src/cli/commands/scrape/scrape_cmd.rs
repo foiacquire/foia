@@ -436,7 +436,7 @@ async fn cmd_scrape_single_tui(
 
         if let Some(base_url) = &scraper_config.base_url {
             let discovery_urls =
-                run_external_discovery(base_url, &scraper_config.discovery, source_id).await;
+                run_external_discovery(base_url, &scraper_config.discovery, source_id, privacy_config).await;
 
             if !discovery_urls.is_empty() {
                 let mut added = 0usize;
@@ -638,6 +638,7 @@ async fn run_external_discovery(
     base_url: &str,
     discovery_config: &crate::scrapers::config::DiscoveryConfig,
     source_id: &str,
+    privacy_config: &crate::privacy::PrivacyConfig,
 ) -> Vec<crate::discovery::DiscoveredUrl> {
     use crate::discovery::sources::{
         common_paths::CommonPathsSource, search::DuckDuckGoSource, sitemap::SitemapSource,
@@ -650,6 +651,7 @@ async fn run_external_discovery(
 
     let config = DiscoverySourceConfig {
         max_results: 500, // Reasonable default per source
+        privacy: privacy_config.clone(),
         ..Default::default()
     };
 
@@ -721,7 +723,7 @@ async fn run_external_discovery(
             vec!["FOIA".to_string(), "documents".to_string()]
         };
 
-        let engine_source_config = engine_config.to_source_config();
+        let engine_source_config = engine_config.to_source_config(privacy_config);
 
         match engine_config.engine.to_lowercase().as_str() {
             "duckduckgo" | "ddg" => {

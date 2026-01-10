@@ -3,10 +3,12 @@
 //! Enumerates well-known paths that often contain documents on government sites.
 
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::models::DiscoveryMethod;
+use crate::scrapers::HttpClient;
 
 /// Common paths found on government document sites.
 const COMMON_PATHS: &[&str] = &[
@@ -68,7 +70,6 @@ const COMMON_PATHS: &[&str] = &[
 
 /// Discovery source that checks common document paths.
 pub struct CommonPathsSource {
-    client: reqwest::Client,
     /// Additional custom paths to check.
     custom_paths: Vec<String>,
 }
@@ -77,12 +78,6 @@ impl CommonPathsSource {
     /// Create a new common paths source.
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (compatible; FOIAcquire/1.0)")
-                .timeout(std::time::Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::limited(5))
-                .build()
-                .expect("Failed to create HTTP client"),
             custom_paths: Vec::new(),
         }
     }
@@ -101,16 +96,32 @@ impl CommonPathsSource {
     }
 
     /// Check if a path exists and returns a valid response.
-    async fn check_path(&self, base_url: &str, path: &str) -> Option<(String, u16)> {
+    async fn check_path(
+        &self,
+        base_url: &str,
+        path: &str,
+        config: &DiscoverySourceConfig,
+    ) -> Option<(String, u16)> {
         let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
-        match self.client.head(&url).send().await {
+        // Create HTTP client with privacy configuration
+        let client = match HttpClient::with_privacy(
+            "common_paths",
+            Duration::from_secs(30),
+            Duration::from_millis(config.rate_limit_ms),
+            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"),
+            &config.privacy,
+        ) {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+
+        match client.head(&url, None, None).await {
             Ok(response) => {
-                let status = response.status().as_u16();
+                let status = response.status.as_u16();
+                // Note: HttpClient already follows redirects, so we get the final URL
                 if status == 200 || status == 301 || status == 302 {
-                    // Get final URL after redirects
-                    let final_url = response.url().to_string();
-                    Some((final_url, status))
+                    Some((url.clone(), status))
                 } else {
                     None
                 }
@@ -180,7 +191,7 @@ impl DiscoverySource for CommonPathsSource {
         for chunk in all_paths.chunks(batch_size) {
             let futures: Vec<_> = chunk
                 .iter()
-                .map(|path| self.check_path(&base_url, path))
+                .map(|path| self.check_path(&base_url, path, config))
                 .collect();
 
             let results = futures::future::join_all(futures).await;

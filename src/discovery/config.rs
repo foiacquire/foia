@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::privacy::PrivacyConfig;
+
 /// Configuration for a single discovery source operation.
 #[derive(Debug, Clone)]
 pub struct DiscoverySourceConfig {
@@ -20,6 +22,9 @@ pub struct DiscoverySourceConfig {
 
     /// Custom parameters for specific sources.
     pub custom_params: HashMap<String, serde_json::Value>,
+
+    /// Privacy configuration for network requests.
+    pub privacy: PrivacyConfig,
 }
 
 impl Default for DiscoverySourceConfig {
@@ -30,6 +35,7 @@ impl Default for DiscoverySourceConfig {
             max_results: 100,
             requires_browser: false,
             custom_params: HashMap::new(),
+            privacy: PrivacyConfig::default(),
         }
     }
 }
@@ -134,13 +140,14 @@ impl SearchEngineSourceConfig {
     }
 
     /// Convert to a DiscoverySourceConfig.
-    pub fn to_source_config(&self) -> DiscoverySourceConfig {
+    pub fn to_source_config(&self, privacy: &PrivacyConfig) -> DiscoverySourceConfig {
         DiscoverySourceConfig {
             enabled: self.enabled,
             rate_limit_ms: self.rate_limit_ms,
             max_results: self.max_results,
             requires_browser: self.requires_browser(),
             custom_params: HashMap::new(),
+            privacy: privacy.clone(),
         }
     }
 }

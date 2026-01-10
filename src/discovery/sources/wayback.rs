@@ -3,29 +3,23 @@
 //! Uses the Internet Archive's CDX API to find historical URLs.
 
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::models::DiscoveryMethod;
+use crate::scrapers::HttpClient;
 
 /// CDX API base URL.
 const CDX_API_URL: &str = "https://web.archive.org/cdx/search/cdx";
 
 /// Discovery source using Wayback Machine CDX API.
-pub struct WaybackSource {
-    client: reqwest::Client,
-}
+pub struct WaybackSource {}
 
 impl WaybackSource {
     /// Create a new Wayback source.
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (compatible; FOIAcquire/1.0)")
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+        Self {}
     }
 
     /// Build the CDX API URL with parameters.
@@ -164,21 +158,20 @@ impl DiscoverySource for WaybackSource {
 
         debug!("Querying Wayback CDX API: {}", cdx_url);
 
-        let response = self
-            .client
-            .get(&cdx_url)
-            .send()
+        // Create HTTP client with privacy configuration
+        let client = HttpClient::with_privacy(
+            "wayback",
+            Duration::from_secs(60),
+            Duration::from_millis(config.rate_limit_ms),
+            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"), // Keep original compatible UA
+            &config.privacy,
+        )
+        .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))?;
+
+        let text = client
+            .get_text(&cdx_url)
             .await
             .map_err(DiscoveryError::Http)?;
-
-        if !response.status().is_success() {
-            return Err(DiscoveryError::Unavailable(format!(
-                "CDX API returned {}",
-                response.status()
-            )));
-        }
-
-        let text = response.text().await.map_err(DiscoveryError::Http)?;
 
         // Parse JSON response
         // CDX returns array of arrays: [["original", "mimetype", "statuscode", "timestamp"], ...]

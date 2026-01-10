@@ -43,6 +43,7 @@ pub struct DownloadResult {
 /// Download a YouTube video using yt-dlp.
 ///
 /// If `proxy_url` is provided, it will be passed to yt-dlp's --proxy flag.
+/// If not provided, checks SOCKS_PROXY environment variable.
 /// This should be a SOCKS5 URL like "socks5://127.0.0.1:9050".
 pub async fn download_video(
     url: &str,
@@ -78,8 +79,12 @@ pub async fn download_video(
         "--no-progress",
     ]);
 
+    // Determine proxy to use (explicit parameter or environment variable)
+    let env_proxy = std::env::var("SOCKS_PROXY").ok();
+    let effective_proxy = proxy_url.or(env_proxy.as_deref()).filter(|s| !s.is_empty());
+
     // Add proxy if configured
-    if let Some(proxy) = proxy_url {
+    if let Some(proxy) = effective_proxy {
         debug!("Using proxy for yt-dlp: {}", proxy);
         cmd.args(["--proxy", proxy]);
     }
@@ -128,11 +133,16 @@ pub async fn download_video(
 /// Fetch video metadata without downloading.
 ///
 /// If `proxy_url` is provided, it will be passed to yt-dlp's --proxy flag.
+/// If not provided, checks SOCKS_PROXY environment variable.
 pub async fn fetch_metadata(url: &str, proxy_url: Option<&str>) -> Result<VideoMetadata> {
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["--dump-json", "--no-playlist"]);
 
-    if let Some(proxy) = proxy_url {
+    // Determine proxy to use (explicit parameter or environment variable)
+    let env_proxy = std::env::var("SOCKS_PROXY").ok();
+    let effective_proxy = proxy_url.or(env_proxy.as_deref()).filter(|s| !s.is_empty());
+
+    if let Some(proxy) = effective_proxy {
         cmd.args(["--proxy", proxy]);
     }
 

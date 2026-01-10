@@ -3,10 +3,12 @@
 //! Parses sitemap.xml files and robots.txt to discover URLs.
 
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::models::DiscoveryMethod;
+use crate::scrapers::HttpClient;
 
 /// Standard sitemap locations to check.
 const SITEMAP_PATHS: &[&str] = &[
@@ -18,42 +20,40 @@ const SITEMAP_PATHS: &[&str] = &[
 ];
 
 /// Discovery source that parses sitemaps and robots.txt.
-pub struct SitemapSource {
-    client: reqwest::Client,
-}
+pub struct SitemapSource {}
 
 impl SitemapSource {
     /// Create a new sitemap source.
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (compatible; FOIAcquire/1.0)")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+        Self {}
     }
 
     /// Parse robots.txt to find sitemap URLs.
-    async fn parse_robots_txt(&self, base_url: &str) -> Vec<String> {
+    async fn parse_robots_txt(&self, base_url: &str, config: &DiscoverySourceConfig) -> Vec<String> {
         let robots_url = format!("{}/robots.txt", base_url.trim_end_matches('/'));
         debug!("Checking robots.txt at {}", robots_url);
 
-        let response = match self.client.get(&robots_url).send().await {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                debug!("robots.txt returned {}", r.status());
-                return vec![];
-            }
+        // Create HTTP client with privacy configuration
+        let client = match HttpClient::with_privacy(
+            "sitemap",
+            Duration::from_secs(30),
+            Duration::from_millis(config.rate_limit_ms),
+            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"),
+            &config.privacy,
+        ) {
+            Ok(c) => c,
             Err(e) => {
-                debug!("Failed to fetch robots.txt: {}", e);
+                debug!("Failed to create HTTP client: {}", e);
                 return vec![];
             }
         };
 
-        let text = match response.text().await {
+        let text = match client.get_text(&robots_url).await {
             Ok(t) => t,
-            Err(_) => return vec![],
+            Err(e) => {
+                debug!("Failed to fetch robots.txt: {}", e);
+                return vec![];
+            }
         };
 
         // Parse Sitemap: directives
@@ -72,7 +72,17 @@ impl SitemapSource {
     /// Fetch and parse a sitemap XML file (non-recursive).
     ///
     /// Uses a work queue to handle sitemap indexes without recursion.
-    async fn parse_sitemap(&self, url: &str) -> Result<Vec<String>, DiscoveryError> {
+    async fn parse_sitemap(&self, url: &str, config: &DiscoverySourceConfig) -> Result<Vec<String>, DiscoveryError> {
+        // Create HTTP client with privacy configuration
+        let client = HttpClient::with_privacy(
+            "sitemap",
+            Duration::from_secs(30),
+            Duration::from_millis(config.rate_limit_ms),
+            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"),
+            &config.privacy,
+        )
+        .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))?;
+
         let mut all_urls = Vec::new();
         let mut pending_sitemaps = vec![url.to_string()];
         let mut processed = std::collections::HashSet::new();
@@ -86,23 +96,10 @@ impl SitemapSource {
 
             debug!("Fetching sitemap: {}", sitemap_url);
 
-            let response = match self.client.get(&sitemap_url).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("Failed to fetch sitemap {}: {}", sitemap_url, e);
-                    continue;
-                }
-            };
-
-            if !response.status().is_success() {
-                warn!("Sitemap {} returned {}", sitemap_url, response.status());
-                continue;
-            }
-
-            let text = match response.text().await {
+            let text = match client.get_text(&sitemap_url).await {
                 Ok(t) => t,
                 Err(e) => {
-                    warn!("Failed to read sitemap {}: {}", sitemap_url, e);
+                    warn!("Failed to fetch sitemap {}: {}", sitemap_url, e);
                     continue;
                 }
             };
@@ -257,9 +254,9 @@ impl DiscoverySource for SitemapSource {
         let mut all_urls = Vec::new();
 
         // First check robots.txt for sitemap URLs
-        let robots_sitemaps = self.parse_robots_txt(&base_url).await;
+        let robots_sitemaps = self.parse_robots_txt(&base_url, config).await;
         for sitemap_url in robots_sitemaps {
-            match self.parse_sitemap(&sitemap_url).await {
+            match self.parse_sitemap(&sitemap_url, config).await {
                 Ok(urls) => all_urls.extend(urls),
                 Err(e) => warn!("Failed to parse sitemap from robots.txt: {}", e),
             }
@@ -268,7 +265,7 @@ impl DiscoverySource for SitemapSource {
         // Try standard sitemap locations
         for path in SITEMAP_PATHS {
             let sitemap_url = format!("{}{}", base_url, path);
-            match self.parse_sitemap(&sitemap_url).await {
+            match self.parse_sitemap(&sitemap_url, config).await {
                 Ok(urls) => {
                     all_urls.extend(urls);
                     break; // Found a working sitemap, stop trying others

@@ -120,6 +120,10 @@ impl BrowserFetcher {
             }
         }
 
+        // ALLOWED: Cookie synchronization requires a custom reqwest client with cookie_provider
+        // This client does respect proxy settings (see line below), but needs direct reqwest
+        // access for cookie jar integration which isn't available in HttpClient
+        #[allow(clippy::disallowed_methods)]
         let mut client_builder = reqwest::Client::builder()
             .cookie_provider(Arc::new(jar))
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -129,6 +133,7 @@ impl BrowserFetcher {
             client_builder = client_builder.proxy(reqwest::Proxy::all(proxy)?);
         }
 
+        #[allow(clippy::disallowed_methods)]
         let client = client_builder.build()?;
         let response = client.get(url).send().await?;
 

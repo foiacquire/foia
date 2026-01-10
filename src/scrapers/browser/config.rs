@@ -60,6 +60,7 @@ impl BrowserEngineConfig {
     ///
     /// - `BROWSER_URL` - Remote Chrome DevTools URL(s), comma-separated for multiple
     /// - `BROWSER_SELECTION` - Selection strategy (round-robin, random, per-domain)
+    /// - `SOCKS_PROXY` - SOCKS proxy for browser traffic (e.g., "socks5://127.0.0.1:9050")
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(val) = std::env::var("BROWSER_URL") {
             if !val.is_empty() {
@@ -80,6 +81,15 @@ impl BrowserEngineConfig {
         if let Ok(val) = std::env::var("BROWSER_SELECTION") {
             if let Some(strategy) = SelectionStrategyType::from_str(&val) {
                 self.selection = strategy;
+            }
+        }
+
+        // Set proxy from SOCKS_PROXY if not already configured
+        if self.proxy.is_none() {
+            if let Ok(proxy) = std::env::var("SOCKS_PROXY") {
+                if !proxy.is_empty() {
+                    self.proxy = Some(proxy);
+                }
             }
         }
 

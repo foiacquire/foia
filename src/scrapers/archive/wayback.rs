@@ -6,16 +6,17 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use reqwest::Client;
 use std::time::Duration;
 
 use super::{ArchiveError, ArchiveSource, SnapshotInfo};
 use crate::models::ArchiveService;
+use crate::privacy::PrivacyConfig;
+use crate::scrapers::HttpClient;
 
 /// Wayback Machine CDX API client.
 pub struct WaybackSource {
-    client: Client,
     cdx_url: String,
+    privacy: PrivacyConfig,
 }
 
 impl Default for WaybackSource {
@@ -29,31 +30,25 @@ impl WaybackSource {
     const CDX_API: &'static str = "https://web.archive.org/cdx/search/cdx";
 
     pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent(
-                "FOIAcquire/0.7 (archive-research; +https://github.com/monokrome/foiacquire)",
-            )
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
-            client,
             cdx_url: Self::CDX_API.to_string(),
+            privacy: PrivacyConfig::default(),
+        }
+    }
+
+    /// Create with privacy configuration.
+    pub fn with_privacy(privacy: PrivacyConfig) -> Self {
+        Self {
+            cdx_url: Self::CDX_API.to_string(),
+            privacy,
         }
     }
 
     /// Create with custom CDX API endpoint (for testing or alternative instances).
     pub fn with_cdx_url(cdx_url: impl Into<String>) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent("FOIAcquire/0.7 (archive-research)")
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
-            client,
             cdx_url: cdx_url.into(),
+            privacy: PrivacyConfig::default(),
         }
     }
 
@@ -151,23 +146,30 @@ impl WaybackSource {
             query_url.push_str(&format!("&to={}", Self::format_timestamp(to)));
         }
 
-        let response = self.client.get(&query_url).send().await?;
+        // Create HTTP client with privacy configuration
+        let client = HttpClient::with_privacy(
+            "wayback_archive",
+            Duration::from_secs(30),
+            Duration::from_millis(500),
+            Some("FOIAcquire/0.7 (archive-research; +https://github.com/monokrome/foiacquire)"),
+            &self.privacy,
+        )
+        .map_err(|e| ArchiveError::Parse(format!("Failed to create HTTP client: {}", e)))?;
 
-        let status = response.status();
-        if status.as_u16() == 429 {
-            return Err(ArchiveError::RateLimited);
-        }
-        if status.as_u16() >= 500 {
-            return Err(ArchiveError::Unavailable);
-        }
-        if !status.is_success() {
-            return Err(ArchiveError::Parse(format!(
-                "CDX API returned status {}",
-                status
-            )));
-        }
-
-        let body = response.text().await?;
+        let body = client
+            .get_text(&query_url)
+            .await
+            .map_err(|e| {
+                // Check if it's a rate limit or server error based on error message
+                let err_str = e.to_string();
+                if err_str.contains("429") {
+                    ArchiveError::RateLimited
+                } else if err_str.contains("5") && err_str.contains("status") {
+                    ArchiveError::Unavailable
+                } else {
+                    ArchiveError::Http(e)
+                }
+            })?;
 
         // CDX with output=json returns array of arrays
         // First row is headers, rest are data

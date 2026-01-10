@@ -208,6 +208,9 @@ impl BrowserFetcher {
 
         debug!("Fetching browser version from: {}", version_url);
 
+        // ALLOWED: This connects to Chrome DevTools Protocol (localhost or internal Docker network)
+        // Privacy/Tor routing is not applicable for browser control protocol communication
+        #[allow(clippy::disallowed_methods)]
         let client = reqwest::Client::new();
         let resp: serde_json::Value = client
             .get(&version_url)
@@ -251,6 +254,15 @@ impl BrowserFetcher {
 
     /// Resolve a hostname in a URL to an IP address.
     /// Chrome DevTools rejects connections with non-IP Host headers for security.
+    ///
+    /// PRIVACY NOTE: This DNS resolution is for finding the browser's DevTools control interface
+    /// (typically localhost or internal Docker network), NOT for the actual web scraping targets.
+    /// The browser's web traffic uses the proxy configuration (see lines 137-140 which now
+    /// respect SOCKS_PROXY). This internal infrastructure DNS lookup does not leak information
+    /// about scraping targets.
+    ///
+    /// For maximum paranoia: use IP addresses for BROWSER_URL instead of hostnames to avoid
+    /// this DNS resolution entirely (e.g., "ws://172.17.0.2:9222" instead of "ws://chrome:9222").
     async fn resolve_hostname_to_ip(url: &str) -> Result<String> {
         use std::net::ToSocketAddrs;
 
@@ -267,6 +279,7 @@ impl BrowserFetcher {
         }
 
         // Resolve hostname to IP (blocking, but fast for local DNS)
+        // This uses system DNS for internal infrastructure (browser control), not web targets
         let addr_str = format!("{}:{}", host, port);
         let resolved = tokio::task::spawn_blocking(move || addr_str.to_socket_addrs().ok()?.next())
             .await
