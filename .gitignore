@@ -1,27 +1,23 @@
 # foiacquire-related local files
 /share/
-/foiacquire.json
 
-# Rust build artifacts
-/target/*
+# Build artifacts
+target/*
+dist/*
+
+# Environment
 *.bk
-*.pdb
-
-# Temporary files
-*.log
-*.tmp
-*.temp
 *.db
-*.swp
+*.local.*
+*.log
+*.pdb
 *.swo
+*.swp
+*.temp
+*.tmp
 *~
 
 # Non-git hidden file patterns
 .*
 !.git*
-!.sqlx/
-!.cargo/
 !.env.example
-dist/
-*.png
-docker-compose.yml
