@@ -3,15 +3,36 @@
 # Chromium ignores --remote-debugging-address on Alpine/Debian, so we use socat
 # to forward external connections to its localhost-bound port.
 
+set -e
+
+DISPLAY_NUM=99
+XVFB_PID=""
+VNC_PID=""
+CHROME_PID=""
+SOCAT_PID=""
+
+cleanup() {
+    echo "Shutting down..."
+    kill $CHROME_PID $SOCAT_PID $VNC_PID $XVFB_PID 2>/dev/null || true
+    rm -f /tmp/.X${DISPLAY_NUM}-lock /tmp/.X11-unix/X${DISPLAY_NUM} 2>/dev/null || true
+}
+
+trap cleanup EXIT TERM INT
+
+# Clean up stale X server lock files from previous runs
+rm -f /tmp/.X${DISPLAY_NUM}-lock /tmp/.X11-unix/X${DISPLAY_NUM} 2>/dev/null || true
+
 # VNC_PASSWORD enables display on port 5900
 # VNC_VIEWONLY=true makes it read-only (default: interactive)
 if [ -n "$VNC_PASSWORD" ]; then
-    Xvfb :99 -screen 0 1920x1080x24 &
+    Xvfb :${DISPLAY_NUM} -screen 0 1920x1080x24 &
+    XVFB_PID=$!
     sleep 1
-    export DISPLAY=:99
+    export DISPLAY=:${DISPLAY_NUM}
     VIEWONLY_FLAG=""
     [ "$VNC_VIEWONLY" = "true" ] && VIEWONLY_FLAG="-viewonly"
-    x11vnc -display :99 -forever -shared $VIEWONLY_FLAG -passwd "$VNC_PASSWORD" &
+    x11vnc -display :${DISPLAY_NUM} -forever -shared $VIEWONLY_FLAG -passwd "$VNC_PASSWORD" &
+    VNC_PID=$!
     HEADLESS_FLAG=""
 else
     HEADLESS_FLAG="--headless"
@@ -33,9 +54,18 @@ chromium-browser \
     --no-default-browser-check \
     --remote-debugging-port=9223 \
     "$@" &
+CHROME_PID=$!
 
 # Wait for Chromium to start
 sleep 2
 
 # Forward 0.0.0.0:9222 -> 127.0.0.1:9223
-exec socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223
+socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223 &
+SOCAT_PID=$!
+
+# Monitor processes - exit if Chrome or socat dies
+while kill -0 $CHROME_PID 2>/dev/null && kill -0 $SOCAT_PID 2>/dev/null; do
+    sleep 5
+done
+
+exit 1
