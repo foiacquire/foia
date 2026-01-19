@@ -191,15 +191,32 @@ jobs:
     strategy:
       matrix:
         include:
+          # Tor-enabled variants (default)
           - tag: latest
             features: "browser,postgres"
             tesseract: "false"
+            tor: "true"
           - tag: tesseract
             features: "browser,postgres"
             tesseract: "true"
+            tor: "true"
           - tag: redis
             features: "browser,postgres,redis-backend"
             tesseract: "false"
+            tor: "true"
+          # Clearnet variants (no Tor)
+          - tag: clearnet
+            features: "browser,postgres"
+            tesseract: "false"
+            tor: "false"
+          - tag: tesseract-clearnet
+            features: "browser,postgres"
+            tesseract: "true"
+            tor: "false"
+          - tag: redis-clearnet
+            features: "browser,postgres,redis-backend"
+            tesseract: "false"
+            tor: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -233,5 +250,6 @@ jobs:
           build-args: |
             FEATURES=${{ matrix.features }}
             WITH_TESSERACT=${{ matrix.tesseract }}
+            WITH_TOR=${{ matrix.tor }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
