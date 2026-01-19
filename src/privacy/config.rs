@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::net::TcpStream;
 use std::path::PathBuf;
+
+#[cfg(not(feature = "embedded-tor"))]
+use std::net::TcpStream;
+#[cfg(not(feature = "embedded-tor"))]
 use std::time::Duration;
 
 /// Pluggable transport type.
@@ -593,6 +596,7 @@ impl PrivacyConfig {
     }
 
     /// Default C-Tor SOCKS port.
+    #[cfg(not(feature = "embedded-tor"))]
     const DEFAULT_TOR_SOCKS_PORT: u16 = 9050;
 
     /// Check if Tor is available when needed.
@@ -618,7 +622,7 @@ impl PrivacyConfig {
         // Embedded Tor available
         #[cfg(feature = "embedded-tor")]
         {
-            return Ok(());
+            Ok(())
         }
 
         // No embedded Tor - check if C-Tor is running
@@ -671,7 +675,7 @@ See https://rustsec.org/advisories/RUSTSEC-2023-0071 for details."#
         // Check for embedded Tor
         #[cfg(feature = "embedded-tor")]
         {
-            return crate::privacy::get_arti_socks_url();
+            crate::privacy::get_arti_socks_url()
         }
 
         // Fall back to default C-Tor port
@@ -699,6 +703,7 @@ See https://rustsec.org/advisories/RUSTSEC-2023-0071 for details."#
 
     /// Check if any insecure configuration is active.
     /// Returns the security level: Secure, NoObfuscation, or Direct.
+    #[allow(dead_code)]
     pub fn security_level(&self) -> SecurityLevel {
         if self.direct {
             SecurityLevel::Direct

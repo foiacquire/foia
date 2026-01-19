@@ -15,6 +15,7 @@ use crate::repository::DieselDocumentRepository;
 
 /// Shared GET request handling for refresh.
 /// Returns (should_continue, should_skip_increment).
+#[allow(clippy::too_many_arguments)]
 async fn try_get_refresh(
     client: &crate::scrapers::HttpClient,
     url: &str,

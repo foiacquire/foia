@@ -82,13 +82,12 @@ impl PaddleBackend {
         }
 
         // Check standard locations
-        for candidate in MODEL_CONFIG.candidate_dirs() {
-            if MODEL_CONFIG.has_required_files(&candidate) || Self::has_legacy_models(&candidate) {
-                return Some(candidate);
-            }
-        }
-
-        None
+        MODEL_CONFIG
+            .candidate_dirs()
+            .into_iter()
+            .find(|candidate| {
+                MODEL_CONFIG.has_required_files(candidate) || Self::has_legacy_models(candidate)
+            })
     }
 
     /// Check for legacy PaddleOCR model naming patterns.

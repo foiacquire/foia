@@ -16,6 +16,7 @@ use crate::scrapers::{
 };
 
 /// Update service heartbeat if interval has elapsed.
+#[allow(clippy::too_many_arguments)]
 async fn maybe_update_heartbeat(
     last_heartbeat: &mut std::time::Instant,
     heartbeat_interval: Duration,
