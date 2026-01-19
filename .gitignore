@@ -21,3 +21,4 @@ dist/*
 .*
 !.git*
 !.env.example
+!.jscpd.json

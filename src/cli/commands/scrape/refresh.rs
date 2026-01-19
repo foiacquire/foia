@@ -102,7 +102,6 @@ pub async fn cmd_refresh(
         let pb = pb.clone();
         let privacy = privacy_config.clone();
         let via = via_mappings.clone();
-        let via_mode = via_mode;
 
         let handle = tokio::spawn(async move {
             let client = match crate::scrapers::HttpClient::with_privacy(

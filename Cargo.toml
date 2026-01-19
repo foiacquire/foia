@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "gzip", "brotli", "rustls-tls", "socks"] }
 
 # HTML parsing
-scraper = "0.20"
+scraper = "0.25"
 
 # Database - Diesel ORM with compile-time checking
 diesel = { version = "2", features = ["sqlite", "chrono", "r2d2"] }
@@ -67,7 +67,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Progress display and TUI
-indicatif = "0.17"
+indicatif = "0.18"
 console = "0.15"
 crossterm = "0.28"
 
@@ -151,7 +151,7 @@ serde_yaml = "0.9.34"
 hostname = "0.4.2"
 
 [features]
-default = ["browser", "tor"]
+default = ["browser"]
 browser = ["chromiumoxide"]
 # Note: diesel-async/postgres enables diesel/postgres_backend (types only, no libpq/OpenSSL needed)
 postgres = ["diesel-async/postgres", "dep:tokio-postgres", "dep:futures-util", "dep:bytes"]
@@ -162,7 +162,10 @@ ocr-paddle = ["paddle-ocr-rs", "image"]
 ocr-all = ["ocr-ocrs", "ocr-paddle"]
 # Tor/privacy features
 tor = ["embedded-tor"]
-# Embedded Tor via Arti for privacy-by-default networking
+# SECURITY: Embedded Tor via Arti is DISABLED by default due to RUSTSEC-2023-0071
+# (Marvin Attack timing side-channel in rsa crate). Use C-Tor for hidden services
+# and external SOCKS proxy for outbound Tor until arti updates to a fixed rsa version.
+# See: https://rustsec.org/advisories/RUSTSEC-2023-0071
 embedded-tor = ["arti-client", "tor-rtcompat"]
 # Development only: skip security warnings and delays (NEVER use in production)
 unsafe-dev = []

@@ -1,0 +1,17 @@
+{
+  "threshold": 5,
+  "reporters": ["console"],
+  "ignore": [
+    "**/target/**",
+    "**/node_modules/**",
+    "**/*.lock",
+    "**/.sqlx/**",
+    "**/migrations/**"
+  ],
+  "format": ["rust"],
+  "absolute": true,
+  "gitignore": true,
+  "minLines": 10,
+  "minTokens": 50,
+  "skipLocal": false
+}

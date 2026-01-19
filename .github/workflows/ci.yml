@@ -9,8 +9,51 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # All features EXCEPT embedded-tor (disabled due to RUSTSEC-2023-0071 in rsa crate)
+  # Use C-Tor for hidden services until arti updates to fixed rsa version
+  SAFE_FEATURES: browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle
 
 jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo-audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  cargo-deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --features ${{ env.SAFE_FEATURES }}
+
+  code-duplication:
+    name: Code Duplication
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install jscpd
+        run: npm install -g jscpd
+
+      - name: Check for code duplication
+        run: jscpd --config .jscpd.json src/
+
   migrations-check:
     name: Migration Immutability
     runs-on: ubuntu-latest
@@ -75,8 +118,8 @@ jobs:
       - name: Run cargo check (no default features)
         run: cargo check --release --no-default-features
 
-      - name: Run cargo check (all features)
-        run: cargo check --release --all-features
+      - name: Run cargo check (safe features)
+        run: cargo check --release --features $SAFE_FEATURES
 
   privacy-check:
     name: Privacy Audit
@@ -128,7 +171,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
-        run: cargo clippy --release --all-features -- -D warnings
+        run: cargo clippy --release --features $SAFE_FEATURES -- -D warnings
 
   fmt:
     name: Format

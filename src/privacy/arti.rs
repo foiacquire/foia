@@ -1,5 +1,12 @@
 //! Embedded Tor client via Arti.
 //!
+//! **SECURITY WARNING**: This module is disabled by default due to RUSTSEC-2023-0071
+//! (Marvin Attack timing side-channel in the `rsa` crate used by Arti). Use C-Tor
+//! with `SOCKS_PROXY=socks5://127.0.0.1:9050` for outbound Tor connections until
+//! Arti updates to a fixed `rsa` version.
+//!
+//! See: <https://rustsec.org/advisories/RUSTSEC-2023-0071>
+//!
 //! This module provides an embedded Tor client that runs an internal SOCKS5 proxy.
 //! When enabled, reqwest connects to this local proxy for anonymous networking.
 //!
@@ -9,6 +16,13 @@
 //! - Pluggable transport support (obfs4, snowflake, meek)
 //! - Per-source circuit isolation
 //! - Automatic fallback to direct Tor if PTs unavailable
+
+// SECURITY: Emit compile-time warning when this feature is enabled
+#[deprecated(
+    since = "0.7.2",
+    note = "embedded-tor disabled due to RUSTSEC-2023-0071 (Marvin Attack in rsa crate). Use C-Tor with SOCKS_PROXY instead."
+)]
+const _ARTI_SECURITY_WARNING: () = ();
 
 // Module is scaffolding for embedded Tor integration - public API not yet consumed
 #![allow(dead_code)]

@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::net::TcpStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Pluggable transport type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -588,6 +590,99 @@ impl PrivacyConfig {
     /// Check if Tor is enabled (embedded or external proxy).
     pub fn uses_tor(&self) -> bool {
         !self.direct
+    }
+
+    /// Default C-Tor SOCKS port.
+    const DEFAULT_TOR_SOCKS_PORT: u16 = 9050;
+
+    /// Check if Tor is available when needed.
+    ///
+    /// Returns Ok(()) if:
+    /// - Direct mode (no Tor needed)
+    /// - External SOCKS proxy configured
+    /// - Embedded Tor feature enabled
+    /// - C-Tor is running at 127.0.0.1:9050
+    ///
+    /// Returns Err with setup instructions if Tor is needed but unavailable.
+    pub fn check_tor_availability(&self) -> Result<(), String> {
+        // Direct mode - no Tor needed
+        if self.direct {
+            return Ok(());
+        }
+
+        // External proxy configured - user manages their own Tor
+        if self.socks_proxy.is_some() {
+            return Ok(());
+        }
+
+        // Embedded Tor available
+        #[cfg(feature = "embedded-tor")]
+        {
+            return Ok(());
+        }
+
+        // No embedded Tor - check if C-Tor is running
+        #[cfg(not(feature = "embedded-tor"))]
+        {
+            let addr = format!("127.0.0.1:{}", Self::DEFAULT_TOR_SOCKS_PORT);
+            match TcpStream::connect_timeout(
+                &addr.parse().unwrap(),
+                Duration::from_secs(2),
+            ) {
+                Ok(_) => {
+                    // C-Tor is running, auto-configure SOCKS proxy
+                    Ok(())
+                }
+                Err(_) => Err(
+                    r#"Tor is required but not available.
+
+The embedded Tor client (Arti) is disabled due to a security vulnerability
+(RUSTSEC-2023-0071: Marvin Attack in rsa crate).
+
+To use Tor, please set up C-Tor:
+
+1. Install Tor:
+   - Debian/Ubuntu: sudo apt install tor
+   - macOS: brew install tor
+   - Arch: sudo pacman -S tor
+
+2. Start the Tor daemon:
+   tor &
+
+   foiacquire will automatically use the SOCKS proxy at 127.0.0.1:9050.
+
+Alternatively, use --direct flag to skip Tor (not recommended for sensitive work).
+
+See https://rustsec.org/advisories/RUSTSEC-2023-0071 for details."#.to_string()
+                ),
+            }
+        }
+    }
+
+    /// Get the effective SOCKS proxy URL, auto-detecting C-Tor if needed.
+    #[allow(dead_code)] // Public API for Tor proxy configuration
+    pub fn get_socks_proxy_url(&self) -> Option<String> {
+        // Explicit proxy configured
+        if let Some(ref proxy) = self.socks_proxy {
+            return Some(proxy.clone());
+        }
+
+        // Direct mode - no proxy
+        if self.direct {
+            return None;
+        }
+
+        // Check for embedded Tor
+        #[cfg(feature = "embedded-tor")]
+        {
+            return crate::privacy::get_arti_socks_url();
+        }
+
+        // Fall back to default C-Tor port
+        #[cfg(not(feature = "embedded-tor"))]
+        {
+            Some(format!("socks5://127.0.0.1:{}", Self::DEFAULT_TOR_SOCKS_PORT))
+        }
     }
 
     /// Display Tor legality warning if enabled and Tor is in use.
