@@ -173,10 +173,7 @@ impl GroqBackend {
 
         let client = self.create_client()?;
         let mut headers = HashMap::new();
-        headers.insert(
-            "Authorization".to_string(),
-            format!("Bearer {}", api_key),
-        );
+        headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
         let response = client
             .post_json_with_headers(
