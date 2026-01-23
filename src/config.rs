@@ -362,6 +362,40 @@ fn is_via_mode_default(mode: &ViaMode) -> bool {
     *mode == ViaMode::default()
 }
 
+/// App-level configuration snapshot for database storage.
+/// Contains only settings that should be synced across devices.
+/// Excludes device-specific (data_dir, privacy) and bootstrap (rate_limit_backend, broker_url) settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AppConfigSnapshot {
+    /// User agent string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    /// Request timeout in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout: Option<u64>,
+    /// Delay between requests in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_delay_ms: Option<u64>,
+    /// Default refresh TTL in days for re-checking fetched URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_refresh_ttl_days: Option<u64>,
+    /// Scraper configurations.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub scrapers: HashMap<String, ScraperConfig>,
+    /// LLM configuration (app portion only - device settings excluded via serde skip).
+    #[serde(default, skip_serializing_if = "LlmConfig::is_default")]
+    pub llm: LlmConfig,
+    /// Analysis configuration for text extraction methods.
+    #[serde(default, skip_serializing_if = "AnalysisConfig::is_default")]
+    pub analysis: AnalysisConfig,
+    /// URL rewriting for caching proxies (CDN bypass).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub via: HashMap<String, String>,
+    /// Via proxy mode - controls when via mappings are used for requests.
+    #[serde(default, skip_serializing_if = "is_via_mode_default")]
+    pub via_mode: ViaMode,
+}
+
 impl Config {
     /// Load configuration using prefer crate.
     /// Automatically discovers foiacquire config files in standard locations.
@@ -533,6 +567,8 @@ impl Config {
 
     /// Serialize config to JSON with paths converted to relative.
     /// Any paths pointing to `base_dir` are converted to relative paths.
+    /// Note: This serializes the full config (for config files). For DB storage, use `to_app_snapshot()`.
+    #[allow(dead_code)]
     pub fn to_json_relative(&self, base_dir: &Path) -> String {
         let mut config = self.clone();
         config.source_path = None; // Don't serialize the source path
@@ -568,28 +604,90 @@ impl Config {
         serde_json::to_string_pretty(&config).unwrap_or_default()
     }
 
+    /// Extract app-level settings for database storage.
+    /// Excludes device-specific and bootstrap settings that shouldn't be synced.
+    pub fn to_app_snapshot(&self) -> AppConfigSnapshot {
+        AppConfigSnapshot {
+            user_agent: self.user_agent.clone(),
+            request_timeout: self.request_timeout,
+            request_delay_ms: self.request_delay_ms,
+            default_refresh_ttl_days: self.default_refresh_ttl_days,
+            scrapers: self.scrapers.clone(),
+            llm: self.llm.clone(),
+            analysis: self.analysis.clone(),
+            via: self.via.clone(),
+            via_mode: self.via_mode.clone(),
+        }
+    }
+
+    /// Apply app-level settings from a snapshot (loaded from DB).
+    pub fn apply_app_snapshot(&mut self, snapshot: AppConfigSnapshot) {
+        self.user_agent = snapshot.user_agent;
+        self.request_timeout = snapshot.request_timeout;
+        self.request_delay_ms = snapshot.request_delay_ms;
+        self.default_refresh_ttl_days = snapshot.default_refresh_ttl_days;
+        self.scrapers = snapshot.scrapers;
+        self.llm = snapshot.llm;
+        self.analysis = snapshot.analysis;
+        self.via = snapshot.via;
+        self.via_mode = snapshot.via_mode;
+    }
+
+    /// Compute SHA-256 hash of the app-level settings only.
+    pub fn app_hash(&self) -> String {
+        let snapshot = self.to_app_snapshot();
+        let json = serde_json::to_string(&snapshot).unwrap_or_default();
+        let mut hasher = Sha256::new();
+        hasher.update(json.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
     /// Load configuration from database history.
+    /// Loads app-level settings only and merges with default config.
+    /// Device-specific and bootstrap settings are not stored in DB.
     pub async fn load_from_db(db_path: &Path) -> Option<Self> {
         let ctx = DieselDbContext::from_sqlite_path(db_path).ok()?;
         let entry = ctx.config_history().get_latest().await.ok()??;
 
-        let mut config: Config = match entry.format.to_lowercase().as_str() {
-            "json" => serde_json::from_str(&entry.data).ok()?,
-            "toml" => toml::from_str(&entry.data).ok()?,
+        // Try to load as AppConfigSnapshot first (new format)
+        // Fall back to full Config for backwards compatibility with old DB entries
+        let snapshot: AppConfigSnapshot = match entry.format.to_lowercase().as_str() {
+            "json" => {
+                // Try snapshot format first, fall back to full config
+                serde_json::from_str(&entry.data)
+                    .or_else(|_| {
+                        // Old format: full Config, extract app portion
+                        serde_json::from_str::<Config>(&entry.data)
+                            .map(|c| c.to_app_snapshot())
+                    })
+                    .ok()?
+            }
+            "toml" => {
+                toml::from_str(&entry.data)
+                    .or_else(|_| {
+                        toml::from_str::<Config>(&entry.data)
+                            .map(|c| c.to_app_snapshot())
+                    })
+                    .ok()?
+            }
             _ => serde_json::from_str(&entry.data).ok()?,
         };
 
-        // Apply environment variable overrides
-        // Note: LlmConfig device settings are auto-populated from env via Default
-        config.privacy = config.privacy.with_env_overrides();
+        // Start with default config (gets device settings from env)
+        let mut config = Config::default();
+        // Apply app settings from DB
+        config.apply_app_snapshot(snapshot);
         Some(config)
     }
 
     /// Save configuration to database history if it has changed.
-    /// Returns true if saved, false if unchanged, or logs warning on error.
+    /// Only saves app-level settings (excludes device-specific and bootstrap settings).
     pub async fn save_to_db_if_changed(&self, settings: &Settings) {
-        let hash = self.hash();
-        let data = self.to_json_relative(&settings.data_dir);
+        // Use app_hash to only track changes to app-level settings
+        let hash = self.app_hash();
+        // Serialize only app-level settings
+        let snapshot = self.to_app_snapshot();
+        let data = serde_json::to_string_pretty(&snapshot).unwrap_or_default();
         let format = "json";
 
         let ctx = match settings.create_db_context() {
