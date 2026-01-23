@@ -11,6 +11,7 @@ mod llm;
 mod models;
 mod ocr;
 mod privacy;
+mod rate_limit;
 mod repository;
 mod schema;
 mod scrapers;

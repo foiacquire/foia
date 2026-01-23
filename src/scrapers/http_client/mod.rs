@@ -30,8 +30,7 @@ use reqwest::{Client, Proxy, StatusCode};
 use tracing::debug;
 
 use super::config::ViaMode;
-use super::rate_limiter::RateLimiter;
-use super::InMemoryRateLimitBackend;
+use crate::rate_limit::{InMemoryRateLimitBackend, RateLimiter};
 use crate::models::{CrawlRequest, CrawlUrl, UrlStatus};
 use crate::privacy::{PrivacyConfig, PrivacyMode};
 use crate::repository::DieselCrawlRepository;

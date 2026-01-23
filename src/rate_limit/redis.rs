@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Script};
 
-use super::rate_limit_backend::{
+use super::backend::{
     DomainRateState, RateLimitBackend, RateLimitError, RateLimitResult,
 };
 

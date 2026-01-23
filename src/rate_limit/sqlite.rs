@@ -11,7 +11,7 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use tracing::warn;
 
-use super::rate_limit_backend::{
+use super::backend::{
     DomainRateState, RateLimitBackend, RateLimitError, RateLimitResult,
 };
 use crate::repository::pool::DbPool;

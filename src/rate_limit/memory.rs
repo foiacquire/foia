@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use super::rate_limit_backend::{DomainRateState, RateLimitBackend, RateLimitResult};
+use super::backend::{DomainRateState, RateLimitBackend, RateLimitResult};
 
 /// Configuration for the in-memory backend.
 #[derive(Debug, Clone)]

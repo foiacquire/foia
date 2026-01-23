@@ -24,7 +24,7 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tracing::{debug, warn};
 
-use super::api_rate_limit::{backoff_delay, get_api_delay, parse_retry_after};
+use crate::rate_limit::{backoff_delay, get_delay_from_env, parse_retry_after};
 use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
 use super::pdf_utils;
 use crate::privacy::PrivacyConfig;
@@ -185,8 +185,8 @@ impl GroqBackend {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
-        // Rate limiting: wait before request
-        let delay = get_api_delay("GROQ_DELAY_MS");
+        // Rate limiting: wait before request (default 200ms)
+        let delay = get_delay_from_env("GROQ_DELAY_MS", 200);
         if delay > Duration::ZERO {
             debug!("Groq: waiting {:?} before request", delay);
             tokio::time::sleep(delay).await;
