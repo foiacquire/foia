@@ -6,6 +6,11 @@
 //! Free tier limits (Gemini 1.5 Flash):
 //! - 15 requests per minute
 //! - 1,500 requests per day
+//!
+//! Rate limiting:
+//! - Set GEMINI_DELAY_MS to configure delay between requests (default: 200ms)
+//! - Automatically retries on 429 with exponential backoff
+//! - Respects Retry-After header from API
 
 #![allow(dead_code)]
 
@@ -16,11 +21,16 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
+use tracing::{debug, warn};
 
+use super::api_rate_limit::{backoff_delay, get_api_delay, parse_retry_after};
 use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
 use super::pdf_utils;
 use crate::privacy::PrivacyConfig;
 use crate::scrapers::HttpClient;
+
+/// Maximum retry attempts on rate limit errors.
+const MAX_RETRIES: u32 = 5;
 
 /// Gemini Vision OCR backend using Google's Generative AI API.
 pub struct GeminiBackend {
@@ -143,7 +153,7 @@ impl GeminiBackend {
         .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
     }
 
-    /// Run Gemini OCR on an image (async implementation).
+    /// Run Gemini OCR on an image (async implementation with rate limiting).
     async fn run_gemini_async(&self, image_path: &Path) -> Result<String, OcrError> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             OcrError::BackendNotAvailable(
@@ -186,40 +196,78 @@ impl GeminiBackend {
         );
 
         let client = self.create_client()?;
-        let response = client
-            .post_json(&url, &request)
-            .await
-            .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))?;
 
-        if !response.status.is_success() {
-            let status = response.status;
-            let body = response.text().await.unwrap_or_default();
-            return Err(OcrError::OcrFailed(format!(
-                "Gemini API error ({}): {}",
-                status, body
-            )));
+        // Rate limiting: wait before request
+        let delay = get_api_delay("GEMINI_DELAY_MS");
+        if delay > Duration::ZERO {
+            debug!("Gemini: waiting {:?} before request", delay);
+            tokio::time::sleep(delay).await;
         }
 
-        let gemini_response: GeminiResponse = response
-            .json()
-            .await
-            .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
+        // Retry loop with exponential backoff on 429
+        let mut attempt = 0;
+        loop {
+            let response = client
+                .post_json(&url, &request)
+                .await
+                .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))?;
 
-        if let Some(error) = gemini_response.error {
-            return Err(OcrError::OcrFailed(format!(
-                "Gemini API error: {}",
-                error.message
-            )));
+            // Handle rate limiting (429)
+            if response.status.as_u16() == 429 {
+                if attempt >= MAX_RETRIES {
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(OcrError::OcrFailed(format!(
+                        "Gemini rate limit exceeded after {} retries: {}",
+                        MAX_RETRIES, body
+                    )));
+                }
+
+                // Get Retry-After header
+                let retry_after = response.headers.get("retry-after").map(|s| s.as_str());
+
+                let wait = parse_retry_after(retry_after)
+                    .unwrap_or_else(|| backoff_delay(attempt, 1000));
+
+                warn!(
+                    "Gemini rate limited (attempt {}), waiting {:?}",
+                    attempt + 1,
+                    wait
+                );
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                continue;
+            }
+
+            if !response.status.is_success() {
+                let status = response.status;
+                let body = response.text().await.unwrap_or_default();
+                return Err(OcrError::OcrFailed(format!(
+                    "Gemini API error ({}): {}",
+                    status, body
+                )));
+            }
+
+            let gemini_response: GeminiResponse = response
+                .json()
+                .await
+                .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
+
+            if let Some(error) = gemini_response.error {
+                return Err(OcrError::OcrFailed(format!(
+                    "Gemini API error: {}",
+                    error.message
+                )));
+            }
+
+            let text = gemini_response
+                .candidates
+                .and_then(|c| c.into_iter().next())
+                .and_then(|c| c.content.parts.into_iter().next())
+                .and_then(|p| p.text)
+                .unwrap_or_default();
+
+            return Ok(text);
         }
-
-        let text = gemini_response
-            .candidates
-            .and_then(|c| c.into_iter().next())
-            .and_then(|c| c.content.parts.into_iter().next())
-            .and_then(|p| p.text)
-            .unwrap_or_default();
-
-        Ok(text)
     }
 
     /// Run Gemini OCR on an image (blocking wrapper).

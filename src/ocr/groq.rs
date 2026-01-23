@@ -6,6 +6,11 @@
 //! Free tier limits:
 //! - 1,000 requests per day
 //! - Vision models: Llama 4 Scout (17B), Llama 4 Maverick (17B)
+//!
+//! Rate limiting:
+//! - Set GROQ_DELAY_MS to configure delay between requests (default: 200ms)
+//! - Automatically retries on 429 with exponential backoff
+//! - Respects Retry-After header from API
 
 #![allow(dead_code)]
 
@@ -17,11 +22,16 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
+use tracing::{debug, warn};
 
+use super::api_rate_limit::{backoff_delay, get_api_delay, parse_retry_after};
 use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
 use super::pdf_utils;
 use crate::privacy::PrivacyConfig;
 use crate::scrapers::HttpClient;
+
+/// Maximum retry attempts on rate limit errors.
+const MAX_RETRIES: u32 = 5;
 
 /// Groq Vision OCR backend using OpenAI-compatible API.
 pub struct GroqBackend {
@@ -135,7 +145,7 @@ impl GroqBackend {
         .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
     }
 
-    /// Run Groq OCR on an image (async implementation).
+    /// Run Groq OCR on an image (async implementation with rate limiting).
     async fn run_groq_async(&self, image_path: &Path) -> Result<String, OcrError> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             OcrError::BackendNotAvailable(
@@ -175,43 +185,80 @@ impl GroqBackend {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
-        let response = client
-            .post_json_with_headers(
-                "https://api.groq.com/openai/v1/chat/completions",
-                &request,
-                headers,
-            )
-            .await
-            .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))?;
-
-        if !response.status.is_success() {
-            let status = response.status;
-            let body = response.text().await.unwrap_or_default();
-            return Err(OcrError::OcrFailed(format!(
-                "Groq API error ({}): {}",
-                status, body
-            )));
+        // Rate limiting: wait before request
+        let delay = get_api_delay("GROQ_DELAY_MS");
+        if delay > Duration::ZERO {
+            debug!("Groq: waiting {:?} before request", delay);
+            tokio::time::sleep(delay).await;
         }
 
-        let groq_response: GroqResponse = response
-            .json()
-            .await
-            .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
+        // Retry loop with exponential backoff on 429
+        let mut attempt = 0;
+        loop {
+            let response = client
+                .post_json_with_headers(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    &request,
+                    headers.clone(),
+                )
+                .await
+                .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))?;
 
-        if let Some(error) = groq_response.error {
-            return Err(OcrError::OcrFailed(format!(
-                "Groq API error: {}",
-                error.message
-            )));
+            // Handle rate limiting (429)
+            if response.status.as_u16() == 429 {
+                if attempt >= MAX_RETRIES {
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(OcrError::OcrFailed(format!(
+                        "Groq rate limit exceeded after {} retries: {}",
+                        MAX_RETRIES, body
+                    )));
+                }
+
+                // Get Retry-After header
+                let retry_after = response.headers.get("retry-after").map(|s| s.as_str());
+
+                let wait = parse_retry_after(retry_after)
+                    .unwrap_or_else(|| backoff_delay(attempt, 1000));
+
+                warn!(
+                    "Groq rate limited (attempt {}), waiting {:?}",
+                    attempt + 1,
+                    wait
+                );
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                continue;
+            }
+
+            if !response.status.is_success() {
+                let status = response.status;
+                let body = response.text().await.unwrap_or_default();
+                return Err(OcrError::OcrFailed(format!(
+                    "Groq API error ({}): {}",
+                    status, body
+                )));
+            }
+
+            let groq_response: GroqResponse = response
+                .json()
+                .await
+                .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
+
+            if let Some(error) = groq_response.error {
+                return Err(OcrError::OcrFailed(format!(
+                    "Groq API error: {}",
+                    error.message
+                )));
+            }
+
+            let text = groq_response
+                .choices
+                .and_then(|c| c.into_iter().next())
+                .map(|c| c.message.content)
+                .unwrap_or_default();
+
+            return Ok(text);
         }
-
-        let text = groq_response
-            .choices
-            .and_then(|c| c.into_iter().next())
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-
-        Ok(text)
     }
 
     /// Run Groq OCR on an image (blocking wrapper).

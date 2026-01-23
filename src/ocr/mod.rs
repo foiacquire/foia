@@ -30,6 +30,7 @@
 // Allow unused exports - these are public API for per-source backend selection
 #![allow(unused_imports)]
 
+mod api_rate_limit;
 mod archive;
 mod backend;
 mod deepseek;
