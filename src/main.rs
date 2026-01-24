@@ -10,6 +10,7 @@ mod discovery;
 mod llm;
 mod models;
 mod ocr;
+mod prefer_db;
 mod privacy;
 mod rate_limit;
 mod repository;
