@@ -39,7 +39,7 @@ Both Chromium images support VNC for remote viewing (see [VNC Support](#vnc-supp
 |----------|---------|-------------|
 | `USER_ID` | `1000` | UID to run as inside container |
 | `GROUP_ID` | `1000` | GID to run as inside container |
-| `TARGET_PATH` | `/opt/foiacquire` | Data directory inside container |
+| `DATA_DIR` | `/opt/foiacquire` | Data directory inside container |
 | `DATABASE_URL` | - | Database connection string |
 | `BROWSER_URL` | - | Remote Chrome DevTools URL |
 | `RUST_LOG` | `info` | Log level |
@@ -283,7 +283,7 @@ vnc://localhost:5900
    ```
    USER_ID=1024          # Match your Synology user
    GROUP_ID=100          # Usually 'users' group
-   TARGET_PATH=/opt/foiacquire
+   DATA_DIR=/opt/foiacquire
    RUST_LOG=info
    ```
 

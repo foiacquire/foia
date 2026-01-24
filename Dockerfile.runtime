@@ -15,7 +15,7 @@ RUN apk add --no-cache ca-certificates su-exec python3 py3-pip poppler-utils \
          apk add --no-cache tor snowflake; \
        fi
 
-ENV TARGET_PATH=/opt/foiacquire
+ENV DATA_DIR=/opt/foiacquire
 ENV USER_ID=1000
 ENV GROUP_ID=1000
 
