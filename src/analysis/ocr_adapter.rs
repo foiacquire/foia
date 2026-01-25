@@ -34,6 +34,7 @@ impl OcrAnalysisAdapter {
             text: result.text,
             confidence: result.confidence,
             backend: self.backend_id().to_string(),
+            model: result.model,
             processing_time_ms: result.processing_time_ms,
             metadata: None,
         }

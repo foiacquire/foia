@@ -175,6 +175,7 @@ impl OcrBackend for DeepSeekBackend {
             text,
             confidence: None, // DeepSeek doesn't provide confidence scores directly
             backend: OcrBackendType::DeepSeek,
+            model: Some(self.model.clone()),
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }
@@ -194,6 +195,7 @@ impl OcrBackend for DeepSeekBackend {
             text,
             confidence: None,
             backend: OcrBackendType::DeepSeek,
+            model: Some(self.model.clone()),
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }

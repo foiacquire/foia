@@ -61,7 +61,7 @@ pub async fn cmd_config_recover(database: &Path, output: Option<&Path>) -> anyho
 
     // Build the config
     let config = Config {
-        target: Some(target.display().to_string()),
+        data_dir: Some(target.display().to_string()),
         database: Some(database_filename.to_string()),
         scrapers,
         ..Default::default()

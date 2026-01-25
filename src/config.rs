@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::llm::LlmConfig;
+use crate::prefer_db::FoiaConfigLoader;
 use crate::privacy::PrivacyConfig;
 use crate::repository::diesel_context::DieselDbContext;
 use crate::repository::util::{is_postgres_url, validate_database_url};
@@ -16,15 +17,151 @@ use crate::scrapers::{ScraperConfig, ViaMode};
 /// Default refresh TTL in days (14 days).
 pub const DEFAULT_REFRESH_TTL_DAYS: u64 = 14;
 
+/// A backend entry - either a single backend or a fallback chain.
+///
+/// Examples:
+/// - `"tesseract"` - single backend, always runs
+/// - `["groq", "gemini"]` - fallback chain, tries groq first, gemini if rate limited
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BackendEntry {
+    /// Single backend that always runs.
+    Single(String),
+    /// Fallback chain - tries backends in order until one succeeds.
+    Chain(Vec<String>),
+}
+
+impl BackendEntry {
+    /// Get the primary backend name (first in chain or the single backend).
+    #[allow(dead_code)]
+    pub fn primary(&self) -> &str {
+        match self {
+            BackendEntry::Single(s) => s,
+            BackendEntry::Chain(v) => v.first().map(|s| s.as_str()).unwrap_or(""),
+        }
+    }
+
+    /// Get all backend names in this entry.
+    pub fn backends(&self) -> Vec<&str> {
+        match self {
+            BackendEntry::Single(s) => vec![s.as_str()],
+            BackendEntry::Chain(v) => v.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+
+    /// Check if this is a fallback chain (multiple backends).
+    #[allow(dead_code)]
+    pub fn is_chain(&self) -> bool {
+        matches!(self, BackendEntry::Chain(v) if v.len() > 1)
+    }
+}
+
+impl prefer::FromValue for BackendEntry {
+    fn from_value(value: &prefer::ConfigValue) -> prefer::Result<Self> {
+        // Try as string first
+        if let Some(s) = value.as_str() {
+            return Ok(BackendEntry::Single(s.to_string()));
+        }
+        // Try as array of strings
+        if let Some(arr) = value.as_array() {
+            let mut backends = Vec::new();
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    backends.push(s.to_string());
+                } else {
+                    return Err(prefer::Error::ConversionError {
+                        key: String::new(),
+                        type_name: "BackendEntry".to_string(),
+                        source: "array items must be strings".into(),
+                    });
+                }
+            }
+            return Ok(BackendEntry::Chain(backends));
+        }
+        Err(prefer::Error::ConversionError {
+            key: String::new(),
+            type_name: "BackendEntry".to_string(),
+            source: "expected string or array of strings".into(),
+        })
+    }
+}
+
+/// OCR backend configuration with parallel execution and fallback chains.
+///
+/// Each entry in `backends` is either:
+/// - A string: single backend that always runs
+/// - An array: fallback chain that tries backends in order
+///
+/// Example: `["tesseract", ["groq", "gemini"], "deepseek"]`
+/// - Runs tesseract, stores result
+/// - Runs groq (falls back to gemini if rate limited), stores result
+/// - Runs deepseek, stores result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrConfig {
+    /// Backend entries to run. Each entry produces a separate result.
+    #[serde(default = "default_ocr_backends")]
+    pub backends: Vec<BackendEntry>,
+}
+
+impl prefer::FromValue for OcrConfig {
+    fn from_value(value: &prefer::ConfigValue) -> prefer::Result<Self> {
+        // Try to get backends array
+        let backends = if let Some(obj) = value.as_object() {
+            if let Some(backends_val) = obj.get("backends") {
+                if let Some(arr) = backends_val.as_array() {
+                    let mut entries = Vec::new();
+                    for item in arr {
+                        entries.push(BackendEntry::from_value(item)?);
+                    }
+                    entries
+                } else {
+                    default_ocr_backends()
+                }
+            } else {
+                default_ocr_backends()
+            }
+        } else {
+            default_ocr_backends()
+        };
+        Ok(OcrConfig { backends })
+    }
+}
+
+fn default_ocr_backends() -> Vec<BackendEntry> {
+    vec![BackendEntry::Single("tesseract".to_string())]
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self {
+            backends: default_ocr_backends(),
+        }
+    }
+}
+
+impl OcrConfig {
+    /// Check if this is the default config.
+    pub fn is_default(&self) -> bool {
+        self.backends.len() == 1
+            && matches!(&self.backends[0], BackendEntry::Single(s) if s == "tesseract")
+    }
+}
+
 /// Analysis configuration for text extraction methods.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, prefer::FromValue)]
 pub struct AnalysisConfig {
+    /// OCR backend configuration with fallback support.
+    #[serde(default, skip_serializing_if = "OcrConfig::is_default")]
+    #[prefer(default)]
+    pub ocr: OcrConfig,
     /// Named analysis methods (custom commands).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[prefer(default)]
     pub methods: HashMap<String, AnalysisMethodConfig>,
     /// Default methods to run if --method flag not specified.
     /// Defaults to ["ocr"] if empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[prefer(default)]
     pub default_methods: Vec<String>,
 }
 
@@ -36,22 +173,26 @@ impl AnalysisConfig {
 }
 
 /// Configuration for a single analysis method.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, prefer::FromValue)]
 pub struct AnalysisMethodConfig {
     /// Command to execute (required for custom commands, optional for built-ins).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Arguments (can include {file} and {page} placeholders).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[prefer(default)]
     pub args: Vec<String>,
     /// Mimetypes this method applies to (supports wildcards like "audio/*").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[prefer(default)]
     pub mimetypes: Vec<String>,
     /// Analysis granularity: "page" or "document" (default: "document").
     #[serde(default = "default_granularity")]
+    #[prefer(default = "document")]
     pub granularity: String,
     /// Whether command outputs to stdout (true) or a file (false).
     #[serde(default = "default_true")]
+    #[prefer(default = "true")]
     pub stdout: bool,
     /// Output file template (if stdout is false). Can use {file} placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -292,11 +433,11 @@ impl Settings {
 }
 
 /// Configuration file structure.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, prefer::FromValue)]
 pub struct Config {
-    /// Target directory for data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
+    /// Data directory path.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "target")]
+    pub data_dir: Option<String>,
     /// Database filename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
@@ -310,51 +451,41 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_delay_ms: Option<u64>,
     /// Rate limit backend URL.
-    /// - None or "memory": In-memory (single process only)
-    /// - "sqlite": Use local SQLite database (multi-process safe)
-    /// - "redis://host:port": Use Redis (distributed)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_backend: Option<String>,
     /// Worker queue broker URL.
-    /// - None or "database": Use local SQLite database
-    /// - "amqp://host:port": Use RabbitMQ
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker_url: Option<String>,
-    /// Default refresh TTL in days for re-checking fetched URLs.
-    /// Individual scrapers can override this with their own refresh_ttl_days.
-    /// Defaults to 14 days if not set.
+    /// Default refresh TTL in days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_refresh_ttl_days: Option<u64>,
     /// Scraper configurations.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[prefer(default)]
     pub scrapers: HashMap<String, ScraperConfig>,
     /// LLM configuration for document summarization.
     #[serde(default, skip_serializing_if = "LlmConfig::is_default")]
+    #[prefer(default)]
     pub llm: LlmConfig,
     /// Analysis configuration for text extraction methods.
     #[serde(default, skip_serializing_if = "AnalysisConfig::is_default")]
+    #[prefer(default)]
     pub analysis: AnalysisConfig,
-
     /// Privacy configuration for Tor and proxy routing.
     #[serde(default, skip_serializing_if = "PrivacyConfig::is_default")]
+    #[prefer(default)]
     pub privacy: PrivacyConfig,
-
     /// URL rewriting for caching proxies (CDN bypass).
-    /// Maps original base URLs to proxy URLs.
-    /// Example: "https://www.cia.gov" = "https://cia.monokro.me"
-    /// Requests to cia.gov will be fetched via the CloudFront proxy instead.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[prefer(default)]
     pub via: HashMap<String, String>,
-
-    /// Via proxy mode - controls when via mappings are used for requests.
-    /// - "strict" (default): Never use via for requests, only for URL detection
-    /// - "fallback": Use via as fallback when rate limited (429/503)
-    /// - "priority": Use via first, fall back to original URL on failure
+    /// Via proxy mode.
     #[serde(default, skip_serializing_if = "is_via_mode_default")]
+    #[prefer(default)]
     pub via_mode: ViaMode,
-
     /// Path to the config file this was loaded from (not serialized).
     #[serde(skip)]
+    #[prefer(skip)]
     pub source_path: Option<PathBuf>,
 }
 
@@ -362,59 +493,60 @@ fn is_via_mode_default(mode: &ViaMode) -> bool {
     *mode == ViaMode::default()
 }
 
+/// App-level configuration snapshot for database storage.
+/// Contains only settings that should be synced across devices.
+/// Excludes device-specific (data_dir, privacy) and bootstrap (rate_limit_backend, broker_url) settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, prefer::FromValue)]
+pub struct AppConfigSnapshot {
+    /// User agent string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    /// Request timeout in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout: Option<u64>,
+    /// Delay between requests in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_delay_ms: Option<u64>,
+    /// Default refresh TTL in days for re-checking fetched URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_refresh_ttl_days: Option<u64>,
+    /// Scraper configurations.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[prefer(default)]
+    pub scrapers: HashMap<String, ScraperConfig>,
+    /// LLM configuration (app portion only - device settings excluded via serde skip).
+    #[serde(default, skip_serializing_if = "LlmConfig::is_default")]
+    #[prefer(default)]
+    pub llm: LlmConfig,
+    /// Analysis configuration for text extraction methods.
+    #[serde(default, skip_serializing_if = "AnalysisConfig::is_default")]
+    #[prefer(default)]
+    pub analysis: AnalysisConfig,
+    /// URL rewriting for caching proxies (CDN bypass).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[prefer(default)]
+    pub via: HashMap<String, String>,
+    /// Via proxy mode - controls when via mappings are used for requests.
+    #[serde(default, skip_serializing_if = "is_via_mode_default")]
+    #[prefer(default)]
+    pub via_mode: ViaMode,
+}
+
 impl Config {
-    /// Load configuration using prefer crate.
+    /// Load configuration using prefer crate for discovery.
     /// Automatically discovers foiacquire config files in standard locations.
     pub async fn load() -> Self {
+        // Use prefer for file discovery, then parse with serde
         match prefer::load("foiacquire").await {
             Ok(pref_config) => {
-                // Extract values from prefer config using dot notation
-                let target: Option<String> = pref_config.get("target").await.ok();
-                let database: Option<String> = pref_config.get("database").await.ok();
-                let user_agent: Option<String> = pref_config.get("user_agent").await.ok();
-                let request_timeout: Option<u64> = pref_config.get("request_timeout").await.ok();
-                let request_delay_ms: Option<u64> = pref_config.get("request_delay_ms").await.ok();
-                let rate_limit_backend: Option<String> =
-                    pref_config.get("rate_limit_backend").await.ok();
-                let broker_url: Option<String> = pref_config.get("broker_url").await.ok();
-                let default_refresh_ttl_days: Option<u64> =
-                    pref_config.get("default_refresh_ttl_days").await.ok();
-                let scrapers: HashMap<String, ScraperConfig> =
-                    pref_config.get("scrapers").await.unwrap_or_default();
-                let llm: LlmConfig = pref_config
-                    .get::<LlmConfig>("llm")
-                    .await
-                    .unwrap_or_default()
-                    .with_env_overrides();
-                let analysis: AnalysisConfig =
-                    pref_config.get("analysis").await.unwrap_or_default();
-                let privacy: PrivacyConfig = pref_config
-                    .get::<PrivacyConfig>("privacy")
-                    .await
-                    .unwrap_or_default()
-                    .with_env_overrides();
-                let via: HashMap<String, String> = pref_config.get("via").await.unwrap_or_default();
-                let via_mode: ViaMode = pref_config.get("via_mode").await.unwrap_or_default();
-
-                // Get the source path from prefer
-                let source_path = pref_config.source_path().cloned();
-
-                Config {
-                    target,
-                    database,
-                    user_agent,
-                    request_timeout,
-                    request_delay_ms,
-                    rate_limit_backend,
-                    broker_url,
-                    default_refresh_ttl_days,
-                    scrapers,
-                    llm,
-                    analysis,
-                    privacy,
-                    via,
-                    via_mode,
-                    source_path,
+                // Get the discovered file path and load with serde
+                if let Some(path) = pref_config.source_path() {
+                    match Self::load_from_path(path).await {
+                        Ok(config) => config,
+                        Err(_) => Self::default_with_env(),
+                    }
+                } else {
+                    Self::default_with_env()
                 }
             }
             Err(_) => {
@@ -450,7 +582,7 @@ impl Config {
         };
 
         config.source_path = Some(path.to_path_buf());
-        config.llm = config.llm.with_env_overrides();
+        // Note: LlmConfig device settings are auto-populated from env via Default
         config.privacy = config.privacy.with_env_overrides();
         Ok(config)
     }
@@ -481,8 +613,8 @@ impl Config {
     /// Apply configuration to settings.
     /// `base_dir` is used to resolve relative paths (typically config file dir or CWD).
     pub fn apply_to_settings(&self, settings: &mut Settings, base_dir: &Path) {
-        if let Some(ref target) = self.target {
-            settings.data_dir = self.resolve_path(target, base_dir);
+        if let Some(ref data_dir) = self.data_dir {
+            settings.data_dir = self.resolve_path(data_dir, base_dir);
             settings.documents_dir = settings.data_dir.join(DOCUMENTS_SUBDIR);
         }
         if let Some(ref database) = self.database {
@@ -528,20 +660,22 @@ impl Config {
     }
 
     /// Serialize config to JSON with paths converted to relative.
-    /// Any paths pointing to `target_dir` are converted to relative paths.
-    pub fn to_json_relative(&self, target_dir: &Path) -> String {
+    /// Any paths pointing to `base_dir` are converted to relative paths.
+    /// Note: This serializes the full config (for config files). For DB storage, use `to_app_snapshot()`.
+    #[allow(dead_code)]
+    pub fn to_json_relative(&self, base_dir: &Path) -> String {
         let mut config = self.clone();
         config.source_path = None; // Don't serialize the source path
 
-        // Convert target path to relative if it points to target_dir
-        if let Some(ref target) = config.target {
-            let target_path = Path::new(target);
-            if let Ok(canonical_target) = fs::canonicalize(target_path) {
-                if let Ok(canonical_dir) = fs::canonicalize(target_dir) {
-                    if canonical_target == canonical_dir {
-                        config.target = Some(".".to_string());
-                    } else if let Ok(rel) = canonical_target.strip_prefix(&canonical_dir) {
-                        config.target = Some(format!("./{}", rel.display()));
+        // Convert data_dir path to relative if it points to base_dir
+        if let Some(ref data_dir) = config.data_dir {
+            let data_path = Path::new(data_dir);
+            if let Ok(canonical_data) = fs::canonicalize(data_path) {
+                if let Ok(canonical_base) = fs::canonicalize(base_dir) {
+                    if canonical_data == canonical_base {
+                        config.data_dir = Some(".".to_string());
+                    } else if let Ok(rel) = canonical_data.strip_prefix(&canonical_base) {
+                        config.data_dir = Some(format!("./{}", rel.display()));
                     }
                 }
             }
@@ -552,8 +686,8 @@ impl Config {
             let db_path = Path::new(database);
             if db_path.is_absolute() {
                 if let Ok(canonical_db) = fs::canonicalize(db_path) {
-                    if let Ok(canonical_dir) = fs::canonicalize(target_dir) {
-                        if let Ok(rel) = canonical_db.strip_prefix(&canonical_dir) {
+                    if let Ok(canonical_base) = fs::canonicalize(base_dir) {
+                        if let Ok(rel) = canonical_db.strip_prefix(&canonical_base) {
                             config.database = Some(format!("./{}", rel.display()));
                         }
                     }
@@ -564,28 +698,68 @@ impl Config {
         serde_json::to_string_pretty(&config).unwrap_or_default()
     }
 
+    /// Extract app-level settings for database storage.
+    /// Excludes device-specific and bootstrap settings that shouldn't be synced.
+    pub fn to_app_snapshot(&self) -> AppConfigSnapshot {
+        AppConfigSnapshot {
+            user_agent: self.user_agent.clone(),
+            request_timeout: self.request_timeout,
+            request_delay_ms: self.request_delay_ms,
+            default_refresh_ttl_days: self.default_refresh_ttl_days,
+            scrapers: self.scrapers.clone(),
+            llm: self.llm.clone(),
+            analysis: self.analysis.clone(),
+            via: self.via.clone(),
+            via_mode: self.via_mode,
+        }
+    }
+
+    /// Apply app-level settings from a snapshot (loaded from DB).
+    pub fn apply_app_snapshot(&mut self, snapshot: AppConfigSnapshot) {
+        self.user_agent = snapshot.user_agent;
+        self.request_timeout = snapshot.request_timeout;
+        self.request_delay_ms = snapshot.request_delay_ms;
+        self.default_refresh_ttl_days = snapshot.default_refresh_ttl_days;
+        self.scrapers = snapshot.scrapers;
+        self.llm = snapshot.llm;
+        self.analysis = snapshot.analysis;
+        self.via = snapshot.via;
+        self.via_mode = snapshot.via_mode;
+    }
+
+    /// Compute SHA-256 hash of the app-level settings only.
+    pub fn app_hash(&self) -> String {
+        let snapshot = self.to_app_snapshot();
+        let json = serde_json::to_string(&snapshot).unwrap_or_default();
+        let mut hasher = Sha256::new();
+        hasher.update(json.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
     /// Load configuration from database history.
+    /// Loads app-level settings only and merges with default config.
+    /// Device-specific and bootstrap settings are not stored in DB.
+    ///
+    /// Uses prefer_db's FoiaConfigLoader for serde-based deserialization.
     pub async fn load_from_db(db_path: &Path) -> Option<Self> {
-        let ctx = DieselDbContext::from_sqlite_path(db_path).ok()?;
-        let entry = ctx.config_history().get_latest().await.ok()??;
+        let loader = FoiaConfigLoader::new(db_path);
+        let snapshot = loader.load_snapshot().await?;
 
-        let mut config: Config = match entry.format.to_lowercase().as_str() {
-            "json" => serde_json::from_str(&entry.data).ok()?,
-            "toml" => toml::from_str(&entry.data).ok()?,
-            _ => serde_json::from_str(&entry.data).ok()?,
-        };
-
-        // Apply environment variable overrides
-        config.llm = config.llm.with_env_overrides();
-        config.privacy = config.privacy.with_env_overrides();
+        // Start with default config (gets device settings from env)
+        let mut config = Config::default();
+        // Apply app settings from DB
+        config.apply_app_snapshot(snapshot);
         Some(config)
     }
 
     /// Save configuration to database history if it has changed.
-    /// Returns true if saved, false if unchanged, or logs warning on error.
+    /// Only saves app-level settings (excludes device-specific and bootstrap settings).
     pub async fn save_to_db_if_changed(&self, settings: &Settings) {
-        let hash = self.hash();
-        let data = self.to_json_relative(&settings.data_dir);
+        // Use app_hash to only track changes to app-level settings
+        let hash = self.app_hash();
+        // Serialize only app-level settings
+        let snapshot = self.to_app_snapshot();
+        let data = serde_json::to_string_pretty(&snapshot).unwrap_or_default();
         let format = "json";
 
         let ctx = match settings.create_db_context() {
@@ -624,54 +798,54 @@ pub struct LoadOptions {
     pub config_path: Option<PathBuf>,
     /// Use CWD for relative paths instead of config file directory.
     pub use_cwd: bool,
-    /// Target directory or database file (--target flag).
+    /// Data directory or database file (--data flag).
     /// Can be a directory containing foiacquire.db or a .db file directly.
-    pub target: Option<PathBuf>,
+    pub data: Option<PathBuf>,
 }
 
-/// Resolved target information for SQLite databases.
+/// Resolved data path information for SQLite databases.
 /// Only used when DATABASE_URL is NOT set to postgres.
 #[derive(Debug, Clone)]
-pub struct ResolvedTarget {
+pub struct ResolvedData {
     /// The database filename.
     pub database_filename: String,
     /// Full path to the database.
     pub database_path: PathBuf,
 }
 
-impl ResolvedTarget {
-    /// Resolve a target path to database filename and path.
-    /// - If target is a .db file, extract filename and use as path
-    /// - If target is a directory, look for foiacquire.db inside
-    pub fn from_path(target: &Path) -> Self {
-        let target = if target.is_absolute() {
-            target.to_path_buf()
+impl ResolvedData {
+    /// Resolve a data path to database filename and path.
+    /// - If path is a .db file, extract filename and use as path
+    /// - If path is a directory, look for foiacquire.db inside
+    pub fn from_path(path: &Path) -> Self {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
         } else {
             std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
-                .join(target)
+                .join(path)
         };
 
         // Check if it's a file (by extension or existence)
-        let is_db_file = target
+        let is_db_file = path
             .extension()
             .is_some_and(|ext| ext == "db" || ext == "sqlite" || ext == "sqlite3")
-            || (target.exists() && target.is_file());
+            || (path.exists() && path.is_file());
 
         if is_db_file {
-            let database_filename = target
+            let database_filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(DEFAULT_DATABASE_FILENAME)
                 .to_string();
             Self {
                 database_filename,
-                database_path: target,
+                database_path: path,
             }
         } else {
             // It's a directory
             let database_filename = DEFAULT_DATABASE_FILENAME.to_string();
-            let database_path = target.join(&database_filename);
+            let database_path = path.join(&database_filename);
             Self {
                 database_filename,
                 database_path,
@@ -727,33 +901,58 @@ impl DatabaseUrlEnv {
     }
 }
 
-/// Resolve target path to a data directory.
+/// Resolve data path to a directory.
 /// If path points to a .db file, returns its parent directory.
-fn resolve_target_to_data_dir(target: &Path) -> PathBuf {
-    let target = if target.is_absolute() {
-        target.to_path_buf()
+fn resolve_data_path_to_dir(path: &Path) -> PathBuf {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
-            .join(target)
+            .join(path)
     };
 
-    if target
+    if path
         .extension()
         .is_some_and(|ext| ext == "db" || ext == "sqlite" || ext == "sqlite3")
     {
-        target.parent().unwrap_or(Path::new(".")).to_path_buf()
+        path.parent().unwrap_or(Path::new(".")).to_path_buf()
     } else {
-        target
+        path
     }
 }
 
 /// Load config from the appropriate source based on options.
+/// Merges file config with DB app settings for cross-device sync.
 async fn load_config_from_sources(
     options: &LoadOptions,
-    target_data_dir: Option<&PathBuf>,
-    resolved_target: Option<&ResolvedTarget>,
+    data_dir_override: Option<&PathBuf>,
+    resolved_data: Option<&ResolvedData>,
 ) -> Config {
+    // Step 1: Load file-based config
+    let mut config = load_file_config(options, data_dir_override).await;
+
+    // Step 2: Merge with DB app settings (synced across devices)
+    // DB provides baseline, file overrides take priority
+    if let Some(resolved) = resolved_data {
+        if let Some(db_config) = Config::load_from_db(&resolved.database_path).await {
+            tracing::debug!(
+                "Merging DB app settings from: {}",
+                resolved.database_path.display()
+            );
+            // Apply DB app settings as baseline, then re-apply file overrides
+            let file_snapshot = config.to_app_snapshot();
+            config.apply_app_snapshot(db_config.to_app_snapshot());
+            // Re-apply file settings on top (file takes priority)
+            merge_app_snapshots(&mut config, &file_snapshot);
+        }
+    }
+
+    config
+}
+
+/// Load config from file sources only (no DB merge).
+async fn load_file_config(options: &LoadOptions, data_dir_override: Option<&PathBuf>) -> Config {
     // Priority 1: Explicit --config flag
     if let Some(ref config_path) = options.config_path {
         return Config::load_from_path(config_path)
@@ -761,29 +960,59 @@ async fn load_config_from_sources(
             .unwrap_or_else(|_| Config::default_with_env());
     }
 
-    // Priority 2-3: Config next to target, or from database history
-    if let Some(data_dir) = target_data_dir {
+    // Priority 2: Config next to data dir
+    if let Some(data_dir) = data_dir_override {
         if let Some(config_path) = find_config_next_to_db(data_dir) {
-            tracing::debug!("Found config next to target: {}", config_path.display());
+            tracing::debug!("Found config next to data dir: {}", config_path.display());
             return Config::load_from_path(&config_path)
                 .await
                 .unwrap_or_else(|_| Config::default_with_env());
         }
-
-        if let Some(resolved) = resolved_target {
-            tracing::debug!(
-                "No config file found, trying database history: {}",
-                resolved.database_path.display()
-            );
-            if let Some(config) = Config::load_from_db(&resolved.database_path).await {
-                return config;
-            }
-            tracing::debug!("No config in database history, using defaults");
-        }
     }
 
-    // Priority 4: Auto-discover via prefer
+    // Priority 3: Auto-discover via prefer
     Config::load().await
+}
+
+/// Merge non-default values from snapshot into config.
+/// Only applies values that differ from defaults (preserves explicit settings).
+fn merge_app_snapshots(config: &mut Config, overlay: &AppConfigSnapshot) {
+    let defaults = AppConfigSnapshot::default();
+
+    // Merge each field if it differs from default
+    if overlay.user_agent != defaults.user_agent {
+        config.user_agent = overlay.user_agent.clone();
+    }
+    if overlay.request_timeout != defaults.request_timeout {
+        config.request_timeout = overlay.request_timeout;
+    }
+    if overlay.request_delay_ms != defaults.request_delay_ms {
+        config.request_delay_ms = overlay.request_delay_ms;
+    }
+    if overlay.default_refresh_ttl_days != defaults.default_refresh_ttl_days {
+        config.default_refresh_ttl_days = overlay.default_refresh_ttl_days;
+    }
+    if overlay.scrapers != defaults.scrapers {
+        // Merge scrapers - overlay entries replace base entries
+        for (key, value) in &overlay.scrapers {
+            config.scrapers.insert(key.clone(), value.clone());
+        }
+    }
+    if !overlay.llm.is_default() {
+        // Apply LLM app settings (device settings come from env)
+        config.llm.app = overlay.llm.app.clone();
+    }
+    if !overlay.analysis.is_default() {
+        config.analysis = overlay.analysis.clone();
+    }
+    if overlay.via != defaults.via {
+        for (key, value) in &overlay.via {
+            config.via.insert(key.clone(), value.clone());
+        }
+    }
+    if overlay.via_mode != defaults.via_mode {
+        config.via_mode = overlay.via_mode;
+    }
 }
 
 /// Load settings with explicit options.
@@ -791,23 +1020,17 @@ async fn load_config_from_sources(
 pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Config) {
     let db_env = DatabaseUrlEnv::from_env();
 
-    let target_data_dir = options
-        .target
-        .as_ref()
-        .map(|t| resolve_target_to_data_dir(t));
+    let data_dir_override = options.data.as_ref().map(|d| resolve_data_path_to_dir(d));
 
     // Only resolve SQLite database paths when NOT using postgres
-    let resolved_target = if !db_env.is_postgres {
-        options
-            .target
-            .as_ref()
-            .map(|t| ResolvedTarget::from_path(t))
+    let resolved_data = if !db_env.is_postgres {
+        options.data.as_ref().map(|d| ResolvedData::from_path(d))
     } else {
         None
     };
 
     let config =
-        load_config_from_sources(&options, target_data_dir.as_ref(), resolved_target.as_ref())
+        load_config_from_sources(&options, data_dir_override.as_ref(), resolved_data.as_ref())
             .await;
 
     let mut settings = Settings::default();
@@ -823,14 +1046,14 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
 
     config.apply_to_settings(&mut settings, &base_dir);
 
-    // --target override takes precedence for data_dir and documents_dir
-    if let Some(data_dir) = target_data_dir {
+    // --data override takes precedence for data_dir and documents_dir
+    if let Some(data_dir) = data_dir_override {
         settings.data_dir = data_dir;
         settings.documents_dir = settings.data_dir.join("documents");
     }
 
     // Apply SQLite-specific settings if resolved (not using postgres)
-    if let Some(resolved) = resolved_target {
+    if let Some(resolved) = resolved_data {
         settings.database_filename = resolved.database_filename;
     }
 
@@ -847,6 +1070,12 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
     {
         tracing::debug!("Using RATE_LIMIT_BACKEND from environment: {}", backend);
         settings.rate_limit_backend = Some(backend);
+    }
+
+    // BROKER_URL environment variable takes precedence over config
+    if let Some(broker) = std::env::var("BROKER_URL").ok().filter(|s| !s.is_empty()) {
+        tracing::debug!("Using BROKER_URL from environment: {}", broker);
+        settings.broker_url = Some(broker);
     }
 
     // Save config to database history (errors logged gracefully)

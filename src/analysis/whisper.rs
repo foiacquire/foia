@@ -192,14 +192,14 @@ impl AnalysisBackend for WhisperBackend {
         };
 
         let metadata = serde_json::json!({
-            "model": self.config.model,
             "language": self.config.language,
         });
 
         Ok(AnalysisResult {
             text,
             confidence: None,
-            backend: format!("whisper-{}", self.config.model),
+            backend: "whisper".to_string(),
+            model: Some(self.config.model.clone()),
             processing_time_ms: start.elapsed().as_millis() as u64,
             metadata: Some(metadata),
         })

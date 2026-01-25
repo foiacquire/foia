@@ -93,6 +93,7 @@ impl OcrBackend for TesseractBackend {
             text,
             confidence: None, // Tesseract can provide this but we're not parsing it yet
             backend: OcrBackendType::Tesseract,
+            model: None, // Tesseract doesn't have model variants
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }
@@ -112,6 +113,7 @@ impl OcrBackend for TesseractBackend {
             text,
             confidence: None,
             backend: OcrBackendType::Tesseract,
+            model: None,
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }

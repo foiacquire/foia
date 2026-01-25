@@ -8,12 +8,6 @@ pub mod config;
 pub mod configurable;
 pub mod google_drive;
 mod http_client;
-pub mod rate_limit_backend;
-pub mod rate_limit_memory;
-#[cfg(feature = "redis-backend")]
-pub mod rate_limit_redis;
-pub mod rate_limit_sqlite;
-pub mod rate_limiter;
 
 #[allow(unused_imports)]
 pub use archive::{ArchiveError, ArchiveRegistry, ArchiveSource, SnapshotInfo, WaybackSource};
@@ -25,17 +19,14 @@ pub use config::{ScraperConfig, ViaMode};
 pub use configurable::ConfigurableScraper;
 pub use http_client::{HttpClient, HttpResponse};
 
-// Rate limiting exports
-// Re-export for external use
-#[allow(unused_imports)]
-pub use rate_limit_backend::{DomainRateState, RateLimitBackend, RateLimitError};
-pub use rate_limit_memory::InMemoryRateLimitBackend;
+// Rate limiting re-exports from crate::rate_limit
 #[cfg(feature = "redis-backend")]
-pub use rate_limit_redis::RedisRateLimitBackend;
-pub use rate_limit_sqlite::DieselRateLimitBackend;
-
-// Legacy RateLimiter (wraps backend with high-level API)
-pub use rate_limiter::RateLimiter;
+pub use crate::rate_limit::RedisRateLimitBackend;
+#[allow(unused_imports)]
+pub use crate::rate_limit::{
+    DieselRateLimitBackend, DomainRateState, InMemoryRateLimitBackend, RateLimitBackend,
+    RateLimitError, RateLimiter,
+};
 
 use crate::models::{CrawlUrl, DiscoveryMethod};
 use chrono::{DateTime, Utc};

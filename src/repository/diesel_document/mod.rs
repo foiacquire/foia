@@ -34,6 +34,7 @@ use crate::{with_conn, with_conn_split};
 #[allow(dead_code)]
 pub struct OcrResult {
     pub backend: String,
+    pub model: Option<String>,
     pub text: Option<String>,
     pub confidence: Option<f32>,
     pub error: Option<String>,

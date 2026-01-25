@@ -256,6 +256,8 @@ pub struct PageOcrResultRecord {
     pub processing_time_ms: Option<i32>,
     pub error_message: Option<String>,
     pub created_at: String,
+    pub model: Option<String>,
+    pub image_hash: Option<String>,
 }
 
 /// New page OCR result for insertion.
@@ -272,6 +274,8 @@ pub struct NewPageOcrResult<'a> {
     pub processing_time_ms: Option<i32>,
     pub error_message: Option<&'a str>,
     pub created_at: &'a str,
+    pub model: Option<&'a str>,
+    pub image_hash: Option<&'a str>,
 }
 
 /// Config history record from the database.
@@ -413,6 +417,7 @@ pub struct DocumentAnalysisResultRecord {
     pub status: String,
     pub created_at: String,
     pub metadata: Option<String>,
+    pub model: Option<String>,
 }
 
 /// New document analysis result for insertion.
@@ -431,4 +436,5 @@ pub struct NewDocumentAnalysisResult<'a> {
     pub status: &'a str,
     pub created_at: &'a str,
     pub metadata: Option<&'a str>,
+    pub model: Option<&'a str>,
 }
