@@ -20,6 +20,12 @@ pub enum OcrError {
     #[error("OCR failed: {0}")]
     OcrFailed(String),
 
+    #[error("Rate limited by {backend}, retry after {retry_after_secs:?}s")]
+    RateLimited {
+        backend: OcrBackendType,
+        retry_after_secs: Option<u64>,
+    },
+
     #[error("Model not found: {0}")]
     ModelNotFound(String),
 
@@ -39,6 +45,8 @@ pub struct OcrResult {
     pub confidence: Option<f32>,
     /// Which backend produced this result.
     pub backend: OcrBackendType,
+    /// Which model was used (e.g., "gemini-1.5-flash", "llama-4-scout-17b").
+    pub model: Option<String>,
     /// Processing time in milliseconds.
     pub processing_time_ms: u64,
 }

@@ -1,7 +1,10 @@
 //! Shared PDF-to-image conversion utilities for OCR backends.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use sha2::{Digest, Sha256};
 
 use super::backend::OcrError;
 
@@ -48,6 +51,17 @@ pub fn find_page_image(temp_path: &Path, page_num: u32) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Compute SHA-256 hash of a file.
+///
+/// Returns hex-encoded hash string.
+pub fn compute_file_hash(path: &Path) -> Result<String, OcrError> {
+    let data = fs::read(path).map_err(OcrError::Io)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
 }
 
 #[cfg(test)]

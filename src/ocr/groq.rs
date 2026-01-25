@@ -24,10 +24,10 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tracing::{debug, warn};
 
-use super::api_rate_limit::{backoff_delay, get_api_delay, parse_retry_after};
 use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
 use super::pdf_utils;
 use crate::privacy::PrivacyConfig;
+use crate::rate_limit::{backoff_delay, get_delay_from_env, parse_retry_after};
 use crate::scrapers::HttpClient;
 
 /// Maximum retry attempts on rate limit errors.
@@ -185,8 +185,8 @@ impl GroqBackend {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
-        // Rate limiting: wait before request
-        let delay = get_api_delay("GROQ_DELAY_MS");
+        // Rate limiting: wait before request (default 200ms)
+        let delay = get_delay_from_env("GROQ_DELAY_MS", 200);
         if delay > Duration::ZERO {
             debug!("Groq: waiting {:?} before request", delay);
             tokio::time::sleep(delay).await;
@@ -206,19 +206,20 @@ impl GroqBackend {
 
             // Handle rate limiting (429)
             if response.status.as_u16() == 429 {
-                if attempt >= MAX_RETRIES {
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(OcrError::OcrFailed(format!(
-                        "Groq rate limit exceeded after {} retries: {}",
-                        MAX_RETRIES, body
-                    )));
-                }
-
                 // Get Retry-After header
                 let retry_after = response.headers.get("retry-after").map(|s| s.as_str());
+                let retry_after_secs = retry_after.and_then(|s| s.parse::<u64>().ok());
 
-                let wait = parse_retry_after(retry_after)
-                    .unwrap_or_else(|| backoff_delay(attempt, 1000));
+                if attempt >= MAX_RETRIES {
+                    // Return RateLimited error so fallback chain can try next backend
+                    return Err(OcrError::RateLimited {
+                        backend: OcrBackendType::Groq,
+                        retry_after_secs,
+                    });
+                }
+
+                let wait =
+                    parse_retry_after(retry_after).unwrap_or_else(|| backoff_delay(attempt, 1000));
 
                 warn!(
                     "Groq rate limited (attempt {}), waiting {:?}",
@@ -305,6 +306,7 @@ impl OcrBackend for GroqBackend {
             text,
             confidence: None,
             backend: OcrBackendType::Groq,
+            model: Some(self.model.clone()),
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }
@@ -322,6 +324,7 @@ impl OcrBackend for GroqBackend {
             text,
             confidence: None,
             backend: OcrBackendType::Groq,
+            model: Some(self.model.clone()),
             processing_time_ms: elapsed.as_millis() as u64,
         })
     }

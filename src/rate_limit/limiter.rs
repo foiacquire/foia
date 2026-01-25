@@ -3,17 +3,15 @@
 //! Provides a high-level rate limiting API that wraps a pluggable backend.
 //! Supports in-memory, SQLite/PostgreSQL (Diesel), and Redis backends.
 
-mod config;
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, info, warn};
 use url::Url;
 
-pub use config::{DomainStats, RateLimitConfig};
+pub use super::config::{DomainStats, RateLimitConfig};
 
-use super::rate_limit_backend::RateLimitBackend;
+use super::backend::RateLimitBackend;
 
 /// Type alias for a boxed rate limit backend.
 pub type BoxedRateLimitBackend = Arc<dyn RateLimitBackend>;
@@ -301,8 +299,8 @@ impl std::fmt::Debug for RateLimiter {
 
 #[cfg(test)]
 mod tests {
+    use super::super::InMemoryRateLimitBackend;
     use super::*;
-    use crate::scrapers::InMemoryRateLimitBackend;
 
     fn create_test_limiter() -> RateLimiter {
         let backend = Arc::new(InMemoryRateLimitBackend::new(100));

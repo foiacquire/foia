@@ -89,6 +89,7 @@ impl DieselDocumentRepository {
         version_id: i32,
         analysis_type: &str,
         backend: &str,
+        model: Option<&str>,
         result_text: Option<&str>,
         confidence: Option<f32>,
         processing_time_ms: Option<u64>,
@@ -120,6 +121,7 @@ impl DieselDocumentRepository {
                         status,
                         created_at: &now,
                         metadata: metadata_str.as_deref(),
+                        model,
                     })
                     .execute(&mut conn)
                     .await?;
@@ -138,16 +140,17 @@ impl DieselDocumentRepository {
                 let result: InsertResult = diesel::sql_query(
                     "INSERT INTO document_analysis_results
                      (page_id, document_id, version_id, analysis_type, backend, result_text,
-                      confidence, processing_time_ms, error, status, created_at, metadata)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                     ON CONFLICT (page_id, analysis_type, backend) WHERE page_id IS NOT NULL
+                      confidence, processing_time_ms, error, status, created_at, metadata, model)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                     ON CONFLICT (page_id, analysis_type, backend, COALESCE(model, '')) WHERE page_id IS NOT NULL
                      DO UPDATE SET result_text = EXCLUDED.result_text,
                                    confidence = EXCLUDED.confidence,
                                    processing_time_ms = EXCLUDED.processing_time_ms,
                                    error = EXCLUDED.error,
                                    status = EXCLUDED.status,
                                    created_at = EXCLUDED.created_at,
-                                   metadata = EXCLUDED.metadata
+                                   metadata = EXCLUDED.metadata,
+                                   model = EXCLUDED.model
                      RETURNING id"
                 )
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(Some(page_id as i32))
@@ -162,6 +165,7 @@ impl DieselDocumentRepository {
                 .bind::<diesel::sql_types::Text, _>(status)
                 .bind::<diesel::sql_types::Text, _>(&now)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(metadata_str.as_deref())
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
                 .get_result(&mut conn)
                 .await?;
                 Ok(result.id as i64)
@@ -177,6 +181,7 @@ impl DieselDocumentRepository {
         version_id: i32,
         analysis_type: &str,
         backend: &str,
+        model: Option<&str>,
         result_text: Option<&str>,
         confidence: Option<f32>,
         processing_time_ms: Option<u64>,
@@ -208,6 +213,7 @@ impl DieselDocumentRepository {
                         status,
                         created_at: &now,
                         metadata: metadata_str.as_deref(),
+                        model,
                     })
                     .execute(&mut conn)
                     .await?;
@@ -226,16 +232,17 @@ impl DieselDocumentRepository {
                 let result: InsertResult = diesel::sql_query(
                     "INSERT INTO document_analysis_results
                      (page_id, document_id, version_id, analysis_type, backend, result_text,
-                      confidence, processing_time_ms, error, status, created_at, metadata)
-                     VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                     ON CONFLICT (document_id, version_id, analysis_type, backend) WHERE page_id IS NULL
+                      confidence, processing_time_ms, error, status, created_at, metadata, model)
+                     VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     ON CONFLICT (document_id, version_id, analysis_type, backend, COALESCE(model, '')) WHERE page_id IS NULL
                      DO UPDATE SET result_text = EXCLUDED.result_text,
                                    confidence = EXCLUDED.confidence,
                                    processing_time_ms = EXCLUDED.processing_time_ms,
                                    error = EXCLUDED.error,
                                    status = EXCLUDED.status,
                                    created_at = EXCLUDED.created_at,
-                                   metadata = EXCLUDED.metadata
+                                   metadata = EXCLUDED.metadata,
+                                   model = EXCLUDED.model
                      RETURNING id"
                 )
                 .bind::<diesel::sql_types::Text, _>(document_id)
@@ -249,6 +256,7 @@ impl DieselDocumentRepository {
                 .bind::<diesel::sql_types::Text, _>(status)
                 .bind::<diesel::sql_types::Text, _>(&now)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(metadata_str.as_deref())
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
                 .get_result(&mut conn)
                 .await?;
                 Ok(result.id as i64)

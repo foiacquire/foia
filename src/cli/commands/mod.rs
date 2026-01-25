@@ -44,10 +44,10 @@ pub enum RateLimitBackendType {
 #[command(about = "FOIA document acquisition and research system")]
 #[command(version)]
 pub struct Cli {
-    /// Target directory or database file (overrides config file).
+    /// Data directory or database file (overrides config file).
     /// Can be a directory containing foiacquire.db or a .db file directly.
-    #[arg(long, short = 't', global = true)]
-    target: Option<PathBuf>,
+    #[arg(long, short = 'd', global = true)]
+    data: Option<PathBuf>,
 
     /// Config file path (overrides auto-discovery)
     #[arg(short, long, global = true)]
@@ -738,7 +738,7 @@ pub async fn run() -> anyhow::Result<()> {
     let options = LoadOptions {
         config_path: cli.config,
         use_cwd: cli.cwd,
-        target: cli.target,
+        data: cli.data,
     };
     let (settings, mut config) = load_settings_with_options(options).await;
 

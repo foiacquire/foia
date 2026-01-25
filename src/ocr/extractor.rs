@@ -420,6 +420,18 @@ impl TextExtractor {
     /// OCR a single page of a PDF file.
     /// Converts the specified page to an image and runs Tesseract on it.
     pub fn ocr_pdf_page(&self, file_path: &Path, page: u32) -> Result<String, ExtractionError> {
+        self.ocr_pdf_page_with_hash(file_path, page)
+            .map(|(text, _hash)| text)
+    }
+
+    /// OCR a single page of a PDF file, returning both text and image hash.
+    /// The image hash can be used for deduplication - pages with identical
+    /// images will have the same hash.
+    pub fn ocr_pdf_page_with_hash(
+        &self,
+        file_path: &Path,
+        page: u32,
+    ) -> Result<(String, String), ExtractionError> {
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path();
         let output_prefix = temp_path.join("page");
@@ -440,7 +452,48 @@ impl TextExtractor {
 
         // Find the generated image
         if let Some(image_path) = self.find_page_image(temp_path, page) {
-            self.run_tesseract(&image_path)
+            // Compute hash before running OCR
+            let image_hash = super::pdf_utils::compute_file_hash(&image_path)
+                .map_err(|e| ExtractionError::ExtractionFailed(e.to_string()))?;
+            let text = self.run_tesseract(&image_path)?;
+            Ok((text, image_hash))
+        } else {
+            Err(ExtractionError::ExtractionFailed(format!(
+                "No image generated for page {}",
+                page
+            )))
+        }
+    }
+
+    /// Get the image hash for a PDF page without running OCR.
+    /// Useful for checking deduplication before processing.
+    pub fn get_pdf_page_hash(
+        &self,
+        file_path: &Path,
+        page: u32,
+    ) -> Result<String, ExtractionError> {
+        let temp_dir = TempDir::new()?;
+        let temp_path = temp_dir.path();
+        let output_prefix = temp_path.join("page");
+
+        // Convert just this page to an image using pdftoppm
+        let page_str = page.to_string();
+        let status = Command::new("pdftoppm")
+            .args(["-png", "-r", "300", "-f", &page_str, "-l", &page_str])
+            .arg(file_path)
+            .arg(&output_prefix)
+            .status();
+
+        check_cmd_status(
+            status,
+            "pdftoppm (install poppler-utils)",
+            &format!("pdftoppm failed to convert page {}", page),
+        )?;
+
+        // Find the generated image
+        if let Some(image_path) = self.find_page_image(temp_path, page) {
+            super::pdf_utils::compute_file_hash(&image_path)
+                .map_err(|e| ExtractionError::ExtractionFailed(e.to_string()))
         } else {
             Err(ExtractionError::ExtractionFailed(format!(
                 "No image generated for page {}",

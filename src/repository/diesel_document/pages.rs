@@ -164,13 +164,16 @@ impl DieselDocumentRepository {
 
     /// Store OCR result for a page from a specific backend.
     /// Stores in page_ocr_results table and updates page's ocr_text/status.
+    #[allow(clippy::too_many_arguments)]
     pub async fn store_page_ocr_result(
         &self,
         page_id: i64,
         backend: &str,
+        model: Option<&str>,
         text: Option<&str>,
         confidence: Option<f32>,
         processing_time_ms: Option<i32>,
+        image_hash: Option<&str>,
     ) -> Result<(), DieselError> {
         let now = Utc::now().to_rfc3339();
         let char_count = text.map(|t| t.chars().count() as i32);
@@ -187,6 +190,8 @@ impl DieselDocumentRepository {
             processing_time_ms,
             error_message: None,
             created_at: &now,
+            model,
+            image_hash,
         };
 
         with_conn!(self.pool, conn, {
@@ -202,6 +207,7 @@ impl DieselDocumentRepository {
                     page_ocr_results::word_count.eq(word_count),
                     page_ocr_results::processing_time_ms.eq(processing_time_ms),
                     page_ocr_results::created_at.eq(&now),
+                    page_ocr_results::image_hash.eq(image_hash),
                 ))
                 .execute(&mut conn)
                 .await?;
@@ -225,6 +231,7 @@ impl DieselDocumentRepository {
         &self,
         page_id: i64,
         backend: &str,
+        model: Option<&str>,
         error_message: &str,
     ) -> Result<(), DieselError> {
         let now = Utc::now().to_rfc3339();
@@ -240,6 +247,8 @@ impl DieselDocumentRepository {
             processing_time_ms: None,
             error_message: Some(error_message),
             created_at: &now,
+            model,
+            image_hash: None,
         };
 
         with_conn!(self.pool, conn, {
@@ -271,6 +280,24 @@ impl DieselDocumentRepository {
                 .order(page_ocr_results::created_at.desc())
                 .load(&mut conn)
                 .await
+        })
+    }
+
+    /// Find an existing OCR result by image hash and backend.
+    /// Used for deduplication - if we've already OCR'd this exact image, reuse the result.
+    pub async fn find_ocr_result_by_image_hash(
+        &self,
+        image_hash: &str,
+        backend: &str,
+    ) -> Result<Option<PageOcrResultRecord>, DieselError> {
+        with_conn!(self.pool, conn, {
+            page_ocr_results::table
+                .filter(page_ocr_results::image_hash.eq(image_hash))
+                .filter(page_ocr_results::backend.eq(backend))
+                .filter(page_ocr_results::text.is_not_null())
+                .first(&mut conn)
+                .await
+                .optional()
         })
     }
 

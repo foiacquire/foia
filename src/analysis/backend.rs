@@ -48,9 +48,11 @@ pub struct AnalysisResult {
     pub confidence: Option<f32>,
     /// Which backend produced this result.
     pub backend: String,
+    /// Which model was used (e.g., "gemini-1.5-flash", "llama-4-scout-17b").
+    pub model: Option<String>,
     /// Processing time in milliseconds.
     pub processing_time_ms: u64,
-    /// Additional metadata (model version, language, etc.)
+    /// Additional metadata (language detected, etc.)
     pub metadata: Option<serde_json::Value>,
 }
 

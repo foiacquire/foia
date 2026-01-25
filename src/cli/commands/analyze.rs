@@ -682,7 +682,7 @@ pub async fn cmd_analyze(
     let config = Config::load().await;
     let mut current_config_hash = config.hash();
 
-    let service = AnalysisService::new(doc_repo);
+    let service = AnalysisService::with_ocr_config(doc_repo, config.analysis.ocr.clone());
 
     // If specific doc_id provided, process just that document (no daemon mode)
     if let Some(id) = doc_id {

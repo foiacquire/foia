@@ -202,6 +202,7 @@ impl CustomBackend {
             text,
             confidence: None,
             backend: self.name.clone(),
+            model: None, // Custom commands don't have model variants
             processing_time_ms: start.elapsed().as_millis() as u64,
             metadata: Some(metadata),
         })

@@ -30,12 +30,12 @@
 // Allow unused exports - these are public API for per-source backend selection
 #![allow(unused_imports)]
 
-mod api_rate_limit;
 mod archive;
 mod backend;
 mod deepseek;
 mod email;
 mod extractor;
+mod fallback;
 mod gemini;
 mod groq;
 mod model_utils;
@@ -56,6 +56,7 @@ pub use url_finder::UrlFinder;
 // OCR backend abstraction for A/B testing and per-source backend selection
 pub use backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrManager, OcrResult};
 pub use deepseek::DeepSeekBackend;
+pub use fallback::FallbackOcrBackend;
 pub use gemini::GeminiBackend;
 pub use groq::GroqBackend;
 pub use tesseract::TesseractBackend;

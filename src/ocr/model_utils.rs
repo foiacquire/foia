@@ -189,12 +189,14 @@ pub fn ensure_models_present(
 pub fn build_ocr_result(
     text: String,
     backend: super::backend::OcrBackendType,
+    model: Option<String>,
     start: std::time::Instant,
 ) -> super::backend::OcrResult {
     super::backend::OcrResult {
         text,
         confidence: None,
         backend,
+        model,
         processing_time_ms: start.elapsed().as_millis() as u64,
     }
 }

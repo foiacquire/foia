@@ -1,7 +1,8 @@
 //! OCR processing helper functions.
 
+use crate::config::OcrConfig;
 use crate::models::{Document, DocumentPage, PageOcrStatus};
-use crate::ocr::TextExtractor;
+use crate::ocr::{FallbackOcrBackend, OcrBackend, OcrConfig as OcrBackendConfig, TextExtractor};
 use crate::repository::DieselDocumentRepository;
 
 use super::types::PageOcrResult;
@@ -93,9 +94,11 @@ pub fn extract_document_text_per_page(
             let _ = handle.block_on(doc_repo.store_page_ocr_result(
                 page_id,
                 "pdftotext",
+                None, // no model for pdftotext
                 Some(&pdf_text),
                 None, // no confidence score for pdftotext
                 None, // no processing time tracked
+                None, // no image hash for pdftotext (text extraction)
             ));
         }
 
@@ -109,10 +112,32 @@ pub fn extract_document_text_per_page(
 /// If all pages for this document are now complete, the document is finalized
 /// (status set to OcrComplete, combined text saved).
 /// This function runs in a blocking context and uses the runtime handle to call async methods.
+///
+/// Uses the default tesseract backend. For configurable fallback chains, use
+/// `ocr_document_page_with_config`.
+#[allow(dead_code)]
 pub fn ocr_document_page(
     page: &DocumentPage,
     doc_repo: &DieselDocumentRepository,
     handle: &tokio::runtime::Handle,
+) -> anyhow::Result<PageOcrResult> {
+    ocr_document_page_with_config(page, doc_repo, handle, &OcrConfig::default())
+}
+
+/// Run OCR on a page using configured backend entries.
+///
+/// Each backend entry produces a separate result:
+/// - Single backend: runs and stores result
+/// - Fallback chain: tries backends in order until one succeeds, stores result
+///
+/// Example config: `["tesseract", ["groq", "gemini"]]`
+/// - Runs tesseract, stores as "tesseract"
+/// - Runs groq (falls back to gemini if rate limited), stores as "groq" or "gemini"
+pub fn ocr_document_page_with_config(
+    page: &DocumentPage,
+    doc_repo: &DieselDocumentRepository,
+    handle: &tokio::runtime::Handle,
+    ocr_config: &OcrConfig,
 ) -> anyhow::Result<PageOcrResult> {
     let extractor = TextExtractor::new();
 
@@ -127,56 +152,137 @@ pub fn ocr_document_page(
         .find(|v| v.id == page.version_id)
         .ok_or_else(|| anyhow::anyhow!("Version not found"))?;
 
-    // Run OCR on this page
+    // Compute image hash once for deduplication across all backends
+    let image_hash = extractor
+        .get_pdf_page_hash(&version.file_path, page.page_number)
+        .ok();
+
     let mut updated_page = page.clone();
     let mut improved = false;
+    let mut any_succeeded = false;
+    let mut best_text: Option<String> = None;
+    let mut best_char_count = 0usize;
 
-    match extractor.ocr_pdf_page(&version.file_path, page.page_number) {
-        Ok(ocr_text) => {
+    let pdf_chars = page
+        .pdf_text
+        .as_ref()
+        .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
+        .unwrap_or(0);
+
+    // Process each backend entry
+    for entry in &ocr_config.backends {
+        let backend_names: Vec<&str> = entry.backends();
+
+        // Check for existing result from any backend in this entry
+        let existing = if let Some(ref hash) = image_hash {
+            backend_names.iter().find_map(|name| {
+                handle
+                    .block_on(doc_repo.find_ocr_result_by_image_hash(hash, name))
+                    .ok()
+                    .flatten()
+                    .map(|r| (r, name.to_string()))
+            })
+        } else {
+            None
+        };
+
+        if let Some((existing_result, backend_name)) = existing {
+            // Reuse existing result
+            let ocr_text = existing_result.text.clone().unwrap_or_default();
             let ocr_chars = ocr_text.chars().filter(|c| !c.is_whitespace()).count();
-            let pdf_chars = page
-                .pdf_text
-                .as_ref()
-                .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
-                .unwrap_or(0);
 
-            // Track if OCR provided more content (for reporting)
-            improved = ocr_chars > pdf_chars + (pdf_chars / 5);
-
-            updated_page.ocr_text = Some(ocr_text.clone());
-            updated_page.ocr_status = PageOcrStatus::OcrComplete;
-
-            // Prefer OCR over extracted text (unless OCR is empty)
-            updated_page.final_text = if ocr_chars > 0 {
-                Some(ocr_text.clone())
-            } else {
-                page.pdf_text.clone()
-            };
-
-            // Store tesseract result in page_ocr_results for comparison
+            // Store reference for this page
             let _ = handle.block_on(doc_repo.store_page_ocr_result(
                 page.id,
-                "tesseract",
+                &backend_name,
+                existing_result.model.as_deref(),
                 Some(&ocr_text),
-                None, // TODO: could extract confidence from tesseract
-                None, // TODO: could track processing time
+                existing_result.confidence,
+                existing_result.processing_time_ms,
+                image_hash.as_deref(),
             ));
-        }
-        Err(e) => {
+
             tracing::debug!(
-                "OCR failed for page {}, using PDF text: {}",
-                page.page_number,
-                e
+                "Reused existing {} result for page {} (hash match)",
+                backend_name,
+                page.page_number
             );
-            // Mark as failed but still set final_text to PDF text so document can be finalized
-            updated_page.ocr_status = PageOcrStatus::Failed;
-            updated_page.final_text = page.pdf_text.clone();
+
+            any_succeeded = true;
+            if ocr_chars > best_char_count {
+                best_char_count = ocr_chars;
+                best_text = Some(ocr_text);
+            }
+        } else {
+            // Run OCR with this entry (single backend or fallback chain)
+            let fallback =
+                FallbackOcrBackend::from_names(&backend_names, OcrBackendConfig::default());
+
+            match fallback.ocr_pdf_page(&version.file_path, page.page_number) {
+                Ok(result) => {
+                    let ocr_text = result.text;
+                    let backend_name = result.backend.as_str();
+                    let ocr_chars = ocr_text.chars().filter(|c| !c.is_whitespace()).count();
+
+                    // Store result
+                    let _ = handle.block_on(doc_repo.store_page_ocr_result(
+                        page.id,
+                        backend_name,
+                        result.model.as_deref(),
+                        Some(&ocr_text),
+                        result.confidence,
+                        Some(result.processing_time_ms as i32),
+                        image_hash.as_deref(),
+                    ));
+
+                    tracing::debug!(
+                        "OCR completed for page {} using {} backend ({} chars)",
+                        page.page_number,
+                        backend_name,
+                        ocr_chars
+                    );
+
+                    any_succeeded = true;
+                    if ocr_chars > best_char_count {
+                        best_char_count = ocr_chars;
+                        best_text = Some(ocr_text);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "OCR entry {:?} failed for page {}: {}",
+                        entry,
+                        page.page_number,
+                        e
+                    );
+                }
+            }
         }
-    };
+    }
+
+    // Update page with best result
+    if let Some(text) = best_text {
+        improved = best_char_count > pdf_chars + (pdf_chars / 5);
+        updated_page.ocr_text = Some(text.clone());
+        updated_page.ocr_status = PageOcrStatus::OcrComplete;
+        updated_page.final_text = if best_char_count > 0 {
+            Some(text)
+        } else {
+            page.pdf_text.clone()
+        };
+    } else if any_succeeded {
+        // All results were empty
+        updated_page.ocr_status = PageOcrStatus::OcrComplete;
+        updated_page.final_text = page.pdf_text.clone();
+    } else {
+        // All backends failed
+        updated_page.ocr_status = PageOcrStatus::Failed;
+        updated_page.final_text = page.pdf_text.clone();
+    }
 
     handle.block_on(doc_repo.save_page(&updated_page))?;
 
-    // Check if all pages for this document are now complete, and if so, finalize it
+    // Check if all pages for this document are now complete
     let mut document_finalized = false;
     if handle
         .block_on(doc_repo.are_all_pages_complete(&page.document_id, page.version_id as i32))?

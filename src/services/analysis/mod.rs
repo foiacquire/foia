@@ -16,21 +16,35 @@ use tokio::sync::mpsc;
 use crate::analysis::AnalysisManager;
 use crate::repository::DieselDocumentRepository;
 
-pub use processing::{extract_document_text_per_page, ocr_document_page};
+pub use processing::{extract_document_text_per_page, ocr_document_page_with_config};
 pub use types::{AnalysisEvent, AnalysisResult};
+
+use crate::config::OcrConfig;
 
 /// Service for document analysis (MIME detection, text extraction, OCR).
 pub struct AnalysisService {
     doc_repo: DieselDocumentRepository,
     analysis_manager: AnalysisManager,
+    ocr_config: OcrConfig,
 }
 
 impl AnalysisService {
-    /// Create a new analysis service.
+    /// Create a new analysis service with default OCR config.
+    #[allow(dead_code)]
     pub fn new(doc_repo: DieselDocumentRepository) -> Self {
         Self {
             doc_repo,
             analysis_manager: AnalysisManager::with_defaults(),
+            ocr_config: OcrConfig::default(),
+        }
+    }
+
+    /// Create a new analysis service with custom OCR config.
+    pub fn with_ocr_config(doc_repo: DieselDocumentRepository, ocr_config: OcrConfig) -> Self {
+        Self {
+            doc_repo,
+            analysis_manager: AnalysisManager::with_defaults(),
+            ocr_config,
         }
     }
 
@@ -432,6 +446,7 @@ impl AnalysisService {
 
             for page in pages {
                 let doc_repo = self.doc_repo.clone();
+                let ocr_config = self.ocr_config.clone();
                 let processed = processed.clone();
                 let ocr_improved = ocr_improved.clone();
                 let ocr_skipped = ocr_skipped.clone();
@@ -451,7 +466,7 @@ impl AnalysisService {
                     // Get tokio runtime handle to run async code in blocking context
                     let handle = tokio::runtime::Handle::current();
 
-                    match ocr_document_page(&page, &doc_repo, &handle) {
+                    match ocr_document_page_with_config(&page, &doc_repo, &handle, &ocr_config) {
                         Ok(ocr_result) => {
                             if ocr_result.improved {
                                 ocr_improved.fetch_add(1, Ordering::Relaxed);
