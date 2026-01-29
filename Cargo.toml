@@ -29,13 +29,13 @@ scraper = "0.25"
 # Database - Diesel ORM with compile-time checking
 diesel = { version = "2", features = ["sqlite", "chrono", "r2d2"] }
 diesel-async = { version = "0.5", features = ["sqlite", "deadpool", "sync-connection-wrapper"] }
-diesel_migrations = "2"
 deadpool = "0.12"
 # Bundle SQLite for static musl builds (0.35 for arti compatibility)
 libsqlite3-sys = { version = "0.35", features = ["bundled"] }
 
 # Migrations
 cetane = "0.1.1"
+rusqlite = "0.37"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -187,4 +187,3 @@ strip = true
 libc = "0.2"
 
 [dev-dependencies]
-rusqlite = { version = "0.37", features = ["bundled"] }
