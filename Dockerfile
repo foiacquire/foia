@@ -10,9 +10,7 @@ RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY migrations ./migrations
 COPY templates ./templates
-COPY build.rs ./
 
 RUN if [ -n "$FEATURES" ]; then \
       cargo build --release --features "$FEATURES"; \
