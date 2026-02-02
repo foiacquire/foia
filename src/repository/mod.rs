@@ -30,6 +30,8 @@ pub mod migration;
 #[cfg(feature = "postgres")]
 pub mod migration_postgres;
 pub mod migration_sqlite;
+#[cfg(feature = "postgres")]
+pub mod pg_tls;
 
 // Diesel migrations (new)
 pub mod migrations;
