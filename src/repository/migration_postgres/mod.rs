@@ -34,8 +34,7 @@ impl PostgresMigrator {
             AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url)
         } else {
             let mut manager_config = ManagerConfig::default();
-            manager_config.custom_setup =
-                Box::new(super::pg_tls::establish_tls_connection);
+            manager_config.custom_setup = Box::new(super::pg_tls::establish_tls_connection);
             AsyncDieselConnectionManager::<AsyncPgConnection>::new_with_config(
                 database_url,
                 manager_config,

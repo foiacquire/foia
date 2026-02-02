@@ -86,8 +86,7 @@ impl PgPool {
             AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url)
         } else {
             let mut manager_config = ManagerConfig::default();
-            manager_config.custom_setup =
-                Box::new(super::pg_tls::establish_tls_connection);
+            manager_config.custom_setup = Box::new(super::pg_tls::establish_tls_connection);
             AsyncDieselConnectionManager::<AsyncPgConnection>::new_with_config(
                 database_url,
                 manager_config,
@@ -244,8 +243,12 @@ mod tests {
     #[test]
     fn test_pool_detection() {
         // SQLite paths
-        assert!(DbPool::from_url("/path/to/db.sqlite", false).unwrap().is_sqlite());
-        assert!(DbPool::from_url("sqlite:/path/to/db", false).unwrap().is_sqlite());
+        assert!(DbPool::from_url("/path/to/db.sqlite", false)
+            .unwrap()
+            .is_sqlite());
+        assert!(DbPool::from_url("sqlite:/path/to/db", false)
+            .unwrap()
+            .is_sqlite());
 
         // PostgreSQL URLs (only with feature)
         #[cfg(feature = "postgres")]
