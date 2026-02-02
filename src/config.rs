@@ -1035,13 +1035,8 @@ pub async fn load_settings_with_options(options: LoadOptions) -> (Settings, Conf
     }
 
     // FOIACQUIRE_NO_TLS disables TLS for PostgreSQL connections
-    if std::env::var("FOIACQUIRE_NO_TLS")
-        .unwrap_or_default()
-        .eq_ignore_ascii_case("1")
-        || std::env::var("FOIACQUIRE_NO_TLS")
-            .unwrap_or_default()
-            .eq_ignore_ascii_case("true")
-    {
+    let no_tls_env = std::env::var("FOIACQUIRE_NO_TLS").unwrap_or_default();
+    if no_tls_env.eq_ignore_ascii_case("1") || no_tls_env.eq_ignore_ascii_case("true") {
         settings.no_tls = true;
     }
 

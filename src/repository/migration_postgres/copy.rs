@@ -24,7 +24,7 @@ impl PostgresMigrator {
     ) -> Result<CopyInSink<bytes::Bytes>, DieselError> {
         let client = crate::repository::pg_tls::connect_raw(&self.database_url, self.no_tls)
             .await
-            .map_err(pg_error)?;
+            .map_err(|e| DieselError::QueryBuilderError(e.to_string().into()))?;
 
         client.copy_in(copy_sql).await.map_err(pg_error)
     }

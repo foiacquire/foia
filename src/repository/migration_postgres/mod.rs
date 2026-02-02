@@ -157,7 +157,7 @@ impl PostgresMigrator {
 
         let client = super::pg_tls::connect_raw(&self.database_url, self.no_tls)
             .await
-            .map_err(pg_error)?;
+            .map_err(|e| DieselError::QueryBuilderError(e.to_string().into()))?;
 
         let mut existing = HashSet::new();
         for chunk in ids.chunks(1000) {
@@ -200,7 +200,7 @@ impl PostgresMigrator {
 
         let client = super::pg_tls::connect_raw(&self.database_url, self.no_tls)
             .await
-            .map_err(pg_error)?;
+            .map_err(|e| DieselError::QueryBuilderError(e.to_string().into()))?;
 
         let mut existing = HashSet::new();
         for chunk in ids.chunks(1000) {
