@@ -23,7 +23,7 @@ RUN if [ -n "$FEATURES" ]; then \
 FROM alpine:3.21
 
 ARG WITH_TESSERACT="false"
-ARG WITH_TOR="false"
+ARG WITH_TOR="true"
 
 RUN apk add --no-cache ca-certificates su-exec python3 py3-pip poppler-utils \
     && pip3 install --no-cache-dir --break-system-packages yt-dlp \
