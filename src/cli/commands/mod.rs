@@ -658,6 +658,30 @@ enum ImportCommands {
         #[arg(short = 'n', long)]
         filename: Option<String>,
     },
+
+    /// Import documents from Concordance DAT/OPT load files (e-discovery format)
+    Concordance {
+        /// Path to volume directory (containing DATA/*.DAT) or direct path to .DAT file
+        path: PathBuf,
+        /// Source ID to associate imported documents with (required)
+        #[arg(short, long)]
+        source: String,
+        /// Limit number of documents to import (0 = unlimited)
+        #[arg(short, long, default_value = "0")]
+        limit: usize,
+        /// Dry run - show what would be imported without saving
+        #[arg(long)]
+        dry_run: bool,
+        /// Disable resume support
+        #[arg(long)]
+        no_resume: bool,
+        /// Move files instead of copying (deletes originals after import)
+        #[arg(long, conflicts_with = "link")]
+        r#move: bool,
+        /// Use hard links instead of copying (saves disk space)
+        #[arg(long, conflicts_with = "r#move")]
+        link: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1064,6 +1088,20 @@ pub async fn run() -> anyhow::Result<()> {
                     &source,
                     content_type.as_deref(),
                     filename.as_deref(),
+                )
+                .await
+            }
+            ImportCommands::Concordance {
+                path,
+                source,
+                limit,
+                dry_run,
+                no_resume,
+                r#move,
+                link,
+            } => {
+                import::cmd_import_concordance(
+                    &settings, &path, &source, limit, dry_run, !no_resume, r#move, link,
                 )
                 .await
             }

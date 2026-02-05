@@ -7,6 +7,7 @@ mod analysis;
 mod cli;
 mod config;
 mod discovery;
+mod import;
 mod llm;
 mod migrations;
 mod models;
