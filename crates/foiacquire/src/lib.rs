@@ -1,5 +1,27 @@
 //! FOIAcquire - FOIA document acquisition and research system.
 //!
-//! This library crate exposes modules needed for integration testing.
+//! Core library exposing domain modules for workspace crates.
 
+// Model types use `from_str` methods that return Self (infallible parse),
+// not Result<Self, Error> as std::str::FromStr requires.
+#![allow(clippy::should_implement_trait)]
+
+pub mod analysis;
+pub mod config;
+pub mod discovery;
+pub mod http_client;
+pub mod import;
+pub mod llm;
 pub mod migrations;
+pub mod models;
+pub mod ocr;
+pub mod prefer_db;
+pub mod privacy;
+pub mod rate_limit;
+pub mod repository;
+pub mod schema;
+pub mod scrapers;
+pub mod server;
+pub mod services;
+pub mod storage;
+pub mod utils;

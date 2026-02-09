@@ -25,9 +25,9 @@ use super::super::{
     guess_mime_type, runner::FileStorageMode, ImportConfig, ImportProgress, ImportSource,
     ImportStats,
 };
-use crate::cli::helpers::content_storage_path_with_name;
 use crate::models::{Document, DocumentVersion};
 use crate::repository::extract_filename_parts;
+use crate::storage::content_storage_path_with_name;
 
 /// Concordance DAT field delimiter (þ, thorn character).
 /// In UTF-8 this is encoded as 0xC3 0xBE.

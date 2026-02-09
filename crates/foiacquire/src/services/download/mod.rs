@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::cli::helpers::content_storage_path_with_name;
 use crate::models::{DocumentVersion, UrlStatus};
 use crate::repository::{extract_filename_parts, DieselCrawlRepository, DieselDocumentRepository};
 use crate::scrapers::{extract_title_from_url, HttpClient};
 use crate::services::youtube;
+use crate::storage::content_storage_path_with_name;
 
 use types::{
     handle_download_failure, handle_unchanged, save_or_update_document, send_failure_event,
