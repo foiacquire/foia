@@ -336,7 +336,7 @@ impl WarcImportSource {
             }
 
             // Extract title from URL
-            let title = foiacquire::scrapers::extract_title_from_url(&target_uri);
+            let title = foiacquire::utils::extract_title_from_url(&target_uri);
 
             // Determine MIME type
             let mime_type = headers

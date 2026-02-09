@@ -3,11 +3,11 @@
 use console::style;
 
 use foiacquire::config::Settings;
-use foiacquire::discovery::sources::{
+use foiacquire_scrape::discovery::sources::{
     common_paths::CommonPathsSource, search::DuckDuckGoSource, sitemap::SitemapSource,
     wayback::WaybackSource,
 };
-use foiacquire::discovery::{DiscoveredUrl, DiscoverySource, DiscoverySourceConfig};
+use foiacquire_scrape::discovery::{DiscoveredUrl, DiscoverySource, DiscoverySourceConfig};
 
 use super::pattern::cmd_discover_pattern;
 use super::{add_discovered_urls, get_source_base_url};

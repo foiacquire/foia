@@ -2794,6 +2794,7 @@ dependencies = [
  "dotenvy",
  "foiacquire",
  "foiacquire-import",
+ "foiacquire-scrape",
  "hex",
  "indicatif",
  "infer",
@@ -2827,6 +2828,28 @@ dependencies = [
  "tracing",
  "uuid 1.18.1",
  "warc",
+]
+
+[[package]]
+name = "foiacquire-scrape"
+version = "0.11.3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "foiacquire",
+ "futures",
+ "regex",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+ "uuid 1.18.1",
 ]
 
 [[package]]

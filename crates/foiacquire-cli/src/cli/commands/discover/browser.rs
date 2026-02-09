@@ -17,7 +17,7 @@ pub async fn cmd_browser_test(
     binary: bool,
     context_url: Option<String>,
 ) -> anyhow::Result<()> {
-    use foiacquire::scrapers::{BrowserEngineConfig, BrowserEngineType, BrowserFetcher};
+    use foiacquire::browser::{BrowserEngineConfig, BrowserEngineType, BrowserFetcher};
 
     println!("{} Testing browser fetch: {}", style("→").cyan(), url);
     println!("  Engine: {}", engine);

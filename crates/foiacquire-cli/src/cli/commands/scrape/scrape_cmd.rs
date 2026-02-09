@@ -10,7 +10,7 @@ use foiacquire::config::{Config, Settings};
 use foiacquire::models::{ScraperStats, ServiceStatus};
 use foiacquire::privacy::PrivacyConfig;
 use foiacquire::repository::DieselServiceStatusRepository;
-use foiacquire::scrapers::{DieselRateLimitBackend, InMemoryRateLimitBackend, RateLimiter};
+use foiacquire_scrape::{DieselRateLimitBackend, InMemoryRateLimitBackend, RateLimiter};
 
 use super::single_source::cmd_scrape_single_tui;
 
@@ -100,7 +100,7 @@ pub async fn cmd_scrape(
             let redis_url =
                 std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
             let backend = Arc::new(
-                foiacquire::scrapers::RedisRateLimitBackend::new(&redis_url, base_delay_ms).await?,
+                foiacquire_scrape::RedisRateLimitBackend::new(&redis_url, base_delay_ms).await?,
             );
             Arc::new(RateLimiter::new(backend))
         }

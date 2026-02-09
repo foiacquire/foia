@@ -19,7 +19,7 @@ pub async fn cmd_download(
     privacy_config: &PrivacyConfig,
 ) -> anyhow::Result<()> {
     use crate::cli::progress::DownloadProgress;
-    use foiacquire::services::{DownloadConfig, DownloadEvent, DownloadService};
+    use foiacquire_scrape::services::download::{DownloadConfig, DownloadEvent, DownloadService};
     use tokio::sync::mpsc;
 
     settings.ensure_directories()?;

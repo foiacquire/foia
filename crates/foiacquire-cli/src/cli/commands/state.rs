@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use foiacquire::config::{Config, Settings};
 use foiacquire::models::{Source, SourceType};
-use foiacquire::scrapers::ConfigurableScraper;
+use foiacquire_scrape::ConfigurableScraper;
 
 use super::helpers::format_bytes;
 

@@ -17,7 +17,7 @@ use foiacquire::repository::DieselDocumentRepository;
 /// Returns (should_continue, should_skip_increment).
 #[allow(clippy::too_many_arguments)]
 async fn try_get_refresh(
-    client: &foiacquire::scrapers::HttpClient,
+    client: &foiacquire::http_client::HttpClient,
     url: &str,
     doc: &Document,
     current_version: &foiacquire::models::DocumentVersion,
@@ -177,7 +177,7 @@ pub async fn cmd_refresh(
         let via = via_mappings.clone();
 
         let handle = tokio::spawn(async move {
-            let client = match foiacquire::scrapers::HttpClient::with_privacy(
+            let client = match foiacquire::http_client::HttpClient::with_privacy(
                 "refresh",
                 std::time::Duration::from_secs(30),
                 std::time::Duration::from_millis(100),

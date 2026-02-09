@@ -3,7 +3,7 @@
 use console::style;
 
 use foiacquire::config::Settings;
-use foiacquire::discovery::{DiscoveredUrl, DiscoverySourceConfig};
+use foiacquire_scrape::discovery::{DiscoveredUrl, DiscoverySourceConfig};
 
 use super::{add_discovered_urls, get_source_base_url};
 
@@ -20,8 +20,8 @@ pub async fn cmd_discover_search(
     dry_run: bool,
 ) -> anyhow::Result<()> {
     use foiacquire::config::Config;
-    use foiacquire::discovery::sources::search::create_search_engine;
-    use foiacquire::discovery::term_extraction::{
+    use foiacquire_scrape::discovery::sources::search::create_search_engine;
+    use foiacquire_scrape::discovery::term_extraction::{
         ExtractionContext, LlmTermExtractor, TemplateTermExtractor, TermExtractor,
     };
 

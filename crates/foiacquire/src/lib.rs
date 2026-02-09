@@ -10,7 +10,6 @@ pub mod analysis;
 #[cfg(feature = "browser")]
 pub mod browser;
 pub mod config;
-pub mod discovery;
 #[cfg(feature = "gis")]
 pub mod gis_data;
 pub mod http_client;
@@ -23,7 +22,6 @@ pub mod privacy;
 pub mod rate_limit;
 pub mod repository;
 pub mod schema;
-pub mod scrapers;
 pub mod server;
 pub mod services;
 pub mod storage;

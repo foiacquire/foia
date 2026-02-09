@@ -9,7 +9,7 @@ use foiacquire::config::{Config, Settings};
 use foiacquire::llm::LlmClient;
 use foiacquire::models::{ScraperStats, ServiceStatus, Source, SourceType};
 use foiacquire::privacy::PrivacyConfig;
-use foiacquire::scrapers::{ConfigurableScraper, RateLimiter};
+use foiacquire_scrape::{ConfigurableScraper, RateLimiter};
 
 use super::scrape_cmd::maybe_update_heartbeat;
 

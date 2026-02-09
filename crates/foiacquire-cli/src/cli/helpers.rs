@@ -2,8 +2,8 @@
 
 pub use foiacquire::storage::{
     content_storage_path, content_storage_path_with_name, mime_to_extension,
-    save_scraped_document_async,
 };
+pub use foiacquire_scrape::save_scraped_document_async;
 
 /// Result of a refresh operation on a document.
 #[allow(dead_code)]

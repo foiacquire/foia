@@ -10,7 +10,7 @@ mod sources;
 use console::style;
 
 use foiacquire::config::Settings;
-use foiacquire::discovery::DiscoveredUrl;
+use foiacquire_scrape::discovery::DiscoveredUrl;
 
 pub use all::cmd_discover_all;
 #[cfg(feature = "browser")]

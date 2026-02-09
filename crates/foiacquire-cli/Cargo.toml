@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 foiacquire = { path = "../foiacquire", default-features = false }
 foiacquire-import = { path = "../foiacquire-import" }
+foiacquire-scrape = { path = "../foiacquire-scrape", default-features = false }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -42,9 +43,9 @@ uuid = { workspace = true }
 [features]
 default = ["browser"]
 gis = ["foiacquire/gis"]
-browser = ["foiacquire/browser"]
+browser = ["foiacquire/browser", "foiacquire-scrape/browser"]
 postgres = ["foiacquire/postgres"]
-redis-backend = ["foiacquire/redis-backend"]
+redis-backend = ["foiacquire/redis-backend", "foiacquire-scrape/redis-backend"]
 amqp-broker = ["foiacquire/amqp-broker"]
 ocr-ocrs = ["foiacquire/ocr-ocrs"]
 ocr-paddle = ["foiacquire/ocr-paddle"]

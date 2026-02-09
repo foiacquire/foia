@@ -74,7 +74,7 @@ pub enum RefreshResult {
 
 /// Process an HTTP GET response for metadata refresh.
 pub async fn process_get_response_for_refresh(
-    response: foiacquire::scrapers::HttpResponse,
+    response: foiacquire::http_client::HttpResponse,
     doc: &Document,
     current_version: &DocumentVersion,
     documents_dir: &Path,

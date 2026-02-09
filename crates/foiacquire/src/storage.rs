@@ -6,13 +6,10 @@ use chrono::{DateTime, Utc};
 
 use crate::models::{Document, DocumentVersion};
 use crate::repository::{extract_filename_parts, sanitize_filename, DieselDocumentRepository};
-use crate::scrapers::ScraperResult;
 
 /// Metadata needed to save a document to disk and database.
 ///
-/// This decouples storage from `ScraperResult`, so code that doesn't
-/// depend on the scraping subsystem (e.g., WARC import) can save
-/// documents without importing scraper types.
+/// Generic input type so callers don't need to depend on scraper types.
 pub struct DocumentInput {
     pub url: String,
     pub title: String,
@@ -20,19 +17,6 @@ pub struct DocumentInput {
     pub metadata: serde_json::Value,
     pub original_filename: Option<String>,
     pub server_date: Option<DateTime<Utc>>,
-}
-
-impl From<&ScraperResult> for DocumentInput {
-    fn from(result: &ScraperResult) -> Self {
-        Self {
-            url: result.url.clone(),
-            title: result.title.clone(),
-            mime_type: result.mime_type.clone(),
-            metadata: result.metadata.clone(),
-            original_filename: result.original_filename.clone(),
-            server_date: result.server_date,
-        }
-    }
 }
 
 /// Construct the storage path for document content.
@@ -62,26 +46,6 @@ pub fn content_storage_path_with_name(
         extension
     );
     documents_dir.join(&content_hash[..2]).join(filename)
-}
-
-/// Save scraped document content to disk and database.
-///
-/// Accepts a `&ScraperResult` for backwards compatibility with existing callers.
-pub async fn save_scraped_document_async(
-    doc_repo: &DieselDocumentRepository,
-    content: &[u8],
-    result: &ScraperResult,
-    source_id: &str,
-    documents_dir: &Path,
-) -> anyhow::Result<bool> {
-    save_document_async(
-        doc_repo,
-        content,
-        &DocumentInput::from(result),
-        source_id,
-        documents_dir,
-    )
-    .await
 }
 
 /// Save document content to disk and database.

@@ -1,15 +1,15 @@
 //! External discovery sources for scraping (sitemap, wayback, common paths, search).
 
-use foiacquire::discovery::sources::{
+use foiacquire_scrape::discovery::sources::{
     common_paths::CommonPathsSource, search::DuckDuckGoSource, sitemap::SitemapSource,
     wayback::WaybackSource,
 };
-use foiacquire::discovery::{DiscoveredUrl, DiscoverySource, DiscoverySourceConfig};
+use foiacquire_scrape::discovery::{DiscoveredUrl, DiscoverySource, DiscoverySourceConfig};
 
 /// Run external discovery sources (sitemap, wayback, common paths, search engines).
 pub(super) async fn run_external_discovery(
     base_url: &str,
-    discovery_config: &foiacquire::scrapers::config::DiscoveryConfig,
+    discovery_config: &foiacquire_scrape::config::DiscoveryConfig,
     source_id: &str,
     privacy_config: &foiacquire::privacy::PrivacyConfig,
 ) -> Vec<DiscoveredUrl> {

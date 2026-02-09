@@ -6,11 +6,9 @@
 pub mod analysis;
 pub mod annotation;
 pub mod date_detection;
-pub mod download;
 #[cfg(feature = "gis")]
 pub mod geolookup;
 pub mod ner;
-pub mod youtube;
 
 #[allow(unused_imports)]
 pub use analysis::{AnalysisEvent, AnalysisResult, AnalysisService};
@@ -21,7 +19,5 @@ pub use annotation::{
 };
 #[allow(unused_imports)]
 pub use date_detection::{detect_date, DateConfidence, DateEstimate, DateSource};
-#[allow(unused_imports)]
-pub use download::{DownloadConfig, DownloadEvent, DownloadResult, DownloadService};
 #[allow(unused_imports)]
 pub use ner::{NerBackend, NerResult, RegexNerBackend};
