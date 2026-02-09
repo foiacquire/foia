@@ -1,6 +1,8 @@
 //! Application settings.
 
 use std::fs;
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::repository::diesel_context::DieselDbContext;
