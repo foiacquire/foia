@@ -9,7 +9,7 @@ on:
     paths:
       - 'Dockerfile*'
       - 'bin/*entrypoint*.sh'
-      - 'src/**'
+      - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/docker.yml'

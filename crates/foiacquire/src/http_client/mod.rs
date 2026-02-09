@@ -29,11 +29,11 @@ use reqwest::{Client, Proxy, StatusCode};
 #[cfg(feature = "browser")]
 use tracing::debug;
 
-use crate::scrapers::config::ViaMode;
 use crate::models::{CrawlRequest, CrawlUrl, UrlStatus};
 use crate::privacy::{PrivacyConfig, PrivacyMode};
 use crate::rate_limit::{InMemoryRateLimitBackend, RateLimiter};
 use crate::repository::DieselCrawlRepository;
+use crate::scrapers::config::ViaMode;
 
 #[cfg(feature = "browser")]
 use crate::scrapers::browser::{BrowserPool, BrowserPoolConfig};

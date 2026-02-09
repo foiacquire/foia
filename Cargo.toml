@@ -1,22 +1,15 @@
-[package]
-name = "foiacquire"
+[workspace]
+resolver = "2"
+members = ["crates/foiacquire"]
+
+[workspace.package]
 version = "0.11.3"
 edition = "2021"
 authors = ["monokrome"]
-description = "FOIA document acquisition and research system"
 license = "MIT"
 repository = "https://github.com/monokrome/foiacquire"
-autobins = false
 
-[lib]
-name = "foiacquire"
-path = "src/lib.rs"
-
-[[bin]]
-name = "foia"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
@@ -40,6 +33,7 @@ rusqlite = "0.37"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9.34"
 toml = "0.8"
 
 # Configuration management
@@ -78,6 +72,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 indicatif = "0.18"
 console = "0.15"
 crossterm = "0.28"
+ratatui = "0.30.0"
 
 # URL handling
 url = "2"
@@ -107,17 +102,16 @@ zip = "2"
 # Email parsing
 mail-parser = "0.9"
 
-# OCR - Tesseract is always available (uses system binary)
-# image crate needed for optional OCR backends
-image = { version = "0.25", optional = true }
+# OCR - image crate needed for optional OCR backends
+image = { version = "0.25" }
 
 # OCRS - pure Rust OCR (optional, models auto-download)
-ocrs = { version = "0.11", optional = true }
-rten = { version = "0.22", optional = true }
-rten-imageproc = { version = "0.22", optional = true }
+ocrs = { version = "0.11" }
+rten = { version = "0.22" }
+rten-imageproc = { version = "0.22" }
 
 # PaddleOCR - CNN-based OCR via ONNX (optional, models auto-download)
-paddle-ocr-rs = { version = "0.6", optional = true }
+paddle-ocr-rs = { version = "0.6" }
 
 # UUID generation
 uuid = { version = "1", features = ["v4"] }
@@ -134,60 +128,37 @@ which = "7"
 # Browser automation (optional, for JS-heavy sites)
 # Using git version for compatibility with newer Chrome versions (fixes WS message parsing)
 # Tested with Alpine 3.21 chromium package (~v131)
-chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "c671c3b", optional = true, features = ["tokio-runtime"] }
+chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide", rev = "c671c3b", features = ["tokio-runtime"] }
 futures = "0.3"
 
 # Redis client (optional, for distributed rate limiting)
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
 # WARC archive parsing (for importing web archives)
 warc = { version = "0.4", features = ["gzip"] }
 
 # RabbitMQ client (optional, for distributed job queue)
-lapin = { version = "2", optional = true }
+lapin = { version = "2" }
 
 # PostgreSQL COPY protocol support (optional, for fast bulk loads)
-tokio-postgres = { version = "0.7", optional = true }
-tokio-postgres-rustls = { version = "0.13", optional = true }
-rustls = { version = "0.23", default-features = false, optional = true }
-rustls-native-certs = { version = "0.8", optional = true }
-futures-util = { version = "0.3", optional = true }
-bytes = { version = ">=1.11.1", optional = true }
+tokio-postgres = { version = "0.7" }
+tokio-postgres-rustls = { version = "0.13" }
+rustls = { version = "0.23", default-features = false }
+rustls-native-certs = { version = "0.8" }
+futures-util = { version = "0.3" }
+bytes = { version = ">=1.11.1" }
 
 # Embedded Tor via Arti (optional, for privacy-by-default)
-arti-client = { version = "0.37", default-features = false, features = ["tokio", "rustls", "pt-client"], optional = true }
-tor-rtcompat = { version = "0.37", default-features = false, features = ["tokio", "rustls"], optional = true }
-ratatui = "0.30.0"
-serde_yaml = "0.9.34"
+arti-client = { version = "0.37", default-features = false, features = ["tokio", "rustls", "pt-client"] }
+tor-rtcompat = { version = "0.37", default-features = false, features = ["tokio", "rustls"] }
+
+# System info
 hostname = "0.4.2"
 
-[features]
-default = ["browser"]
-gis = []
-browser = ["chromiumoxide"]
-# Note: diesel-async/postgres enables diesel/postgres_backend (types only, no libpq/OpenSSL needed)
-postgres = ["diesel-async/postgres", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures-util", "dep:bytes"]
-redis-backend = ["redis"]
-amqp-broker = ["lapin"]
-ocr-ocrs = ["ocrs", "rten", "rten-imageproc", "image"]
-ocr-paddle = ["paddle-ocr-rs", "image"]
-ocr-all = ["ocr-ocrs", "ocr-paddle"]
-# Tor/privacy features
-# SECURITY: Embedded Tor via Arti is DISABLED by default due to RUSTSEC-2023-0071
-# (Marvin Attack timing side-channel in rsa crate). Use C-Tor for hidden services
-# and external SOCKS proxy for outbound Tor until arti updates to a fixed rsa version.
-# See: https://rustsec.org/advisories/RUSTSEC-2023-0071
-embedded-tor = ["arti-client", "tor-rtcompat"]
-# Development only: skip security warnings and delays (NEVER use in production)
-unsafe-dev = []
+# Unix-only
+libc = "0.2"
 
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-
-# Unix-only dependencies
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[dev-dependencies]

@@ -338,9 +338,7 @@ impl AnalysisService {
                 }
 
                 // Skip documents whose files aren't on disk yet
-                let file_available = doc
-                    .current_version()
-                    .is_some_and(|v| v.file_path.exists());
+                let file_available = doc.current_version().is_some_and(|v| v.file_path.exists());
                 if !file_available {
                     tracing::debug!("Skipping {}: file not on disk yet", doc.title);
                     skipped_missing.fetch_add(1, Ordering::Relaxed);

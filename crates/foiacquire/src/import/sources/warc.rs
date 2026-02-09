@@ -364,14 +364,8 @@ impl WarcImportSource {
                     server_date: None,
                 };
 
-                match save_document_async(
-                    &doc_repo,
-                    content,
-                    &input,
-                    &source_id,
-                    documents_dir,
-                )
-                .await
+                match save_document_async(&doc_repo, content, &input, &source_id, documents_dir)
+                    .await
                 {
                     Ok(_) => {
                         // Add to URL cache to avoid re-importing in same session
