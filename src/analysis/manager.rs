@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_get_backends_for_audio() {
         let manager = AnalysisManager::with_defaults();
-        let backends = manager.get_backends_for(&["whisper".to_string()], "audio/mp3");
+        let _backends = manager.get_backends_for(&["whisper".to_string()], "audio/mp3");
         // Whisper may not be available, but should be in the list if it supports audio
         // The backend supports the mimetype, availability is separate
     }

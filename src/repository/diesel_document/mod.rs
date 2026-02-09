@@ -691,7 +691,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_document_crud() {
-        let (pool, dir) = setup_test_db().await;
+        let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
 
         let doc = Document {
@@ -729,7 +729,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_document_versions() {
-        let (pool, dir) = setup_test_db().await;
+        let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
 
         let doc = Document {
