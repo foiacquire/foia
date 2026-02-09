@@ -398,6 +398,62 @@ foiacquire detect-dates [SOURCE_ID] [OPTIONS]
 | `--limit <N>` | Maximum documents |
 | `--dry-run` | Show dates without saving |
 
+### extract-entities
+
+Extract named entities (people, organizations, locations, file numbers) from document text.
+
+```bash
+foiacquire extract-entities [SOURCE_ID] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <N>` | Maximum documents to process |
+
+Extracts entities using regex-based NER and stores them in the `document_entities` table. With the `gis` feature enabled, location entities are automatically geocoded using an embedded city database.
+
+**Examples:**
+```bash
+foiacquire extract-entities
+foiacquire extract-entities fbi_vault -l 100
+```
+
+### backfill-entities
+
+Backfill the `document_entities` table from existing NER annotation metadata.
+
+```bash
+foiacquire backfill-entities [SOURCE_ID] [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <N>` | Maximum documents to process |
+
+For documents that already have NER annotations in metadata JSON but no rows in `document_entities`. One-time migration aid.
+
+### search-entities
+
+Search documents by extracted entities.
+
+```bash
+foiacquire search-entities <QUERY> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--type <TYPE>` | Filter by entity type: `person`, `organization`, `location`, `file_number` |
+| `--near <COORDS>` | Spatial search: `lat,lon,radius_km` (requires PostgreSQL + PostGIS) |
+| `--source <ID>` | Filter by source |
+| `-l, --limit <N>` | Maximum results |
+
+**Examples:**
+```bash
+foiacquire search-entities CIA
+foiacquire search-entities "Fort Meade" --type location
+foiacquire search-entities Moscow --near "55.75,37.61,100"
+```
+
 ### llm-models
 
 List available LLM models from Ollama.
@@ -548,6 +604,26 @@ foiacquire db copy ./foiacquire.db postgres://user:pass@host/db --copy --progres
 
 # PostgreSQL to SQLite backup
 foiacquire db copy postgres://... ./backup.db
+```
+
+### db load-regions
+
+Load region boundary data for spatial queries. Requires PostgreSQL with PostGIS and the `gis` feature.
+
+```bash
+foiacquire db load-regions [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--file <PATH>` | Custom GeoJSON file (instead of embedded data) |
+
+Loads Natural Earth country and state/province boundaries into the `regions` table. Safe to run repeatedly (upserts on name + type).
+
+**Examples:**
+```bash
+foiacquire db load-regions
+foiacquire db load-regions --file custom_boundaries.geojson
 ```
 
 ### db remap-categories
