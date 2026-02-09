@@ -7,6 +7,7 @@ mod analysis;
 mod cli;
 mod config;
 mod discovery;
+mod http_client;
 mod import;
 mod llm;
 mod migrations;
