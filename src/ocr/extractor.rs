@@ -533,8 +533,16 @@ mod tests {
     fn test_check_tools() {
         let tools = TextExtractor::check_tools();
         assert!(!tools.is_empty());
-        for (tool, available) in tools {
-            println!("{}: {}", tool, if available { "found" } else { "missing" });
+        let mut missing = Vec::new();
+        for (tool, available) in &tools {
+            if !available {
+                missing.push(tool.as_str());
+            }
         }
+        assert!(
+            missing.is_empty(),
+            "Required tools not found: {}. Install poppler-utils and tesseract-ocr.",
+            missing.join(", ")
+        );
     }
 }
