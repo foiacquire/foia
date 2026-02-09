@@ -84,6 +84,8 @@ pub enum DiscoveryMethod {
     CommonPath,
     /// Manually imported by user.
     Manual,
+    /// Imported from Concordance DAT/OPT load files, queued for verification.
+    ConcordanceImport,
 }
 
 impl DiscoveryMethod {
@@ -103,6 +105,7 @@ impl DiscoveryMethod {
             Self::WaybackMachine => "wayback_machine",
             Self::CommonPath => "common_path",
             Self::Manual => "manual",
+            Self::ConcordanceImport => "concordance_import",
         }
     }
 
@@ -122,6 +125,7 @@ impl DiscoveryMethod {
             "wayback_machine" => Some(Self::WaybackMachine),
             "common_path" => Some(Self::CommonPath),
             "manual" => Some(Self::Manual),
+            "concordance_import" => Some(Self::ConcordanceImport),
             _ => None,
         }
     }
@@ -385,6 +389,8 @@ mod tests {
             DiscoveryMethod::Sitemap,
             DiscoveryMethod::WaybackMachine,
             DiscoveryMethod::CommonPath,
+            DiscoveryMethod::Manual,
+            DiscoveryMethod::ConcordanceImport,
         ];
 
         for method in methods {

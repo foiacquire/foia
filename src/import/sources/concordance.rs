@@ -25,10 +25,9 @@ use super::super::{
     guess_mime_type, runner::FileStorageMode, ImportConfig, ImportProgress, ImportSource,
     ImportStats,
 };
-use crate::cli::helpers::{content_storage_path_with_name, save_scraped_document_async};
+use crate::cli::helpers::content_storage_path_with_name;
 use crate::models::{Document, DocumentVersion};
 use crate::repository::extract_filename_parts;
-use crate::scrapers::ScraperResult;
 
 /// Concordance DAT field delimiter (þ, thorn character).
 /// In UTF-8 this is encoded as 0xC3 0xBE.
@@ -96,6 +95,8 @@ pub struct ConcordanceImportSource {
     pages: HashMap<String, OptPage>,
     /// Multi-page handling mode.
     multi_page_mode: MultiPageMode,
+    /// URL prefix for constructing canonical URLs from filenames.
+    url_prefix: Option<String>,
     /// Settings for database access.
     settings: crate::config::Settings,
 }
@@ -109,6 +110,7 @@ impl ConcordanceImportSource {
     pub fn new(
         path: PathBuf,
         multi_page_mode: MultiPageMode,
+        url_prefix: Option<String>,
         settings: crate::config::Settings,
     ) -> anyhow::Result<Self> {
         let (dat_path, opt_path, base_path) = Self::resolve_paths(&path)?;
@@ -130,6 +132,7 @@ impl ConcordanceImportSource {
             documents,
             pages,
             multi_page_mode,
+            url_prefix,
             settings,
         })
     }
@@ -394,7 +397,16 @@ impl ConcordanceImportSource {
 
     /// Generate URL for a document.
     fn generate_url(&self, doc: &ConcordanceDocument) -> String {
-        // Use Bates numbers to create a unique URL
+        if let Some(prefix) = &self.url_prefix {
+            if let Some(page) = self.pages.get(&doc.begin_bates) {
+                let normalized = page.image_path.replace('\\', "/");
+                let filename = Path::new(&normalized)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&doc.begin_bates);
+                return format!("{}/{}", prefix.trim_end_matches('/'), filename);
+            }
+        }
         format!("concordance://{}..{}", doc.begin_bates, doc.end_bates)
     }
 }
@@ -537,7 +549,7 @@ impl ImportSource for ConcordanceImportSource {
             });
 
             // Handle different storage modes
-            let save_result = match config.storage_mode {
+            let save_result: anyhow::Result<bool> = match config.storage_mode {
                 FileStorageMode::Copy => {
                     // Read content and use standard save helper
                     let content = match std::fs::read(&file_path) {
@@ -554,33 +566,51 @@ impl ImportSource for ConcordanceImportSource {
                         .map(|t| t.mime_type().to_string())
                         .unwrap_or_else(|| guess_mime_type(&file_path));
 
-                    let result = ScraperResult {
-                        url: url.clone(),
-                        title: title.clone(),
-                        content: Some(content.clone()),
+                    let content_hash = DocumentVersion::compute_hash(&content);
+                    let (basename, extension) =
+                        extract_filename_parts(&url, &title, &mime_type);
+                    let dest_path = content_storage_path_with_name(
+                        &config.documents_dir,
+                        &content_hash,
+                        &basename,
+                        &extension,
+                    );
+                    if let Some(parent) = dest_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&dest_path, &content)?;
+
+                    let version = DocumentVersion::new_with_metadata(
+                        &content,
+                        dest_path,
                         mime_type,
-                        metadata: metadata.clone(),
-                        fetched_at: chrono::Utc::now(),
-                        etag: None,
-                        last_modified: None,
-                        not_modified: false,
-                        original_filename: file_path
+                        Some(url.clone()),
+                        file_path
                             .file_name()
                             .and_then(|n| n.to_str())
                             .map(|s| s.to_string()),
-                        server_date: None,
-                        archive_snapshot_id: None,
-                        archive_captured_at: None,
-                    };
+                        None,
+                    );
 
-                    save_scraped_document_async(
-                        &doc_repo,
-                        &content,
-                        &result,
-                        source_id,
-                        &config.documents_dir,
-                    )
-                    .await
+                    let existing = doc_repo.get_by_url(&url).await?;
+                    if let Some(mut doc) = existing.into_iter().next() {
+                        if doc.add_version(version) {
+                            doc_repo.save(&doc).await?;
+                        }
+                    } else {
+                        let mut doc = Document::new(
+                            uuid::Uuid::new_v4().to_string(),
+                            source_id.to_string(),
+                            title,
+                            url.clone(),
+                            version,
+                            metadata.clone(),
+                        );
+                        doc.tags = config.tags.clone();
+                        doc_repo.save(&doc).await?;
+                    }
+
+                    Ok(true)
                 }
                 FileStorageMode::Move | FileStorageMode::HardLink => {
                     // For move/link, we compute hash without loading entire file into memory
@@ -663,7 +693,7 @@ impl ImportSource for ConcordanceImportSource {
                             doc_repo.save(&doc).await?;
                         }
                     } else {
-                        let doc = Document::new(
+                        let mut doc = Document::new(
                             uuid::Uuid::new_v4().to_string(),
                             source_id.to_string(),
                             title,
@@ -671,6 +701,7 @@ impl ImportSource for ConcordanceImportSource {
                             version,
                             metadata,
                         );
+                        doc.tags = config.tags.clone();
                         doc_repo.save(&doc).await?;
                     }
 
@@ -681,6 +712,7 @@ impl ImportSource for ConcordanceImportSource {
             match save_result {
                 Ok(_) => {
                     stats.imported += 1;
+                    stats.imported_urls.push(url);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to save {}: {}", url, e);
@@ -742,5 +774,111 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0], "ABC");
         assert_eq!(fields[1], "DEF");
+    }
+
+    #[test]
+    fn test_generate_url_with_prefix() {
+        let mut pages = HashMap::new();
+        pages.insert(
+            "EFTA00000001".to_string(),
+            OptPage {
+                bates_id: "EFTA00000001".to_string(),
+                volume: "VOL00001".to_string(),
+                image_path: r"IMAGES\0001\EFTA00000001.pdf".to_string(),
+                is_first_page: true,
+                page_count: Some(1),
+            },
+        );
+
+        let source = ConcordanceImportSource {
+            source_path: PathBuf::from("/tmp"),
+            dat_path: PathBuf::from("/tmp/test.DAT"),
+            opt_path: PathBuf::from("/tmp/test.OPT"),
+            base_path: PathBuf::from("/tmp"),
+            dat_fields: vec!["Begin Bates".into(), "End Bates".into()],
+            documents: Vec::new(),
+            pages,
+            multi_page_mode: MultiPageMode::First,
+            url_prefix: Some("https://www.justice.gov/epstein/files/DataSet%201".into()),
+            settings: crate::config::Settings::default(),
+        };
+
+        let doc = ConcordanceDocument {
+            begin_bates: "EFTA00000001".to_string(),
+            end_bates: "EFTA00000001".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        assert_eq!(
+            source.generate_url(&doc),
+            "https://www.justice.gov/epstein/files/DataSet%201/EFTA00000001.pdf"
+        );
+    }
+
+    #[test]
+    fn test_generate_url_without_prefix() {
+        let source = ConcordanceImportSource {
+            source_path: PathBuf::from("/tmp"),
+            dat_path: PathBuf::from("/tmp/test.DAT"),
+            opt_path: PathBuf::from("/tmp/test.OPT"),
+            base_path: PathBuf::from("/tmp"),
+            dat_fields: vec!["Begin Bates".into(), "End Bates".into()],
+            documents: Vec::new(),
+            pages: HashMap::new(),
+            multi_page_mode: MultiPageMode::First,
+            url_prefix: None,
+            settings: crate::config::Settings::default(),
+        };
+
+        let doc = ConcordanceDocument {
+            begin_bates: "EFTA00000001".to_string(),
+            end_bates: "EFTA00000005".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        assert_eq!(
+            source.generate_url(&doc),
+            "concordance://EFTA00000001..EFTA00000005"
+        );
+    }
+
+    #[test]
+    fn test_generate_url_prefix_with_trailing_slash() {
+        let mut pages = HashMap::new();
+        pages.insert(
+            "DOC001".to_string(),
+            OptPage {
+                bates_id: "DOC001".to_string(),
+                volume: "VOL001".to_string(),
+                image_path: r"IMAGES\DOC001.tif".to_string(),
+                is_first_page: true,
+                page_count: None,
+            },
+        );
+
+        let source = ConcordanceImportSource {
+            source_path: PathBuf::from("/tmp"),
+            dat_path: PathBuf::from("/tmp/test.DAT"),
+            opt_path: PathBuf::from("/tmp/test.OPT"),
+            base_path: PathBuf::from("/tmp"),
+            dat_fields: Vec::new(),
+            documents: Vec::new(),
+            pages,
+            multi_page_mode: MultiPageMode::First,
+            url_prefix: Some("https://example.com/files/".into()),
+            settings: crate::config::Settings::default(),
+        };
+
+        let doc = ConcordanceDocument {
+            begin_bates: "DOC001".to_string(),
+            end_bates: "DOC001".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        // Should not produce double slash
+        assert_eq!(
+            source.generate_url(&doc),
+            "https://example.com/files/DOC001.tif"
+        );
     }
 }

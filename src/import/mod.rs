@@ -67,6 +67,8 @@ pub struct ImportStats {
     pub errors: usize,
     /// Referenced files not found (for DAT imports).
     pub missing_files: usize,
+    /// URLs of successfully imported documents (for verification queuing).
+    pub imported_urls: Vec<String>,
 }
 
 impl ImportStats {
@@ -79,6 +81,7 @@ impl ImportStats {
         self.no_source += other.no_source;
         self.errors += other.errors;
         self.missing_files += other.missing_files;
+        self.imported_urls.extend_from_slice(&other.imported_urls);
     }
 }
 
@@ -140,6 +143,31 @@ pub trait ImportSource: Send + Sync {
         config: &ImportConfig,
         start_position: u64,
     ) -> anyhow::Result<(ImportProgress, ImportStats)>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_import_stats_merge_includes_urls() {
+        let mut a = ImportStats {
+            imported: 2,
+            imported_urls: vec!["https://example.com/1".into(), "https://example.com/2".into()],
+            ..ImportStats::default()
+        };
+
+        let b = ImportStats {
+            imported: 1,
+            imported_urls: vec!["https://example.com/3".into()],
+            ..ImportStats::default()
+        };
+
+        a.merge(&b);
+        assert_eq!(a.imported, 3);
+        assert_eq!(a.imported_urls.len(), 3);
+        assert_eq!(a.imported_urls[2], "https://example.com/3");
+    }
 }
 
 /// Guess MIME type from file extension.

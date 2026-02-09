@@ -705,6 +705,15 @@ enum ImportCommands {
         /// Source ID to associate imported documents with (required)
         #[arg(short, long)]
         source: String,
+        /// Base URL prepended to each document's filename to form its canonical URL
+        #[arg(long)]
+        url_prefix: Option<String>,
+        /// Skip queuing imported URLs for scraper verification
+        #[arg(long)]
+        no_verify: bool,
+        /// Comma-separated tags to apply to all imported documents
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
         /// Limit number of documents to import (0 = unlimited)
         #[arg(short, long, default_value = "0")]
         limit: usize,
@@ -1174,6 +1183,9 @@ pub async fn run() -> anyhow::Result<()> {
             ImportCommands::Concordance {
                 path,
                 source,
+                url_prefix,
+                no_verify,
+                tag,
                 limit,
                 dry_run,
                 no_resume,
@@ -1181,7 +1193,17 @@ pub async fn run() -> anyhow::Result<()> {
                 link,
             } => {
                 import::cmd_import_concordance(
-                    &settings, &path, &source, limit, dry_run, !no_resume, r#move, link,
+                    &settings,
+                    &path,
+                    &source,
+                    url_prefix.as_deref(),
+                    !no_verify,
+                    &tag,
+                    limit,
+                    dry_run,
+                    !no_resume,
+                    r#move,
+                    link,
                 )
                 .await
             }

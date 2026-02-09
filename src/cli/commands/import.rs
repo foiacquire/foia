@@ -402,6 +402,9 @@ pub async fn cmd_import_concordance(
     settings: &Settings,
     path: &std::path::Path,
     source_id: &str,
+    url_prefix: Option<&str>,
+    verify: bool,
+    tags: &[String],
     limit: usize,
     dry_run: bool,
     resume: bool,
@@ -445,12 +448,16 @@ pub async fn cmd_import_concordance(
     }
 
     // Create import source
-    let mut source =
-        ConcordanceImportSource::new(path.to_path_buf(), MultiPageMode::First, settings.clone())?;
+    let mut source = ConcordanceImportSource::new(
+        path.to_path_buf(),
+        MultiPageMode::First,
+        url_prefix.map(|s| s.to_string()),
+        settings.clone(),
+    )?;
 
     // Create config with existing URLs loaded
     let runner = ImportRunner::new(settings);
-    let config = runner
+    let mut config = runner
         .create_config(
             Some(source_id.to_string()),
             limit,
@@ -459,6 +466,8 @@ pub async fn cmd_import_concordance(
             storage_mode,
         )
         .await?;
+    config.verify = verify;
+    config.tags = tags.to_vec();
 
     // Run import
     let stats = runner.run(&mut source, &config).await?;

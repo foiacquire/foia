@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use super::{ImportSource, ImportStats};
 use crate::config::Settings;
+use crate::models::{CrawlUrl, DiscoveryMethod};
 
 /// How to store imported files.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -45,6 +46,10 @@ pub struct ImportConfig {
     pub existing_urls: HashSet<String>,
     /// How to store files (copy, move, or hard link).
     pub storage_mode: FileStorageMode,
+    /// Queue imported URLs for scraper verification.
+    pub verify: bool,
+    /// Tags to apply to all imported documents.
+    pub tags: Vec<String>,
 }
 
 impl Default for ImportConfig {
@@ -60,6 +65,8 @@ impl Default for ImportConfig {
             documents_dir: std::path::PathBuf::from("."),
             existing_urls: HashSet::new(),
             storage_mode: FileStorageMode::Copy,
+            verify: true,
+            tags: Vec::new(),
         }
     }
 }
@@ -149,6 +156,38 @@ impl<'a> ImportRunner<'a> {
             let _ = source.save_progress(&final_progress);
         }
 
+        // Queue imported URLs for scraper verification
+        if config.verify && !config.dry_run && !stats.imported_urls.is_empty() {
+            if let Some(ref source_id) = config.source_id {
+                let ctx = self.settings.create_db_context()?;
+                let crawl_repo = ctx.crawl();
+
+                let mut queued = 0usize;
+                for url in &stats.imported_urls {
+                    // Only queue real URLs, not synthetic concordance:// ones
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        let crawl_url = CrawlUrl::new(
+                            url.clone(),
+                            source_id.clone(),
+                            DiscoveryMethod::ConcordanceImport,
+                            None,
+                            0,
+                        );
+                        if crawl_repo.add_url(&crawl_url).await.unwrap_or(false) {
+                            queued += 1;
+                        }
+                    }
+                }
+                if queued > 0 {
+                    println!(
+                        "  {} Queued {} URLs for scraper verification",
+                        style("→").cyan(),
+                        queued
+                    );
+                }
+            }
+        }
+
         // Print summary
         self.print_summary(&stats);
 
@@ -185,6 +224,8 @@ impl<'a> ImportRunner<'a> {
             documents_dir: self.settings.documents_dir.clone(),
             existing_urls,
             storage_mode,
+            verify: true,
+            tags: Vec::new(),
         })
     }
 
