@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use crate::models::Document;
 use crate::repository::diesel_models::NewDocumentEntity;
 use crate::repository::DieselDocumentRepository;
+#[cfg(feature = "gis")]
 use crate::services::geolookup;
 use crate::services::ner::{EntityType, NerBackend, NerResult, RegexNerBackend};
 
@@ -132,9 +133,16 @@ impl Annotator for NerAnnotator {
                 };
 
                 let (latitude, longitude) = if entity.entity_type == EntityType::Location {
-                    geolookup::lookup(&entity.text)
-                        .map(|(lat, lon)| (Some(lat), Some(lon)))
-                        .unwrap_or((None, None))
+                    #[cfg(feature = "gis")]
+                    {
+                        geolookup::lookup(&entity.text)
+                            .map(|(lat, lon)| (Some(lat), Some(lon)))
+                            .unwrap_or((None, None))
+                    }
+                    #[cfg(not(feature = "gis"))]
+                    {
+                        (None, None)
+                    }
                 } else {
                     (None, None)
                 };

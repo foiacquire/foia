@@ -13,6 +13,7 @@ mod helpers;
 mod import;
 mod init;
 mod llm;
+#[cfg(feature = "gis")]
 mod regions;
 mod scrape;
 mod serve;
@@ -795,6 +796,7 @@ enum DbCommands {
     },
 
     /// Load region boundary data (countries, US states) for spatial queries
+    #[cfg(feature = "gis")]
     LoadRegions {
         /// Custom GeoJSON file to load (instead of embedded data)
         #[arg(long)]
@@ -934,6 +936,7 @@ pub async fn run() -> anyhow::Result<()> {
                 same_source,
                 batch_size,
             } => db::cmd_db_dedup(&settings, dry_run, &keep, same_source, batch_size).await,
+            #[cfg(feature = "gis")]
             DbCommands::LoadRegions { file } => {
                 regions::cmd_load_regions(&settings, file.as_deref()).await
             }

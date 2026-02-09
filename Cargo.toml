@@ -163,6 +163,7 @@ hostname = "0.4.2"
 
 [features]
 default = ["browser"]
+gis = []
 browser = ["chromiumoxide"]
 # Note: diesel-async/postgres enables diesel/postgres_backend (types only, no libpq/OpenSSL needed)
 postgres = ["diesel-async/postgres", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures-util", "dep:bytes"]

@@ -3,7 +3,7 @@
 
 FROM rust:alpine AS builder
 
-ARG FEATURES="browser,postgres,redis-backend"
+ARG FEATURES="browser,postgres,redis-backend,gis"
 
 RUN apk add --no-cache musl-dev
 
@@ -11,6 +11,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY templates ./templates
+COPY data ./data
 
 RUN if [ -n "$FEATURES" ]; then \
       cargo build --release --features "$FEATURES"; \

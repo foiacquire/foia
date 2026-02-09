@@ -11,7 +11,7 @@ env:
   RUST_BACKTRACE: 1
   # All features EXCEPT embedded-tor (disabled due to RUSTSEC-2023-0071 in rsa crate)
   # Use C-Tor for hidden services until arti updates to fixed rsa version
-  SAFE_FEATURES: browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle
+  SAFE_FEATURES: browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle,gis
 
 jobs:
   security-audit:

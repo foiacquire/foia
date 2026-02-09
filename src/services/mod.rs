@@ -7,6 +7,7 @@ pub mod analysis;
 pub mod annotation;
 pub mod date_detection;
 pub mod download;
+#[cfg(feature = "gis")]
 pub mod geolookup;
 pub mod ner;
 pub mod youtube;

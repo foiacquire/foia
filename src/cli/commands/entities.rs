@@ -6,6 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::config::Settings;
 use crate::repository::diesel_document::entities::EntityFilter;
 use crate::repository::diesel_models::NewDocumentEntity;
+#[cfg(feature = "gis")]
 use crate::services::geolookup;
 use crate::services::ner::{EntityType, NerResult};
 
@@ -131,9 +132,16 @@ pub async fn cmd_backfill_entities(
                 };
 
                 let (latitude, longitude) = if entity.entity_type == EntityType::Location {
-                    geolookup::lookup(&entity.text)
-                        .map(|(lat, lon)| (Some(lat), Some(lon)))
-                        .unwrap_or((None, None))
+                    #[cfg(feature = "gis")]
+                    {
+                        geolookup::lookup(&entity.text)
+                            .map(|(lat, lon)| (Some(lat), Some(lon)))
+                            .unwrap_or((None, None))
+                    }
+                    #[cfg(not(feature = "gis"))]
+                    {
+                        (None, None)
+                    }
                 } else {
                     (None, None)
                 };

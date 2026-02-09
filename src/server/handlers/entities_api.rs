@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::super::AppState;
 use super::helpers::{bad_request, internal_error, not_found, paginate, PaginatedResponse};
 use crate::repository::diesel_document::entities::EntityFilter;
+#[cfg(feature = "gis")]
 use crate::services::geolookup;
 
 /// Query parameters for entity search.
@@ -103,9 +104,17 @@ pub async fn search_entities(
         return handle_near_query(&state, near_str, &params).await;
     }
 
-    // Handle spatial queries (near named location)
+    // Handle spatial queries (near named location — requires gis feature)
     if let Some(near_loc) = &params.near_location {
-        return handle_near_location_query(&state, near_loc, &params).await;
+        #[cfg(feature = "gis")]
+        {
+            return handle_near_location_query(&state, near_loc, &params).await;
+        }
+        #[cfg(not(feature = "gis"))]
+        {
+            let _ = near_loc;
+            return bad_request("near_location requires the 'gis' feature").into_response();
+        }
     }
 
     // Build entity filters
@@ -331,6 +340,7 @@ async fn handle_near_query(
     Json(PaginatedResponse::new(items, page, per_page, total)).into_response()
 }
 
+#[cfg(feature = "gis")]
 /// Handle named location spatial queries (resolved via geolookup).
 async fn handle_near_location_query(
     state: &AppState,

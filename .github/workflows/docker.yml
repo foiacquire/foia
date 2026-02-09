@@ -40,10 +40,10 @@ jobs:
         run: cargo check --release --no-default-features
 
       - name: Run cargo check (safe features)
-        run: cargo check --release --features browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle
+        run: cargo check --release --features browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle,gis
 
       - name: Run clippy
-        run: cargo clippy --features browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle -- -D warnings
+        run: cargo clippy --features browser,postgres,redis-backend,amqp-broker,ocr-ocrs,ocr-paddle,gis -- -D warnings
 
       - name: Check CI references correct binary name
         run: ./scripts/check-binary-name.sh
@@ -192,7 +192,7 @@ jobs:
       matrix:
         include:
           - name: standard
-            features: "browser,postgres,redis-backend"
+            features: "browser,postgres,redis-backend,gis"
     steps:
       - uses: actions/checkout@v4
 
