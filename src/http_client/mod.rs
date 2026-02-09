@@ -29,14 +29,14 @@ use reqwest::{Client, Proxy, StatusCode};
 #[cfg(feature = "browser")]
 use tracing::debug;
 
-use super::config::ViaMode;
+use crate::scrapers::config::ViaMode;
 use crate::models::{CrawlRequest, CrawlUrl, UrlStatus};
 use crate::privacy::{PrivacyConfig, PrivacyMode};
 use crate::rate_limit::{InMemoryRateLimitBackend, RateLimiter};
 use crate::repository::DieselCrawlRepository;
 
 #[cfg(feature = "browser")]
-use super::browser::{BrowserPool, BrowserPoolConfig};
+use crate::scrapers::browser::{BrowserPool, BrowserPoolConfig};
 
 /// HTTP client with request logging and conditional request support.
 ///
