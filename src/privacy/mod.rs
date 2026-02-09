@@ -33,6 +33,7 @@
 
 mod config;
 mod ctor;
+mod hidden_service;
 
 #[cfg(feature = "embedded-tor")]
 mod arti;
