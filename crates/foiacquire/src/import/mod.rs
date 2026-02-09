@@ -153,7 +153,10 @@ mod tests {
     fn test_import_stats_merge_includes_urls() {
         let mut a = ImportStats {
             imported: 2,
-            imported_urls: vec!["https://example.com/1".into(), "https://example.com/2".into()],
+            imported_urls: vec![
+                "https://example.com/1".into(),
+                "https://example.com/2".into(),
+            ],
             ..ImportStats::default()
         };
 

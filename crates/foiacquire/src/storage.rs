@@ -74,8 +74,14 @@ pub async fn save_scraped_document_async(
     source_id: &str,
     documents_dir: &Path,
 ) -> anyhow::Result<bool> {
-    save_document_async(doc_repo, content, &DocumentInput::from(result), source_id, documents_dir)
-        .await
+    save_document_async(
+        doc_repo,
+        content,
+        &DocumentInput::from(result),
+        source_id,
+        documents_dir,
+    )
+    .await
 }
 
 /// Save document content to disk and database.
@@ -92,8 +98,7 @@ pub async fn save_document_async(
     let content_hash = DocumentVersion::compute_hash(content);
 
     // Extract basename and extension from URL or title
-    let (basename, extension) =
-        extract_filename_parts(&input.url, &input.title, &input.mime_type);
+    let (basename, extension) = extract_filename_parts(&input.url, &input.title, &input.mime_type);
 
     // Store in subdirectory by first 2 chars of hash (for filesystem efficiency)
     let content_path =

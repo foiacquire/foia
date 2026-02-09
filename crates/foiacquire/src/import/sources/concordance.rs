@@ -567,8 +567,7 @@ impl ImportSource for ConcordanceImportSource {
                         .unwrap_or_else(|| guess_mime_type(&file_path));
 
                     let content_hash = DocumentVersion::compute_hash(&content);
-                    let (basename, extension) =
-                        extract_filename_parts(&url, &title, &mime_type);
+                    let (basename, extension) = extract_filename_parts(&url, &title, &mime_type);
                     let dest_path = content_storage_path_with_name(
                         &config.documents_dir,
                         &content_hash,

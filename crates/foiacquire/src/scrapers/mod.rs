@@ -7,6 +7,7 @@ pub mod browser;
 pub mod config;
 pub mod configurable;
 pub mod google_drive;
+pub use crate::http_client::{HttpClient, HttpResponse};
 #[allow(unused_imports)]
 pub use archive::{ArchiveError, ArchiveRegistry, ArchiveSource, SnapshotInfo, WaybackSource};
 #[cfg(feature = "browser")]
@@ -18,7 +19,6 @@ pub use config::ScraperConfig;
 #[allow(unused_imports)]
 pub use config::ViaMode;
 pub use configurable::ConfigurableScraper;
-pub use crate::http_client::{HttpClient, HttpResponse};
 
 // Rate limiting re-exports from crate::rate_limit
 #[cfg(feature = "redis-backend")]

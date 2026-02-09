@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 # 1. Check for direct reqwest usage (should be caught by clippy, but double-check)
 echo "1. Checking for direct reqwest::Client usage..."
 if git grep -n "reqwest::Client::" -- '*.rs' \
-    | grep -v "src/scrapers/http_client/mod.rs" \
+    | grep -v "crates/foiacquire/src/http_client/mod.rs" \
     | grep -v "^Binary file" \
     | grep -v "\.git/" \
     | grep -v "target/" > /tmp/reqwest_all.txt 2>/dev/null; then
@@ -111,7 +111,7 @@ echo ""
 
 # 6. Check for HttpClient constructors to ensure they read env
 echo "6. Checking HttpClient constructors respect environment..."
-if ! grep -q "with_env_overrides" src/http_client/mod.rs; then
+if ! grep -rq "with_env_overrides" crates/foiacquire/src/http_client/mod.rs; then
     echo -e "${RED}❌ HttpClient doesn't appear to call with_env_overrides${NC}"
     VIOLATIONS=$((VIOLATIONS + 1))
 else

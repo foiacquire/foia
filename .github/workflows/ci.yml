@@ -52,7 +52,7 @@ jobs:
         run: npm install -g jscpd
 
       - name: Check for code duplication
-        run: jscpd --config .jscpd.json src/
+        run: jscpd --config .jscpd.json crates/
 
   migrations-check:
     name: Migration Immutability
@@ -249,7 +249,7 @@ jobs:
 
       - name: Verify binary name matches Cargo.toml
         run: |
-          BINARY_NAME=$(grep -A1 '^\[\[bin\]\]' Cargo.toml | grep 'name' | cut -d'"' -f2)
+          BINARY_NAME=$(grep -A1 '^\[\[bin\]\]' crates/foiacquire/Cargo.toml | grep 'name' | cut -d'"' -f2)
           if [ ! -f "target/release/$BINARY_NAME" ]; then
             echo "ERROR: Binary 'target/release/$BINARY_NAME' not found!"
             echo "Check that [[bin]] name in Cargo.toml matches CI workflow paths"
