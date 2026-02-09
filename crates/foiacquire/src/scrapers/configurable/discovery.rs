@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "browser")]
-use super::super::browser::BrowserEngineConfig;
 use super::super::config::ScraperConfig;
 use super::super::HttpClient;
 use super::ConfigurableScraper;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserEngineConfig;
 use crate::repository::DieselCrawlRepository;
 
 impl ConfigurableScraper {

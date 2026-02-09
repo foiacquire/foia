@@ -3,10 +3,10 @@
 use chrono::Utc;
 use tracing::debug;
 
-#[cfg(feature = "browser")]
-use super::super::browser::BrowserFetcher;
 use super::super::{extract_title_from_url, HttpClient, ScraperResult};
 use super::ConfigurableScraper;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserFetcher;
 
 impl ConfigurableScraper {
     /// Static fetch method for use in workers.

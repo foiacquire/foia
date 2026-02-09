@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(feature = "browser")]
-use super::browser::BrowserEngineConfig;
 use super::config::{ScraperConfig, ViaMode};
 use super::HttpClient;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserEngineConfig;
 use crate::models::Source;
 #[allow(unused_imports)]
 use crate::privacy::PrivacyConfig;

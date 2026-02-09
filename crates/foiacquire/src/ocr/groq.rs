@@ -26,9 +26,9 @@ use tracing::{debug, warn};
 
 use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
 use super::pdf_utils;
+use crate::http_client::HttpClient;
 use crate::privacy::PrivacyConfig;
 use crate::rate_limit::{backoff_delay, get_delay_from_env, parse_retry_after};
-use crate::scrapers::HttpClient;
 
 /// Maximum retry attempts on rate limit errors.
 const MAX_RETRIES: u32 = 5;

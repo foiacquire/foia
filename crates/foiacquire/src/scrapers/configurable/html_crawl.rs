@@ -8,10 +8,6 @@ use scraper::{Html, Selector};
 use tracing::{info, warn};
 use url::Url;
 
-#[cfg(feature = "browser")]
-use super::super::browser::BrowserEngineConfig;
-#[cfg(feature = "browser")]
-use super::super::browser::BrowserFetcher;
 use super::super::config::{PaginationConfig, ScraperConfig};
 use super::super::google_drive::{
     extract_file_id, file_download_url, is_google_drive_file_url, is_google_drive_folder_url,
@@ -20,6 +16,10 @@ use super::super::google_drive::{
 use super::super::HttpClient;
 use super::extract::resolve_url;
 use super::ConfigurableScraper;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserEngineConfig;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserFetcher;
 use crate::models::{CrawlUrl, DiscoveryMethod};
 use crate::repository::DieselCrawlRepository;
 #[cfg(feature = "browser")]

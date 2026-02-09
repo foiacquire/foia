@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::http_client::HttpClient;
 use crate::privacy::PrivacyConfig;
-use crate::scrapers::HttpClient;
 
 pub use config::{LlmConfig, LlmProvider};
 

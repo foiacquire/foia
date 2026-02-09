@@ -1,6 +1,7 @@
 //! Configuration management for FOIAcquire using the prefer crate.
 
 mod analysis;
+pub mod discovery;
 mod loader;
 pub mod scraper;
 mod settings;

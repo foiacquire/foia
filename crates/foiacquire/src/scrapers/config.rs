@@ -7,7 +7,7 @@
 
 pub use crate::config::scraper::*;
 
-use super::browser::{BrowserEngineConfig, BrowserEngineType, SelectionStrategyType};
+use crate::browser::{BrowserEngineConfig, BrowserEngineType, SelectionStrategyType};
 
 impl BrowserConfig {
     /// Convert to BrowserEngineConfig.

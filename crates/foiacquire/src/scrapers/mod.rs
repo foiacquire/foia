@@ -3,17 +3,16 @@
 #![allow(dead_code)]
 
 pub mod archive;
-pub mod browser;
 pub mod config;
 pub mod configurable;
 pub mod google_drive;
+#[cfg(feature = "browser")]
+pub use crate::browser::BrowserFetcher;
+#[cfg(feature = "browser")]
+pub use crate::browser::{BrowserEngineConfig, BrowserEngineType};
 pub use crate::http_client::{HttpClient, HttpResponse};
 #[allow(unused_imports)]
 pub use archive::{ArchiveError, ArchiveRegistry, ArchiveSource, SnapshotInfo, WaybackSource};
-#[cfg(feature = "browser")]
-pub use browser::BrowserFetcher;
-#[cfg(feature = "browser")]
-pub use browser::{BrowserEngineConfig, BrowserEngineType};
 #[allow(unused_imports)]
 pub use config::ScraperConfig;
 #[allow(unused_imports)]

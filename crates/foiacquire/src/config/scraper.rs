@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::discovery::config::ExternalDiscoveryConfig;
+use super::discovery::ExternalDiscoveryConfig;
 use crate::privacy::SourcePrivacyConfig;
 
 /// Via proxy mode - controls how URL rewriting through caching proxies works.

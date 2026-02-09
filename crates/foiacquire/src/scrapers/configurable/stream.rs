@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use tracing::debug;
 
-#[cfg(feature = "browser")]
-use super::super::browser::BrowserFetcher;
 use super::super::{ScrapeStream, ScraperResult};
 use super::ConfigurableScraper;
+#[cfg(feature = "browser")]
+use crate::browser::BrowserFetcher;
 
 /// Default number of concurrent downloads.
 pub const DEFAULT_CONCURRENCY: usize = 4;
