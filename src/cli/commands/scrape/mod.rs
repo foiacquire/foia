@@ -7,10 +7,12 @@
 //! - `status.rs`: Show system status
 //! - `refresh.rs`: Refresh document metadata
 
+mod discovery;
 mod download;
 mod helpers;
 mod refresh;
 mod scrape_cmd;
+mod single_source;
 mod status;
 
 pub use download::cmd_download;
