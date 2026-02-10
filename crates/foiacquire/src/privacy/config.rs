@@ -239,7 +239,7 @@ pub struct PrivacyConfig {
         default = "default_warning_delay",
         skip_serializing_if = "is_default_warning_delay"
     )]
-    #[prefer(default)]
+    #[prefer(default = "15")]
     pub warning_delay: u64,
 
     /// Show Tor legality warning (default: true).
