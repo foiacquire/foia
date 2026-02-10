@@ -157,7 +157,9 @@ struct ApiDoc;
 
 /// Serve the OpenAPI spec as JSON.
 pub async fn openapi_spec() -> impl IntoResponse {
-    let spec = ApiDoc::openapi()
+    let mut doc = ApiDoc::openapi();
+    doc.info.version = env!("CARGO_PKG_VERSION").to_string();
+    let spec = doc
         .to_json()
         .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
     (StatusCode::OK, [("content-type", "application/json")], spec)
