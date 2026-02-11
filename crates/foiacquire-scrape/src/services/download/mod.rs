@@ -278,8 +278,19 @@ impl DownloadService {
                             );
                             let new_path = documents_dir.join(&relative_path);
 
+                            let Some(parent) = new_path.parent() else {
+                                send_failure_event(
+                                    &url,
+                                    &failed,
+                                    &event_tx,
+                                    worker_id,
+                                    "storage path has no parent directory",
+                                )
+                                .await;
+                                continue;
+                            };
                             if let Err(e) =
-                                tokio::fs::create_dir_all(new_path.parent().unwrap()).await
+                                tokio::fs::create_dir_all(parent).await
                             {
                                 send_failure_event(
                                     &url,
