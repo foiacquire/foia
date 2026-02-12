@@ -2088,6 +2088,16 @@
       "unique": false,
       "partial": null
     },
+    "idx_versions_content_hash_dedup": {
+      "name": "idx_versions_content_hash_dedup",
+      "table": "document_versions",
+      "columns": [
+        "content_hash",
+        "dedup_index"
+      ],
+      "unique": true,
+      "partial": "dedup_index IS NOT NULL"
+    },
     "idx_versions_doc_mime": {
       "name": "idx_versions_doc_mime",
       "table": "document_versions",
@@ -2154,6 +2164,7 @@
     }
   },
   "triggers": [
+    "tr_archive_checks_cascade_delete",
     "tr_category_count_delete",
     "tr_category_count_insert",
     "tr_category_count_update",

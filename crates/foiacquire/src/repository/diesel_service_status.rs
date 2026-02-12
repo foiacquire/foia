@@ -21,10 +21,17 @@ impl TryFrom<ServiceStatusRecord> for ServiceStatus {
 
         Ok(ServiceStatus {
             id: record.id,
-            service_type: ServiceType::from_str(&record.service_type)
-                .unwrap_or(ServiceType::Scraper),
+            service_type: ServiceType::from_str(&record.service_type).ok_or_else(|| {
+                diesel::result::Error::DeserializationError(
+                    format!("Invalid service_type: '{}'", record.service_type).into(),
+                )
+            })?,
             source_id: record.source_id,
-            status: ServiceState::from_str(&record.status).unwrap_or(ServiceState::Running),
+            status: ServiceState::from_str(&record.status).ok_or_else(|| {
+                diesel::result::Error::DeserializationError(
+                    format!("Invalid service state: '{}'", record.status).into(),
+                )
+            })?,
             last_heartbeat: parse_datetime(&record.last_heartbeat),
             last_activity: parse_datetime_opt(record.last_activity),
             current_task: record.current_task,

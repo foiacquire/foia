@@ -70,13 +70,13 @@ impl DieselDocumentRepository {
         }
         let doc_ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
         let mut versions_map = self.load_versions_batch(&doc_ids).await?;
-        Ok(records
+        records
             .into_iter()
             .map(|record| {
                 let versions = versions_map.remove(&record.id).unwrap_or_default();
                 Self::record_to_document(record, versions)
             })
-            .collect())
+            .collect()
     }
 
     /// Get multiple documents by IDs in a single batch query.
@@ -103,7 +103,7 @@ impl DieselDocumentRepository {
         match record {
             Some(record) => {
                 let versions = self.load_versions(&record.id).await?;
-                Ok(Some(Self::record_to_document(record, versions)))
+                Ok(Some(Self::record_to_document(record, versions)?))
             }
             None => Ok(None),
         }
@@ -155,7 +155,8 @@ impl DieselDocumentRepository {
     pub async fn save(&self, doc: &Document) -> Result<(), DieselError> {
         use crate::utils::mime_type_category;
 
-        let metadata = serde_json::to_string(&doc.metadata).unwrap_or_else(|_| "{}".to_string());
+        let metadata = serde_json::to_string(&doc.metadata)
+            .map_err(|e| diesel::result::Error::SerializationError(Box::new(e)))?;
         let created_at = doc.created_at.to_rfc3339();
         let updated_at = doc.updated_at.to_rfc3339();
         let status = doc.status.as_str().to_string();
@@ -276,7 +277,7 @@ impl DieselDocumentRepository {
         let mut docs = Vec::with_capacity(records.len());
         for record in records {
             let versions = self.load_versions(&record.id).await?;
-            docs.push(Self::record_to_document(record, versions));
+            docs.push(Self::record_to_document(record, versions)?);
         }
         Ok(docs)
     }
@@ -323,7 +324,9 @@ impl DieselDocumentRepository {
                     virtual_files::file_size.eq(vf.file_size as i32),
                     virtual_files::extracted_text.eq(&vf.extracted_text),
                     virtual_files::synopsis.eq(&vf.synopsis),
-                    virtual_files::tags.eq(serde_json::to_string(&vf.tags).ok().as_deref()),
+                    virtual_files::tags.eq(serde_json::to_string(&vf.tags)
+                        .map_err(|e| diesel::result::Error::SerializationError(Box::new(e)))?
+                        .as_str()),
                     virtual_files::status.eq(vf.status.as_str()),
                     virtual_files::created_at.eq(&now),
                     virtual_files::updated_at.eq(&now),
@@ -346,7 +349,7 @@ impl DieselDocumentRepository {
                 .filter(virtual_files::version_id.eq(version))
                 .load::<VirtualFileRecord>(&mut conn)
                 .await
-                .map(|records| {
+                .and_then(|records| {
                     records
                         .into_iter()
                         .map(Self::virtual_file_record_to_model)
@@ -564,26 +567,49 @@ impl DieselDocumentRepository {
     pub(crate) fn record_to_document(
         record: DocumentRecord,
         versions: Vec<DocumentVersion>,
-    ) -> Document {
-        Document {
+    ) -> Result<Document, DieselError> {
+        let tags = match record.tags {
+            Some(ref s) => serde_json::from_str(s).map_err(|e| {
+                diesel::result::Error::DeserializationError(
+                    format!("Invalid tags JSON for document '{}': {}", record.id, e).into(),
+                )
+            })?,
+            None => Vec::new(),
+        };
+        let status = DocumentStatus::from_str(&record.status).ok_or_else(|| {
+            diesel::result::Error::DeserializationError(
+                format!(
+                    "Invalid document status '{}' for document '{}'",
+                    record.status, record.id
+                )
+                .into(),
+            )
+        })?;
+        let metadata = serde_json::from_str(&record.metadata).map_err(|e| {
+            diesel::result::Error::DeserializationError(
+                format!(
+                    "Invalid metadata JSON for document '{}': {}",
+                    record.id, e
+                )
+                .into(),
+            )
+        })?;
+
+        Ok(Document {
             id: record.id,
             source_id: record.source_id,
             title: record.title,
             source_url: record.source_url,
             extracted_text: record.extracted_text,
             synopsis: record.synopsis,
-            tags: record
-                .tags
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default(),
-            status: DocumentStatus::from_str(&record.status).unwrap_or(DocumentStatus::Pending),
-            metadata: serde_json::from_str(&record.metadata)
-                .unwrap_or(serde_json::Value::Object(Default::default())),
+            tags,
+            status,
+            metadata,
             created_at: parse_datetime(&record.created_at),
             updated_at: parse_datetime(&record.updated_at),
             discovery_method: record.discovery_method,
             versions,
-        }
+        })
     }
 
     pub(crate) fn version_record_to_model(record: DocumentVersionRecord) -> DocumentVersion {
@@ -605,8 +631,26 @@ impl DieselDocumentRepository {
         }
     }
 
-    fn virtual_file_record_to_model(record: VirtualFileRecord) -> VirtualFile {
-        VirtualFile {
+    fn virtual_file_record_to_model(record: VirtualFileRecord) -> Result<VirtualFile, DieselError> {
+        let tags = match record.tags {
+            Some(ref s) => serde_json::from_str(s).map_err(|e| {
+                diesel::result::Error::DeserializationError(
+                    format!("Invalid tags JSON for virtual file '{}': {}", record.id, e).into(),
+                )
+            })?,
+            None => Vec::new(),
+        };
+        let status = VirtualFileStatus::from_str(&record.status).ok_or_else(|| {
+            diesel::result::Error::DeserializationError(
+                format!(
+                    "Invalid virtual file status '{}' for file '{}'",
+                    record.status, record.id
+                )
+                .into(),
+            )
+        })?;
+
+        Ok(VirtualFile {
             id: record.id,
             document_id: record.document_id,
             version_id: record.version_id as i64,
@@ -616,15 +660,11 @@ impl DieselDocumentRepository {
             mime_type: record.mime_type,
             extracted_text: record.extracted_text,
             synopsis: record.synopsis,
-            tags: record
-                .tags
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default(),
-            status: VirtualFileStatus::from_str(&record.status)
-                .unwrap_or(VirtualFileStatus::Pending),
+            tags,
+            status,
             created_at: parse_datetime(&record.created_at),
             updated_at: parse_datetime(&record.updated_at),
-        }
+        })
     }
 }
 

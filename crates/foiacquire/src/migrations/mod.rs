@@ -8,6 +8,7 @@ mod m0007_add_model_column;
 mod m0008_page_image_hash;
 mod m0009_document_entities;
 mod m0010_deterministic_paths;
+mod m0011_constraints;
 
 use cetane::prelude::MigrationRegistry;
 
@@ -23,5 +24,6 @@ pub fn registry() -> MigrationRegistry {
     reg.register(m0008_page_image_hash::migration());
     reg.register(m0009_document_entities::migration());
     reg.register(m0010_deterministic_paths::migration());
+    reg.register(m0011_constraints::migration());
     reg
 }
