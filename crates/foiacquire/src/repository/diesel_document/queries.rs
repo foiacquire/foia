@@ -665,7 +665,7 @@ impl DieselDocumentRepository {
                 let versions = versions_map.remove(&record.id).unwrap_or_default();
                 Self::record_to_document(record, versions)
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(docs)
     }
 
