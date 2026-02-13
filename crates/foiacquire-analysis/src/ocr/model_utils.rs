@@ -21,12 +21,16 @@ pub fn check_binary(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Message shown when pdftoppm is not found.
+pub const PDFTOPPM_NOT_FOUND: &str =
+    "pdftoppm not found. Install poppler-utils for PDF page rendering";
+
 /// Check pdftoppm availability, returning a hint message if missing.
 pub fn check_pdftoppm_hint() -> Option<String> {
     if check_binary("pdftoppm") {
         None
     } else {
-        Some("pdftoppm not installed. Install with: apt install poppler-utils".to_string())
+        Some(PDFTOPPM_NOT_FOUND.to_string())
     }
 }
 
