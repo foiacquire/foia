@@ -17,5 +17,5 @@ mod status;
 
 pub use download::cmd_download;
 pub use refresh::cmd_refresh;
-pub use scrape_cmd::{cmd_scrape, ReloadMode};
+pub use scrape_cmd::cmd_scrape;
 pub use status::cmd_status;

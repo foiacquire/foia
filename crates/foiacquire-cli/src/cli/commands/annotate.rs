@@ -12,7 +12,7 @@ use foiacquire_annotate::services::annotation::{
 };
 
 use super::helpers::truncate;
-use super::scrape::ReloadMode;
+use super::daemon::{ConfigWatcher, DaemonAction, ReloadMode};
 
 /// Spawn a task that drives a progress bar from annotation events.
 ///
@@ -113,17 +113,12 @@ pub async fn cmd_annotate(
     let doc_repo = ctx.documents();
     let manager = AnnotationManager::new(doc_repo.clone());
 
-    // Set up config watcher for stop-process and inplace modes
-    let mut config_watcher =
-        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            prefer::watch("foiacquire").await.ok()
-        } else {
-            None
-        };
-
     // Initial config load
     let config = Config::load().await;
-    let mut current_config_hash = config.hash();
+    let config_history = ctx.config_history();
+
+    let mut config_watcher =
+        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
     let mut llm_config = config.llm.clone();
     if let Some(ref ep) = endpoint {
         llm_config.set_endpoint(ep.clone());
@@ -142,7 +137,6 @@ pub async fn cmd_annotate(
     }
 
     let mut annotator = LlmAnnotator::new(llm_config.clone());
-    let config_history = ctx.config_history();
 
     println!(
         "{} Using {} at {} (model: {})",
@@ -199,7 +193,7 @@ pub async fn cmd_annotate(
                     new_llm_config.model()
                 );
                 llm_config = new_llm_config;
-                current_config_hash = fresh_config.hash();
+                config_watcher.update_hash(fresh_config.hash());
                 annotator = LlmAnnotator::new(llm_config.clone());
             }
         }
@@ -251,63 +245,9 @@ pub async fn cmd_annotate(
             break;
         }
 
-        // Sleep with config watching
-        println!(
-            "{} Sleeping for {}s before next check...",
-            style("→").dim(),
-            interval
-        );
-
-        if let Some(ref mut watcher) = config_watcher {
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
-                result = watcher.recv() => {
-                    if result.is_some() {
-                        match reload {
-                            ReloadMode::StopProcess => {
-                                println!(
-                                    "{} Config file changed, exiting for restart...",
-                                    style("↻").cyan()
-                                );
-                                return Ok(());
-                            }
-                            ReloadMode::Inplace => {
-                                println!(
-                                    "{} Config file changed, reloading...",
-                                    style("↻").cyan()
-                                );
-                            }
-                            ReloadMode::NextRun => {}
-                        }
-                    }
-                }
-            }
-        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-
-            if let Ok(Some(latest_hash)) = config_history.get_latest_hash().await {
-                if latest_hash != current_config_hash {
-                    match reload {
-                        ReloadMode::StopProcess => {
-                            println!(
-                                "{} Config changed in database, exiting for restart...",
-                                style("↻").cyan()
-                            );
-                            return Ok(());
-                        }
-                        ReloadMode::Inplace => {
-                            println!(
-                                "{} Config changed in database, reloading...",
-                                style("↻").cyan()
-                            );
-                            current_config_hash = latest_hash;
-                        }
-                        ReloadMode::NextRun => {}
-                    }
-                }
-            }
-        } else {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        match config_watcher.sleep_or_reload(interval, "reloading").await {
+            DaemonAction::Exit => return Ok(()),
+            DaemonAction::Continue | DaemonAction::Reload => {}
         }
     }
 
