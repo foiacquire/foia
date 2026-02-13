@@ -476,33 +476,19 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
 }
 
 /// Errors that can occur during LLM operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    /// Failed to connect to LLM service
+    #[error("Connection error: {0}")]
     Connection(String),
-    /// API returned an error
+    #[error("API error: {0}")]
     Api(String),
-    /// Failed to parse response
+    #[error("Parse error: {0}")]
     Parse(String),
-    /// Model not available
+    #[error("Model not found: {0}")]
     ModelNotFound(String),
-    /// LLM is disabled
+    #[error("LLM is disabled")]
     Disabled,
 }
-
-impl std::fmt::Display for LlmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LlmError::Connection(msg) => write!(f, "Connection error: {}", msg),
-            LlmError::Api(msg) => write!(f, "API error: {}", msg),
-            LlmError::Parse(msg) => write!(f, "Parse error: {}", msg),
-            LlmError::ModelNotFound(msg) => write!(f, "Model not found: {}", msg),
-            LlmError::Disabled => write!(f, "LLM is disabled"),
-        }
-    }
-}
-
-impl std::error::Error for LlmError {}
 
 #[cfg(test)]
 mod tests {
