@@ -10,6 +10,7 @@ pub use template::TemplateTermExtractor;
 
 use async_trait::async_trait;
 
+use crate::discovery::url_utils::dedup_and_limit;
 use crate::discovery::DiscoveryError;
 
 /// Context for term extraction.
@@ -134,9 +135,7 @@ impl TermExtractor for CombinedTermExtractor {
             all_terms.extend(llm_terms);
         }
 
-        // Deduplicate and normalize
-        all_terms.sort();
-        all_terms.dedup();
+        dedup_and_limit(&mut all_terms, 0);
 
         // Remove very short terms
         all_terms.retain(|t| t.len() >= 2);

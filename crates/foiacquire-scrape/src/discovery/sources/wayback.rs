@@ -7,6 +7,7 @@ use std::time::Duration;
 use tracing::debug;
 
 use crate::cdx::{self, CdxQuery};
+use crate::discovery::url_utils::{dedup_and_limit, extract_domain};
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
@@ -43,14 +44,7 @@ impl DiscoverySource for WaybackSource {
         _search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        let domain = if target_domain.starts_with("http") {
-            url::Url::parse(target_domain)
-                .ok()
-                .and_then(|u| u.host_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| target_domain.to_string())
-        } else {
-            target_domain.to_string()
-        };
+        let domain = extract_domain(target_domain);
 
         let from_date = config
             .custom_params
@@ -117,8 +111,7 @@ impl DiscoverySource for WaybackSource {
             urls.push(original_url.to_string());
         }
 
-        urls.sort();
-        urls.dedup();
+        dedup_and_limit(&mut urls, 0);
 
         debug!(
             "Wayback CDX found {} unique URLs for {}",

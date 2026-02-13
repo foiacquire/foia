@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tracing::debug;
 
+use crate::discovery::url_utils::normalize_base_url;
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
@@ -150,11 +151,7 @@ impl DiscoverySource for CommonPathsSource {
         _search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        let base_url = if target_domain.starts_with("http") {
-            target_domain.trim_end_matches('/').to_string()
-        } else {
-            format!("https://{}", target_domain.trim_end_matches('/'))
-        };
+        let base_url = normalize_base_url(target_domain);
 
         // Get additional paths from config
         let extra_paths: Vec<String> = config

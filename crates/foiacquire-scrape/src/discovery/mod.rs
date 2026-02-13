@@ -10,6 +10,7 @@ mod result;
 
 pub mod sources;
 pub mod term_extraction;
+pub mod url_utils;
 
 // Re-export config types for public API
 #[allow(unused_imports)]
