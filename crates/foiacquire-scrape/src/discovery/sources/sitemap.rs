@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tracing::{debug, warn};
 
+use crate::discovery::url_utils::{dedup_and_limit, extract_xml_locs, normalize_base_url};
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
 use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
@@ -138,60 +139,12 @@ impl SitemapSource {
 
     /// Extract <loc> values from XML.
     fn extract_locs(&self, xml: &str) -> Vec<String> {
-        let mut locs = Vec::new();
-        for line in xml.lines() {
-            if let Some(start) = line.find("<loc>") {
-                if let Some(end) = line.find("</loc>") {
-                    // Bounds check: end must be after start + 5 (length of "<loc>")
-                    let content_start = start + 5;
-                    if end > content_start {
-                        let url = &line[content_start..end];
-                        let url = url
-                            .replace("&amp;", "&")
-                            .replace("&lt;", "<")
-                            .replace("&gt;", ">")
-                            .replace("&quot;", "\"")
-                            .replace("&apos;", "'");
-                        if !url.is_empty() {
-                            locs.push(url);
-                        }
-                    }
-                }
-            }
-        }
-        locs
+        extract_xml_locs(xml)
     }
 
     /// Extract URLs from a sitemap XML.
     fn extract_urls_from_sitemap(&self, xml: &str) -> Result<Vec<String>, DiscoveryError> {
-        let mut urls = Vec::new();
-
-        // Simple extraction of <loc> tags
-        // Sitemaps use XML namespaces which scraper doesn't handle well,
-        // so we use simple string parsing
-        for line in xml.lines() {
-            let line = line.trim();
-            if let Some(start) = line.find("<loc>") {
-                if let Some(end) = line.find("</loc>") {
-                    // Bounds check: end must be after start + 5 (length of "<loc>")
-                    let content_start = start + 5;
-                    if end > content_start {
-                        let url = &line[content_start..end];
-                        // Unescape XML entities
-                        let url = url
-                            .replace("&amp;", "&")
-                            .replace("&lt;", "<")
-                            .replace("&gt;", ">")
-                            .replace("&quot;", "\"")
-                            .replace("&apos;", "'");
-                        if !url.is_empty() {
-                            urls.push(url);
-                        }
-                    }
-                }
-            }
-        }
-
+        let urls = extract_xml_locs(xml);
         debug!("Extracted {} URLs from sitemap", urls.len());
         Ok(urls)
     }
@@ -218,11 +171,7 @@ impl DiscoverySource for SitemapSource {
         _search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        let base_url = if target_domain.starts_with("http") {
-            target_domain.trim_end_matches('/').to_string()
-        } else {
-            format!("https://{}", target_domain.trim_end_matches('/'))
-        };
+        let base_url = normalize_base_url(target_domain);
 
         let mut all_urls = Vec::new();
 
@@ -247,14 +196,7 @@ impl DiscoverySource for SitemapSource {
             }
         }
 
-        // Deduplicate
-        all_urls.sort();
-        all_urls.dedup();
-
-        // Apply limit
-        if config.max_results > 0 && all_urls.len() > config.max_results {
-            all_urls.truncate(config.max_results);
-        }
+        dedup_and_limit(&mut all_urls, config.max_results);
 
         // Convert to DiscoveredUrl
         let discovered: Vec<DiscoveredUrl> = all_urls
