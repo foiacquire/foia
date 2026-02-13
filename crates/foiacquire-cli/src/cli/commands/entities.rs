@@ -6,7 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use foiacquire::config::Settings;
 use foiacquire::repository::diesel_document::entities::EntityFilter;
 use foiacquire::repository::diesel_document::DocIdRow;
-use foiacquire::repository::diesel_models::NewDocumentEntity;
+use foiacquire::repository::models::NewDocumentEntity;
 #[cfg(feature = "gis")]
 use foiacquire::services::geolookup;
 use foiacquire_annotate::services::ner::{EntityType, NerResult};

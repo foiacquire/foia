@@ -5,7 +5,7 @@ use diesel_async::RunQueryDsl;
 
 use super::DieselCrawlRepository;
 use crate::models::CrawlUrl;
-use crate::repository::diesel_models::CrawlUrlRecord;
+use crate::repository::models::CrawlUrlRecord;
 use crate::repository::pool::DieselError;
 use crate::schema::crawl_urls;
 use crate::with_conn;

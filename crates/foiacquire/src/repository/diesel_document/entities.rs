@@ -5,7 +5,7 @@ use diesel_async::RunQueryDsl;
 
 #[allow(unused_imports)]
 use super::{CountRow, DieselDocumentRepository, DocIdRow};
-use crate::repository::diesel_models::{DocumentEntityRecord, NewDocumentEntity};
+use crate::repository::models::{DocumentEntityRecord, NewDocumentEntity};
 use crate::repository::pool::DieselError;
 use crate::schema::document_entities;
 use crate::{with_conn, with_conn_split};

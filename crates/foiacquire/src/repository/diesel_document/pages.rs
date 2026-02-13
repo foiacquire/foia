@@ -8,10 +8,29 @@ use diesel_async::RunQueryDsl;
 
 use super::{DieselDocumentRepository, OcrResult, ReturningId};
 use crate::models::{DocumentPage, PageOcrStatus};
-use crate::repository::diesel_models::{DocumentPageRecord, PageOcrResultRecord};
+use crate::repository::models::{DocumentPageRecord, PageOcrResultRecord};
+use crate::repository::parse_datetime;
 use crate::repository::pool::DieselError;
 use crate::schema::{document_pages, page_ocr_results};
 use crate::with_conn;
+
+impl From<DocumentPageRecord> for DocumentPage {
+    fn from(r: DocumentPageRecord) -> Self {
+        Self {
+            id: r.id as i64,
+            document_id: r.document_id,
+            version_id: r.version_id as i64,
+            page_number: r.page_number as u32,
+            pdf_text: r.pdf_text,
+            ocr_text: r.ocr_text,
+            final_text: r.final_text,
+            ocr_status: PageOcrStatus::from_str(&r.ocr_status)
+                .unwrap_or(PageOcrStatus::Pending),
+            created_at: parse_datetime(&r.created_at),
+            updated_at: parse_datetime(&r.updated_at),
+        }
+    }
+}
 
 impl DieselDocumentRepository {
     /// Count pages for a document.
@@ -115,22 +134,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Get pages needing OCR.
@@ -156,22 +160,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Store OCR result for a page from a specific backend.
@@ -464,22 +453,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Get combined page text for a document.

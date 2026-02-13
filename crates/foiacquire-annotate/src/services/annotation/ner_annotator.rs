@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::services::ner::{EntityType, NerBackend, NerResult, RegexNerBackend};
 use foiacquire::models::Document;
-use foiacquire::repository::diesel_models::NewDocumentEntity;
+use foiacquire::repository::models::NewDocumentEntity;
 use foiacquire::repository::DieselDocumentRepository;
 #[cfg(feature = "gis")]
 use foiacquire::services::geolookup;

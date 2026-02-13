@@ -6,29 +6,9 @@ use diesel_async::RunQueryDsl;
 
 use super::models::SourceRecord;
 use super::pool::{DbError, DbPool};
-use super::{parse_datetime, parse_datetime_opt};
-use crate::models::{Source, SourceType};
+use crate::models::Source;
 use crate::schema::sources;
 use crate::with_conn;
-
-impl TryFrom<SourceRecord> for Source {
-    type Error = diesel::result::Error;
-
-    fn try_from(record: SourceRecord) -> Result<Self, Self::Error> {
-        let metadata = serde_json::from_str(&record.metadata)
-            .map_err(|e| diesel::result::Error::DeserializationError(Box::new(e)))?;
-
-        Ok(Source {
-            id: record.id,
-            source_type: SourceType::from_str(&record.source_type).unwrap_or(SourceType::Custom),
-            name: record.name,
-            base_url: record.base_url,
-            metadata,
-            created_at: parse_datetime(&record.created_at),
-            last_scraped: parse_datetime_opt(record.last_scraped),
-        })
-    }
-}
 
 /// Source repository.
 #[derive(Clone)]

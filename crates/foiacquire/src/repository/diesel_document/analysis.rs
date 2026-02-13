@@ -8,7 +8,7 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
 use super::{DieselDocumentRepository, ReturningId};
-use crate::repository::diesel_models::DocumentAnalysisResultRecord;
+use crate::repository::models::DocumentAnalysisResultRecord;
 use crate::repository::pool::DieselError;
 use crate::schema::document_analysis_results;
 use crate::with_conn;

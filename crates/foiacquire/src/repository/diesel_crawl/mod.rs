@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 use diesel::prelude::*;
 
-use super::diesel_models::{CrawlRequestRecord, CrawlUrlRecord};
+use super::models::{CrawlRequestRecord, CrawlUrlRecord};
 use super::pool::DbPool;
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{CrawlRequest, CrawlUrl, DiscoveryMethod, UrlStatus};
