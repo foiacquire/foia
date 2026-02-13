@@ -52,10 +52,13 @@ async fn run_sqlite_migrations_async(database_url: &str) -> Result<(), DieselErr
 
         // One-time transition: if this database was previously managed by Diesel
         // and cetane hasn't run yet, mark existing migrations as applied.
-        // Only do this when the cetane table is empty (first transition).
+        // Only marks the number of migrations Diesel actually ran.
         let already_applied = state.applied_migrations().map_err(migration_error)?;
-        if already_applied.is_empty() && state.has_diesel_migrations(&conn)? {
-            mark_existing_as_applied(&registry, &mut state)?;
+        if already_applied.is_empty() {
+            let diesel_count = state.diesel_migration_count(&conn)?;
+            if diesel_count > 0 {
+                mark_existing_as_applied(&registry, &mut state, diesel_count)?;
+            }
         }
 
         let mut migrator = Migrator::new(&registry, &backend, state);
@@ -95,10 +98,14 @@ async fn run_postgres_migrations_async(
 
     let mut state = PostgresState::new(&client).await?;
 
-    // One-time transition: only auto-mark if cetane has no entries yet
+    // One-time transition: only auto-mark if cetane has no entries yet.
+    // Only marks the number of migrations Diesel actually ran.
     let already_applied = state.applied_migrations().map_err(migration_error)?;
-    if already_applied.is_empty() && state.has_diesel_migrations(&client).await? {
-        mark_existing_as_applied(&registry, &mut state)?;
+    if already_applied.is_empty() {
+        let diesel_count = state.diesel_migration_count(&client).await?;
+        if diesel_count > 0 {
+            mark_existing_as_applied(&registry, &mut state, diesel_count)?;
+        }
     }
 
     let mut migrator = Migrator::new(&registry, &backend, state);
@@ -130,15 +137,20 @@ async fn run_postgres_migrations_async(
     Ok(())
 }
 
-/// Mark all migrations as applied for an existing database.
+/// Mark migrations as applied based on what Diesel actually ran.
+///
+/// Only marks migrations whose Diesel version exists in __diesel_schema_migrations.
+/// This prevents marking new cetane-only migrations as applied when they haven't
+/// actually run.
 fn mark_existing_as_applied<S: cetane::migrator::MigrationStateStore>(
     registry: &cetane::migration::MigrationRegistry,
     state: &mut S,
+    diesel_version_count: usize,
 ) -> Result<(), DieselError> {
     let order = registry.resolve_order().map_err(migration_error)?;
     let applied = state.applied_migrations().map_err(migration_error)?;
 
-    for name in order {
+    for name in order.iter().take(diesel_version_count) {
         if !applied.contains(&name.to_string()) {
             info!("Marking existing migration as applied: {}", name);
             state.mark_applied(name).map_err(migration_error)?;
@@ -167,8 +179,8 @@ impl<'a> SqliteState<'a> {
         Ok(Self { conn })
     }
 
-    fn has_diesel_migrations(&self, conn: &rusqlite::Connection) -> Result<bool, DieselError> {
-        let exists: bool = conn
+    fn diesel_migration_count(&self, conn: &rusqlite::Connection) -> Result<usize, DieselError> {
+        let has_table: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='__diesel_schema_migrations'",
                 [],
@@ -176,7 +188,19 @@ impl<'a> SqliteState<'a> {
             )
             .map_err(migration_error)?;
 
-        Ok(exists)
+        if !has_table {
+            return Ok(0);
+        }
+
+        let count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM __diesel_schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(migration_error)?;
+
+        Ok(count)
     }
 }
 
@@ -246,10 +270,10 @@ impl<'a> PostgresState<'a> {
         Ok(Self { client, applied })
     }
 
-    async fn has_diesel_migrations(
+    async fn diesel_migration_count(
         &self,
         client: &tokio_postgres::Client,
-    ) -> Result<bool, DieselError> {
+    ) -> Result<usize, DieselError> {
         let row = client
             .query_one(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '__diesel_schema_migrations')",
@@ -258,7 +282,18 @@ impl<'a> PostgresState<'a> {
             .await
             .map_err(migration_error)?;
 
-        Ok(row.get(0))
+        let has_table: bool = row.get(0);
+        if !has_table {
+            return Ok(0);
+        }
+
+        let row = client
+            .query_one("SELECT COUNT(*)::int FROM __diesel_schema_migrations", &[])
+            .await
+            .map_err(migration_error)?;
+
+        let count: i32 = row.get(0);
+        Ok(count as usize)
     }
 }
 
