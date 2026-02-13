@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::repository::util::{is_postgres_url, validate_database_url};
 
-use super::{AppConfigSnapshot, Config, ResolvedData, Settings};
+use super::{Config, ResolvedData, Settings, SourcesConfig};
 
 /// Options for loading settings.
 #[derive(Debug, Clone, Default)]
@@ -105,10 +105,10 @@ async fn load_config_from_sources(
                 resolved.database_path.display()
             );
             // Apply DB app settings as baseline, then re-apply file overrides
-            let file_snapshot = config.to_app_snapshot();
-            config.apply_app_snapshot(db_config.to_app_snapshot());
+            let file_snapshot = config.to_sources_config();
+            config.apply_sources_config(db_config.to_sources_config());
             // Re-apply file settings on top (file takes priority)
-            merge_app_snapshots(&mut config, &file_snapshot);
+            merge_sources_configs(&mut config, &file_snapshot);
         }
     }
 
@@ -138,12 +138,11 @@ async fn load_file_config(options: &LoadOptions, data_dir_override: Option<&Path
     Config::load().await
 }
 
-/// Merge non-default values from snapshot into config.
+/// Merge non-default values from a sources config overlay into config.
 /// Only applies values that differ from defaults (preserves explicit settings).
-fn merge_app_snapshots(config: &mut Config, overlay: &AppConfigSnapshot) {
-    let defaults = AppConfigSnapshot::default();
+fn merge_sources_configs(config: &mut Config, overlay: &SourcesConfig) {
+    let defaults = SourcesConfig::default();
 
-    // Merge each field if it differs from default
     if overlay.user_agent != defaults.user_agent {
         config.user_agent = overlay.user_agent.clone();
     }
@@ -157,17 +156,9 @@ fn merge_app_snapshots(config: &mut Config, overlay: &AppConfigSnapshot) {
         config.default_refresh_ttl_days = overlay.default_refresh_ttl_days;
     }
     if overlay.scrapers != defaults.scrapers {
-        // Merge scrapers - overlay entries replace base entries
         for (key, value) in &overlay.scrapers {
             config.scrapers.insert(key.clone(), value.clone());
         }
-    }
-    if !overlay.llm.is_default() {
-        // Apply LLM app settings (device settings come from env)
-        config.llm.app = overlay.llm.app.clone();
-    }
-    if !overlay.analysis.is_default() {
-        config.analysis = overlay.analysis.clone();
     }
     if overlay.via != defaults.via {
         for (key, value) in &overlay.via {
