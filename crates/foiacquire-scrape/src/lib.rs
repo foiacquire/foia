@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod archive;
+pub mod cdx;
 pub mod config;
 pub mod configurable;
 pub mod discovery;
@@ -30,8 +31,7 @@ pub use foiacquire::rate_limit::{
     RateLimitError, RateLimiter,
 };
 
-/// Wayback Machine CDX API base URL (shared across archive and discovery modules).
-pub const WAYBACK_CDX_API_URL: &str = "https://web.archive.org/cdx/search/cdx";
+pub use cdx::WAYBACK_CDX_API_URL;
 
 use std::path::Path;
 

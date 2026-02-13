@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use std::time::Duration;
 use tracing::debug;
 
+use crate::cdx::{self, CdxQuery};
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
-use crate::{HttpClient, WAYBACK_CDX_API_URL};
+use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
 
 /// Discovery source using Wayback Machine CDX API.
@@ -17,38 +18,6 @@ impl WaybackSource {
     /// Create a new Wayback source.
     pub fn new() -> Self {
         Self {}
-    }
-
-    /// Build the CDX API URL with parameters.
-    fn build_cdx_url(
-        &self,
-        domain: &str,
-        from_date: Option<&str>,
-        to_date: Option<&str>,
-        limit: usize,
-    ) -> String {
-        let mut url = format!(
-            "{}?url=*.{}&matchType=domain&output=json&fl=original,mimetype,statuscode,timestamp&collapse=urlkey",
-            WAYBACK_CDX_API_URL, domain
-        );
-
-        // Filter for successful responses only
-        url.push_str("&filter=statuscode:200");
-
-        // Date range filters
-        if let Some(from) = from_date {
-            url.push_str(&format!("&from={}", from));
-        }
-        if let Some(to) = to_date {
-            url.push_str(&format!("&to={}", to));
-        }
-
-        // Limit results
-        if limit > 0 {
-            url.push_str(&format!("&limit={}", limit));
-        }
-
-        url
     }
 
     /// Check if URL looks like a listing page.
@@ -83,7 +52,6 @@ impl DiscoverySource for WaybackSource {
         _search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        // Extract domain from URL if needed
         let domain = if target_domain.starts_with("http") {
             url::Url::parse(target_domain)
                 .ok()
@@ -93,7 +61,6 @@ impl DiscoverySource for WaybackSource {
             target_domain.to_string()
         };
 
-        // Get date range from custom params if specified
         let from_date = config
             .custom_params
             .get("from")
@@ -105,21 +72,31 @@ impl DiscoverySource for WaybackSource {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let cdx_url = self.build_cdx_url(
-            &domain,
-            from_date.as_deref(),
-            to_date.as_deref(),
-            config.max_results,
-        );
+        let mut query = CdxQuery::new(format!("*.{}", domain))
+            .fields(&["original", "mimetype", "statuscode", "timestamp"])
+            .match_type("domain")
+            .collapse("urlkey")
+            .filter("statuscode:200");
+
+        if let Some(from) = &from_date {
+            query = query.from_date(from.as_str());
+        }
+        if let Some(to) = &to_date {
+            query = query.to_date(to.as_str());
+        }
+        if config.max_results > 0 {
+            query = query.limit(config.max_results);
+        }
+
+        let cdx_url = query.build();
 
         debug!("Querying Wayback CDX API: {}", cdx_url);
 
-        // Create HTTP client with privacy configuration
         let client = HttpClient::with_privacy(
             "wayback",
             Duration::from_secs(60),
             Duration::from_millis(config.rate_limit_ms),
-            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"), // Keep original compatible UA
+            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"),
             &config.privacy,
         )
         .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))?;
@@ -129,36 +106,25 @@ impl DiscoverySource for WaybackSource {
             .await
             .map_err(DiscoveryError::Http)?;
 
-        // Parse JSON response
-        // CDX returns array of arrays: [["original", "mimetype", "statuscode", "timestamp"], ...]
-        let rows: Vec<Vec<String>> = serde_json::from_str(&text)
+        let rows = cdx::parse_cdx_response(&text)
             .map_err(|e| DiscoveryError::Parse(format!("Failed to parse CDX response: {}", e)))?;
-
-        // Skip header row
-        let data_rows =
-            if rows.first().and_then(|r| r.first()).map(|s| s.as_str()) == Some("original") {
-                &rows[1..]
-            } else {
-                &rows[..]
-            };
 
         let mut urls: Vec<String> = Vec::new();
 
-        for row in data_rows {
-            if row.len() >= 2 {
-                let original_url = &row[0];
-                let mimetype = row.get(1).map(|s| s.as_str()).unwrap_or("");
+        for row in &rows {
+            let Some(original_url) = row.get("original") else {
+                continue;
+            };
 
-                // Filter by mimetype if we have it
-                if !mimetype.is_empty() && !foiacquire::utils::is_document_mimetype(mimetype) {
+            if let Some(mimetype) = row.get("mimetype") {
+                if !foiacquire::utils::is_document_mimetype(mimetype) {
                     continue;
                 }
-
-                urls.push(original_url.clone());
             }
+
+            urls.push(original_url.to_string());
         }
 
-        // Deduplicate
         urls.sort();
         urls.dedup();
 
@@ -168,7 +134,6 @@ impl DiscoverySource for WaybackSource {
             domain
         );
 
-        // Convert to DiscoveredUrl
         let discovered: Vec<DiscoveredUrl> = urls
             .into_iter()
             .map(|url| {
@@ -195,8 +160,13 @@ mod tests {
 
     #[test]
     fn build_cdx_url_basic() {
-        let source = WaybackSource::new();
-        let url = source.build_cdx_url("example.gov", None, None, 100);
+        let url = CdxQuery::new("*.example.gov")
+            .fields(&["original", "mimetype", "statuscode", "timestamp"])
+            .match_type("domain")
+            .collapse("urlkey")
+            .filter("statuscode:200")
+            .limit(100)
+            .build();
 
         assert!(url.contains("url=*.example.gov"));
         assert!(url.contains("matchType=domain"));
@@ -207,8 +177,14 @@ mod tests {
 
     #[test]
     fn build_cdx_url_with_dates() {
-        let source = WaybackSource::new();
-        let url = source.build_cdx_url("example.gov", Some("20200101"), Some("20231231"), 0);
+        let url = CdxQuery::new("*.example.gov")
+            .fields(&["original", "mimetype", "statuscode", "timestamp"])
+            .match_type("domain")
+            .collapse("urlkey")
+            .filter("statuscode:200")
+            .from_date("20200101")
+            .to_date("20231231")
+            .build();
 
         assert!(url.contains("from=20200101"));
         assert!(url.contains("to=20231231"));
