@@ -13,6 +13,7 @@ use crate::schema;
 /// Source record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::sources)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SourceRecord {
     pub id: String,
     pub source_type: String,
@@ -43,6 +44,7 @@ pub struct NewSource<'a> {
 /// Crawl URL record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::crawl_urls)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct CrawlUrlRecord {
     pub id: i32,
     pub url: String,
@@ -92,6 +94,7 @@ pub struct NewCrawlUrl<'a> {
 /// Crawl request record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::crawl_requests)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct CrawlRequestRecord {
     pub id: i32,
     pub source_id: String,
@@ -136,6 +139,7 @@ pub struct NewCrawlRequest<'a> {
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::crawl_config)]
 #[diesel(primary_key(source_id))]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct CrawlConfigRecord {
     pub source_id: String,
     pub config_hash: String,
@@ -149,6 +153,7 @@ pub struct CrawlConfigRecord {
 /// Document record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::documents)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct DocumentRecord {
     pub id: String,
     pub source_id: String,
@@ -199,12 +204,13 @@ pub struct NewDocument<'a> {
 /// Document version record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::document_versions)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct DocumentVersionRecord {
     pub id: i32,
     pub document_id: String,
     pub content_hash: String,
     pub content_hash_blake3: Option<String>,
-    pub file_path: String,
+    pub file_path: Option<String>,
     pub file_size: i32,
     pub mime_type: String,
     pub acquired_at: String,
@@ -214,6 +220,7 @@ pub struct DocumentVersionRecord {
     pub page_count: Option<i32>,
     pub archive_snapshot_id: Option<i32>,
     pub earliest_archived_at: Option<String>,
+    pub dedup_index: Option<i32>,
 }
 
 /// New document version for insertion.
@@ -223,7 +230,7 @@ pub struct NewDocumentVersion<'a> {
     pub document_id: &'a str,
     pub content_hash: &'a str,
     pub content_hash_blake3: Option<&'a str>,
-    pub file_path: &'a str,
+    pub file_path: Option<&'a str>,
     pub file_size: i32,
     pub mime_type: &'a str,
     pub acquired_at: &'a str,
@@ -233,6 +240,7 @@ pub struct NewDocumentVersion<'a> {
     pub page_count: Option<i32>,
     pub archive_snapshot_id: Option<i32>,
     pub earliest_archived_at: Option<&'a str>,
+    pub dedup_index: Option<i32>,
 }
 
 // =============================================================================
@@ -242,6 +250,7 @@ pub struct NewDocumentVersion<'a> {
 /// Document page record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::document_pages)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct DocumentPageRecord {
     pub id: i32,
     pub document_id: String,
@@ -271,12 +280,55 @@ pub struct NewDocumentPage<'a> {
 }
 
 // =============================================================================
+// Page OCR Results
+// =============================================================================
+
+/// Page OCR result record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::page_ocr_results)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct PageOcrResultRecord {
+    pub id: i32,
+    pub page_id: i32,
+    pub backend: String,
+    pub text: Option<String>,
+    pub confidence: Option<f32>,
+    pub quality_score: Option<f32>,
+    pub char_count: Option<i32>,
+    pub word_count: Option<i32>,
+    pub processing_time_ms: Option<i32>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub model: Option<String>,
+    pub image_hash: Option<String>,
+}
+
+/// New page OCR result for insertion.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::page_ocr_results)]
+pub struct NewPageOcrResult<'a> {
+    pub page_id: i32,
+    pub backend: &'a str,
+    pub text: Option<&'a str>,
+    pub confidence: Option<f32>,
+    pub quality_score: Option<f32>,
+    pub char_count: Option<i32>,
+    pub word_count: Option<i32>,
+    pub processing_time_ms: Option<i32>,
+    pub error_message: Option<&'a str>,
+    pub created_at: &'a str,
+    pub model: Option<&'a str>,
+    pub image_hash: Option<&'a str>,
+}
+
+// =============================================================================
 // Virtual Files
 // =============================================================================
 
 /// Virtual file record from the database.
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::virtual_files)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct VirtualFileRecord {
     pub id: String,
     pub document_id: String,
@@ -320,6 +372,7 @@ pub struct NewVirtualFile<'a> {
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::configuration_history)]
 #[diesel(primary_key(uuid))]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct ConfigHistoryRecord {
     pub uuid: String,
     pub created_at: String,
@@ -347,6 +400,7 @@ pub struct NewConfigHistory<'a> {
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
 #[diesel(table_name = schema::rate_limit_state)]
 #[diesel(primary_key(domain))]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct RateLimitStateRecord {
     pub domain: String,
     pub current_delay_ms: i32,
@@ -366,4 +420,105 @@ pub struct NewRateLimitState<'a> {
     pub total_requests: i32,
     pub rate_limit_hits: i32,
     pub updated_at: &'a str,
+}
+
+// =============================================================================
+// Service Status
+// =============================================================================
+
+/// Service status record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::service_status)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ServiceStatusRecord {
+    pub id: String,
+    pub service_type: String,
+    pub source_id: Option<String>,
+    pub status: String,
+    pub last_heartbeat: String,
+    pub last_activity: Option<String>,
+    pub current_task: Option<String>,
+    pub stats: String,
+    pub started_at: String,
+    pub host: Option<String>,
+    pub version: Option<String>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+    pub error_count: i32,
+}
+
+// =============================================================================
+// Document Entities
+// =============================================================================
+
+/// Document entity record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::document_entities)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct DocumentEntityRecord {
+    pub id: i32,
+    pub document_id: String,
+    pub entity_type: String,
+    pub entity_text: String,
+    pub normalized_text: String,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub created_at: String,
+}
+
+/// New document entity for insertion.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::document_entities)]
+pub struct NewDocumentEntity<'a> {
+    pub document_id: &'a str,
+    pub entity_type: &'a str,
+    pub entity_text: &'a str,
+    pub normalized_text: &'a str,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub created_at: &'a str,
+}
+
+// =============================================================================
+// Document Analysis Results
+// =============================================================================
+
+/// Document analysis result record from the database.
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = schema::document_analysis_results)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct DocumentAnalysisResultRecord {
+    pub id: i32,
+    pub page_id: Option<i32>,
+    pub document_id: String,
+    pub version_id: i32,
+    pub analysis_type: String,
+    pub backend: String,
+    pub result_text: Option<String>,
+    pub confidence: Option<f32>,
+    pub processing_time_ms: Option<i32>,
+    pub error: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub metadata: Option<String>,
+    pub model: Option<String>,
+}
+
+/// New document analysis result for insertion.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::document_analysis_results)]
+pub struct NewDocumentAnalysisResult<'a> {
+    pub page_id: Option<i32>,
+    pub document_id: &'a str,
+    pub version_id: i32,
+    pub analysis_type: &'a str,
+    pub backend: &'a str,
+    pub result_text: Option<&'a str>,
+    pub confidence: Option<f32>,
+    pub processing_time_ms: Option<i32>,
+    pub error: Option<&'a str>,
+    pub status: &'a str,
+    pub created_at: &'a str,
+    pub metadata: Option<&'a str>,
+    pub model: Option<&'a str>,
 }

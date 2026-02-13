@@ -3,7 +3,7 @@
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::ServiceStatusRecord;
+use super::models::ServiceStatusRecord;
 use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{ServiceState, ServiceStatus, ServiceType};

@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::SourceRecord;
+use super::models::SourceRecord;
 use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Source, SourceType};

@@ -19,7 +19,6 @@ pub mod diesel_document;
 
 // Keep these until fully migrated
 pub mod diesel_context;
-pub mod diesel_models;
 pub mod diesel_service_status;
 pub mod diesel_source;
 

@@ -5,7 +5,7 @@ use diesel_async::RunQueryDsl;
 
 use super::{DieselDocumentRepository, ReturningId};
 use crate::models::DocumentVersion;
-use crate::repository::diesel_models::DocumentVersionRecord;
+use crate::repository::models::DocumentVersionRecord;
 use crate::repository::pool::DieselError;
 use crate::schema::document_versions;
 use crate::with_conn;
