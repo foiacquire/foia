@@ -17,9 +17,9 @@ pub async fn cmd_discover_pattern(
 ) -> anyhow::Result<()> {
     use regex::Regex;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
+    let crawl_repo = repos.crawl;
 
     println!(
         "{} Analyzing URL patterns for source: {}",

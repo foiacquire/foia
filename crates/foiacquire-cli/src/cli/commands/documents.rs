@@ -238,8 +238,8 @@ pub async fn cmd_archive(
 ) -> anyhow::Result<()> {
     use foiacquire_analysis::ocr::TextExtractor;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     let archive_count = doc_repo.count_unprocessed_archives(source_id).await?;
     let email_count = doc_repo.count_unprocessed_emails(source_id).await?;
@@ -346,8 +346,8 @@ pub async fn cmd_ls(
     limit: usize,
     format: &str,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Get documents based on filters
     let documents: Vec<Document> = if let Some(tag_name) = tag {
@@ -440,8 +440,8 @@ pub async fn cmd_ls(
 
 /// Show document info/metadata.
 pub async fn cmd_info(settings: &Settings, doc_id: &str) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Try to find document by ID
     let doc = match doc_repo.get(doc_id).await? {
@@ -557,8 +557,8 @@ pub async fn cmd_info(settings: &Settings, doc_id: &str) -> anyhow::Result<()> {
 
 /// Output document content to stdout.
 pub async fn cmd_read(settings: &Settings, doc_id: &str, text_only: bool) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Find document
     let doc = match doc_repo.get(doc_id).await? {
@@ -623,8 +623,8 @@ pub async fn cmd_search(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     let query_lower = query.to_lowercase();
 

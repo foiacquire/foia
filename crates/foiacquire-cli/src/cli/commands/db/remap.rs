@@ -30,8 +30,8 @@ pub async fn cmd_db_remap_categories(
     );
     println!("  Batch size: {}", batch_size);
 
-    let ctx = settings.create_db_context()?;
-    let pool = ctx.pool();
+    let repos = settings.repositories()?;
+    let pool = repos.pool();
 
     #[derive(diesel::QueryableByName)]
     struct DocMime {

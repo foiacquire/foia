@@ -67,8 +67,8 @@ pub async fn cmd_db_dedup(
         }
     );
 
-    let ctx = settings.create_db_context()?;
-    let pool = ctx.pool();
+    let repos = settings.repositories()?;
+    let pool = repos.pool();
 
     // Find duplicate groups
     #[derive(diesel::QueryableByName, Debug)]

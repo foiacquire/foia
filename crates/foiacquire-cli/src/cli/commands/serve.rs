@@ -19,11 +19,11 @@ pub async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let (host, port) = parse_bind_address(bind)?;
 
-    let ctx = settings.create_db_context()?;
+    let repos = settings.repositories()?;
 
     if no_migrate {
         // Check schema version but don't migrate
-        match ctx.get_schema_version().await {
+        match repos.schema_version().await {
             Ok(Some(version)) => {
                 println!(
                     "  {} Database schema version: {}",

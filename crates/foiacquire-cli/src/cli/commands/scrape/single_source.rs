@@ -86,11 +86,11 @@ pub(super) async fn cmd_scrape_single_tui(
         }
     }
 
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let doc_repo = ctx.documents();
-    let crawl_repo = Arc::new(ctx.crawl());
-    let service_status_repo = ctx.service_status();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let doc_repo = repos.documents;
+    let crawl_repo = Arc::new(repos.crawl);
+    let service_status_repo = repos.service_status;
 
     // Run external discovery if enabled
     if scraper_config.discovery.external.is_enabled() {
