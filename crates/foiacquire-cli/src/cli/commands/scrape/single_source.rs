@@ -64,7 +64,7 @@ pub(super) async fn cmd_scrape_single_tui(
         && !scraper_config.discovery.search_queries.is_empty()
     {
         let llm_config = config.llm.clone();
-        let llm = LlmClient::new(llm_config);
+        let llm = LlmClient::with_privacy(llm_config, privacy_config.clone());
 
         if llm.is_available().await {
             update_status(&format!("{} expanding search terms...", source_id));

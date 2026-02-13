@@ -29,7 +29,7 @@ pub struct SummarizeResult {
 /// LLM client for document processing.
 pub struct LlmClient {
     config: LlmConfig,
-    privacy: PrivacyConfig,
+    privacy: Option<PrivacyConfig>,
 }
 
 // ============================================================================
@@ -95,20 +95,24 @@ struct OpenAIMessageResponse {
 impl LlmClient {
     /// Create a new LLM client with the given configuration.
     ///
-    /// Uses default privacy configuration (no Tor/proxy).
+    /// Privacy settings are picked up from environment variables (SOCKS_PROXY, etc.)
+    /// via the HttpClient defaults.
     pub fn new(config: LlmConfig) -> Self {
         Self {
             config,
-            privacy: PrivacyConfig::default(),
+            privacy: None,
         }
     }
 
-    /// Create a new LLM client with privacy configuration.
+    /// Create a new LLM client with explicit privacy configuration.
     ///
     /// External LLM services (OpenAI, Groq, etc.) will route through Tor/SOCKS if configured.
     /// Local Ollama instances are not affected by privacy settings.
     pub fn with_privacy(config: LlmConfig, privacy: PrivacyConfig) -> Self {
-        Self { config, privacy }
+        Self {
+            config,
+            privacy: Some(privacy),
+        }
     }
 
     /// Get the config.
@@ -118,14 +122,15 @@ impl LlmClient {
 
     /// Create an HTTP client for LLM requests.
     fn create_client(&self) -> Result<HttpClient, Box<dyn std::error::Error>> {
-        HttpClient::builder(
+        let mut builder = HttpClient::builder(
             "llm",
             Duration::from_secs(300), // 5 min timeout for slow models
             Duration::from_millis(0), // No rate limiting for LLM
-        )
-        .privacy(&self.privacy)
-        .build()
-        .map_err(|e| e.into())
+        );
+        if let Some(ref privacy) = self.privacy {
+            builder = builder.privacy(privacy);
+        }
+        builder.build().map_err(|e| e.into())
     }
 
     /// Check if the LLM service is available.

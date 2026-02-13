@@ -81,8 +81,22 @@ impl FallbackOcrBackend {
     fn create_backend(name: &str, config: &OcrConfig) -> Option<Arc<dyn OcrBackend>> {
         match name.to_lowercase().as_str() {
             "tesseract" => Some(Arc::new(TesseractBackend::with_config(config.clone()))),
-            "groq" => Some(Arc::new(GroqBackend::with_config(config.clone()))),
-            "gemini" => Some(Arc::new(GeminiBackend::with_config(config.clone()))),
+            "groq" => {
+                let backend = GroqBackend::with_config(config.clone());
+                let backend = match config.privacy {
+                    Some(ref p) => backend.with_privacy(p.clone()),
+                    None => backend,
+                };
+                Some(Arc::new(backend))
+            }
+            "gemini" => {
+                let backend = GeminiBackend::with_config(config.clone());
+                let backend = match config.privacy {
+                    Some(ref p) => backend.with_privacy(p.clone()),
+                    None => backend,
+                };
+                Some(Arc::new(backend))
+            }
             "deepseek" => Some(Arc::new(DeepSeekBackend::with_config(config.clone()))),
             #[cfg(feature = "ocr-ocrs")]
             "ocrs" => Some(Arc::new(OcrsBackend::with_config(config.clone()))),

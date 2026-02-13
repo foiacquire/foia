@@ -28,7 +28,7 @@ pub struct GeminiBackend {
     config: OcrConfig,
     api_key: Option<String>,
     model: String,
-    privacy: PrivacyConfig,
+    privacy: Option<PrivacyConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,7 +96,7 @@ impl GeminiBackend {
             config: OcrConfig::default(),
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
-            privacy: PrivacyConfig::default(),
+            privacy: None,
         }
     }
 
@@ -106,8 +106,14 @@ impl GeminiBackend {
             config,
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
-            privacy: PrivacyConfig::default(),
+            privacy: None,
         }
+    }
+
+    /// Set explicit privacy configuration for API requests.
+    pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
+        self.privacy = Some(privacy);
+        self
     }
 
     /// Set the API key.
@@ -124,8 +130,12 @@ impl GeminiBackend {
 
     /// Create an HTTP client for Gemini requests.
     fn create_client(&self) -> Result<HttpClient, OcrError> {
-        HttpClient::builder("gemini-ocr", Duration::from_secs(120), Duration::from_millis(0))
-            .privacy(&self.privacy)
+        let mut builder =
+            HttpClient::builder("gemini-ocr", Duration::from_secs(120), Duration::from_millis(0));
+        if let Some(ref privacy) = self.privacy {
+            builder = builder.privacy(privacy);
+        }
+        builder
             .build()
             .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
     }

@@ -13,6 +13,8 @@ use std::time::Instant;
 use tempfile::TempDir;
 use thiserror::Error;
 
+use foiacquire::privacy::PrivacyConfig;
+
 use super::model_utils::build_ocr_result;
 use super::pdf_utils;
 
@@ -161,6 +163,9 @@ pub struct OcrConfig {
     pub use_gpu: bool,
     /// Device ID for GPU (if multiple GPUs).
     pub gpu_device_id: u32,
+    /// Privacy configuration for API-based backends (Gemini, Groq).
+    /// When None, HttpClient picks up env overrides (SOCKS_PROXY, etc.).
+    pub privacy: Option<PrivacyConfig>,
 }
 
 impl Default for OcrConfig {
@@ -170,6 +175,7 @@ impl Default for OcrConfig {
             model_path: None,
             use_gpu: false,
             gpu_device_id: 0,
+            privacy: None,
         }
     }
 }
