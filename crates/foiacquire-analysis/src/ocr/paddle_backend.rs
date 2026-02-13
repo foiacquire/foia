@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 use paddle_ocr_rs::ocr_lite::OcrLite;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use super::model_utils::{
     ensure_models_present, model_availability_hint, ModelDirConfig, ModelSpec,
 };
@@ -52,27 +52,29 @@ const CLS_MODEL: ModelSpec = ModelSpec {
 
 /// PaddleOCR backend via ONNX Runtime.
 pub struct PaddleBackend {
-    config: OcrConfig,
+    config: BackendConfig,
 }
 
 impl PaddleBackend {
     /// Create a new PaddleOCR backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
         }
     }
 
     /// Create a new PaddleOCR backend with custom configuration.
     #[allow(dead_code)]
     pub fn with_config(config: OcrConfig) -> Self {
-        Self { config }
+        Self {
+            config: BackendConfig::with_config(config),
+        }
     }
 
     /// Find model directory, checking config path, standard locations, and legacy names.
     fn find_model_dir(&self) -> Option<PathBuf> {
         // Check config path first
-        if let Some(ref path) = self.config.model_path {
+        if let Some(ref path) = self.config.ocr.model_path {
             if MODEL_CONFIG.has_required_files(path) || Self::has_legacy_models(path) {
                 return Some(path.clone());
             }
@@ -216,7 +218,7 @@ impl OcrBackend for PaddleBackend {
 
     fn availability_hint(&self) -> String {
         model_availability_hint(
-            self.config.model_path.as_ref(),
+            self.config.ocr.model_path.as_ref(),
             &MODEL_CONFIG,
             "PaddleOCR",
             "15 MB",

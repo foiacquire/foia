@@ -16,19 +16,16 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::time::Duration;
 
 use super::api_backend;
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
-use foiacquire::http_client::HttpClient;
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use foiacquire::privacy::PrivacyConfig;
 
 /// Gemini Vision OCR backend using Google's Generative AI API.
 pub struct GeminiBackend {
-    config: OcrConfig,
+    config: BackendConfig,
     api_key: Option<String>,
     model: String,
-    privacy: Option<PrivacyConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,26 +90,24 @@ impl GeminiBackend {
     /// Create a new Gemini backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
-            privacy: None,
         }
     }
 
     /// Create a new Gemini backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
         Self {
-            config,
+            config: BackendConfig::with_config(config),
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
-            privacy: None,
         }
     }
 
     /// Set explicit privacy configuration for API requests.
     pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
-        self.privacy = Some(privacy);
+        self.config.privacy = Some(privacy);
         self
     }
 
@@ -126,18 +121,6 @@ impl GeminiBackend {
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
-    }
-
-    /// Create an HTTP client for Gemini requests.
-    fn create_client(&self) -> Result<HttpClient, OcrError> {
-        let mut builder =
-            HttpClient::builder("gemini-ocr", Duration::from_secs(120), Duration::from_millis(0));
-        if let Some(ref privacy) = self.privacy {
-            builder = builder.privacy(privacy);
-        }
-        builder
-            .build()
-            .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
     }
 
     /// Run Gemini OCR on an image (async implementation with rate limiting).
@@ -175,7 +158,7 @@ impl GeminiBackend {
             self.model, api_key
         );
 
-        let client = self.create_client()?;
+        let client = self.config.create_http_client("gemini-ocr")?;
 
         api_backend::apply_rate_delay("GEMINI_DELAY_MS", 200, "Gemini").await;
 

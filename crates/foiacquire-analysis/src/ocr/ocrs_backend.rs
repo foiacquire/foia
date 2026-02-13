@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use super::model_utils::{
     ensure_models_present, find_model_dir, model_availability_hint, ModelDirConfig, ModelSpec,
 };
@@ -39,27 +39,29 @@ const RECOGNITION_MODEL: ModelSpec = ModelSpec {
 
 /// OCRS OCR backend (pure Rust).
 pub struct OcrsBackend {
-    config: OcrConfig,
+    config: BackendConfig,
 }
 
 impl OcrsBackend {
     /// Create a new OCRS backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
         }
     }
 
     /// Create a new OCRS backend with custom configuration.
     #[allow(dead_code)]
     pub fn with_config(config: OcrConfig) -> Self {
-        Self { config }
+        Self {
+            config: BackendConfig::with_config(config),
+        }
     }
 
     /// Ensure models are downloaded, downloading them if necessary.
     fn ensure_models(&self) -> Result<std::path::PathBuf, OcrError> {
         ensure_models_present(
-            self.config.model_path.as_ref(),
+            self.config.ocr.model_path.as_ref(),
             &MODEL_CONFIG,
             &[&DETECTION_MODEL, &RECOGNITION_MODEL],
         )
@@ -148,7 +150,7 @@ impl OcrBackend for OcrsBackend {
 
     fn availability_hint(&self) -> String {
         model_availability_hint(
-            self.config.model_path.as_ref(),
+            self.config.ocr.model_path.as_ref(),
             &MODEL_CONFIG,
             "OCRS",
             "12 MB",

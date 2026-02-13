@@ -19,12 +19,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use super::model_utils::{check_binary, check_pdftoppm_hint};
 
 /// DeepSeek OCR backend using subprocess.
 pub struct DeepSeekBackend {
-    config: OcrConfig,
+    config: BackendConfig,
     /// Path to the deepseek-ocr binary.
     binary_path: PathBuf,
     /// Device to use (cpu, metal, cuda).
@@ -39,7 +39,7 @@ impl DeepSeekBackend {
     /// Create a new DeepSeek backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
             binary_path: PathBuf::from("deepseek-ocr-cli"),
             device: "cpu".to_string(),
             dtype: "f32".to_string(),
@@ -53,7 +53,7 @@ impl DeepSeekBackend {
         let dtype = if config.use_gpu { "f16" } else { "f32" };
 
         Self {
-            config,
+            config: BackendConfig::with_config(config),
             binary_path: PathBuf::from("deepseek-ocr-cli"),
             device: device.to_string(),
             dtype: dtype.to_string(),
