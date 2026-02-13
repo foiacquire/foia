@@ -58,6 +58,11 @@ impl OcrsBackend {
         }
     }
 
+    /// Create a new OCRS backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        Self { config }
+    }
+
     /// Ensure models are downloaded, downloading them if necessary.
     fn ensure_models(&self) -> Result<std::path::PathBuf, OcrError> {
         ensure_models_present(

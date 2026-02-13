@@ -20,7 +20,6 @@ use std::path::Path;
 
 use super::api_backend;
 use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
-use foiacquire::privacy::PrivacyConfig;
 
 /// Groq Vision OCR backend using OpenAI-compatible API.
 pub struct GroqBackend {
@@ -97,10 +96,13 @@ impl GroqBackend {
         }
     }
 
-    /// Set explicit privacy configuration for API requests.
-    pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
-        self.config.privacy = Some(privacy);
-        self
+    /// Create a new Groq backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        Self {
+            config,
+            api_key: std::env::var("GROQ_API_KEY").ok(),
+            model: "llama-4-scout-17b-16e-instruct".to_string(),
+        }
     }
 
     /// Set the API key.

@@ -19,7 +19,6 @@ use std::path::Path;
 
 use super::api_backend;
 use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
-use foiacquire::privacy::PrivacyConfig;
 
 /// Gemini Vision OCR backend using Google's Generative AI API.
 pub struct GeminiBackend {
@@ -105,10 +104,13 @@ impl GeminiBackend {
         }
     }
 
-    /// Set explicit privacy configuration for API requests.
-    pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
-        self.config.privacy = Some(privacy);
-        self
+    /// Create a new Gemini backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        Self {
+            config,
+            api_key: std::env::var("GEMINI_API_KEY").ok(),
+            model: "gemini-1.5-flash".to_string(),
+        }
     }
 
     /// Set the API key.

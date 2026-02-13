@@ -57,7 +57,7 @@ impl FallbackOcrBackend {
 
         // If no backends available, try tesseract as last resort
         if backends.is_empty() {
-            let tesseract = Arc::new(TesseractBackend::with_config(config.ocr));
+            let tesseract = Arc::new(TesseractBackend::from_backend_config(config));
             if tesseract.is_available() {
                 backends.push(tesseract);
             }
@@ -79,28 +79,15 @@ impl FallbackOcrBackend {
 
     /// Create a backend by name.
     fn create_backend(name: &str, config: &BackendConfig) -> Option<Arc<dyn OcrBackend>> {
-        let ocr = &config.ocr;
         match name.to_lowercase().as_str() {
-            "tesseract" => Some(Arc::new(TesseractBackend::with_config(ocr.clone()))),
-            "groq" => {
-                let mut backend = GroqBackend::with_config(ocr.clone());
-                if let Some(ref p) = config.privacy {
-                    backend = backend.with_privacy(p.clone());
-                }
-                Some(Arc::new(backend))
-            }
-            "gemini" => {
-                let mut backend = GeminiBackend::with_config(ocr.clone());
-                if let Some(ref p) = config.privacy {
-                    backend = backend.with_privacy(p.clone());
-                }
-                Some(Arc::new(backend))
-            }
-            "deepseek" => Some(Arc::new(DeepSeekBackend::with_config(ocr.clone()))),
+            "tesseract" => Some(Arc::new(TesseractBackend::from_backend_config(config.clone()))),
+            "groq" => Some(Arc::new(GroqBackend::from_backend_config(config.clone()))),
+            "gemini" => Some(Arc::new(GeminiBackend::from_backend_config(config.clone()))),
+            "deepseek" => Some(Arc::new(DeepSeekBackend::from_backend_config(config.clone()))),
             #[cfg(feature = "ocr-ocrs")]
-            "ocrs" => Some(Arc::new(OcrsBackend::with_config(ocr.clone()))),
+            "ocrs" => Some(Arc::new(OcrsBackend::from_backend_config(config.clone()))),
             #[cfg(feature = "ocr-paddle")]
-            "paddleocr" | "paddle" => Some(Arc::new(PaddleBackend::with_config(ocr.clone()))),
+            "paddleocr" | "paddle" => Some(Arc::new(PaddleBackend::from_backend_config(config.clone()))),
             _ => None,
         }
     }

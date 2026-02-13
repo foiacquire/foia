@@ -71,6 +71,11 @@ impl PaddleBackend {
         }
     }
 
+    /// Create a new PaddleOCR backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        Self { config }
+    }
+
     /// Find model directory, checking config path, standard locations, and legacy names.
     fn find_model_dir(&self) -> Option<PathBuf> {
         // Check config path first

@@ -61,6 +61,20 @@ impl DeepSeekBackend {
         }
     }
 
+    /// Create a new DeepSeek backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        let device = if config.ocr.use_gpu { "cuda" } else { "cpu" };
+        let dtype = if config.ocr.use_gpu { "f16" } else { "f32" };
+
+        Self {
+            config,
+            binary_path: PathBuf::from("deepseek-ocr-cli"),
+            device: device.to_string(),
+            dtype: dtype.to_string(),
+            model: "deepseek-ocr".to_string(),
+        }
+    }
+
     /// Set the path to the deepseek-ocr binary.
     pub fn with_binary_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binary_path = path.into();

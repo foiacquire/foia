@@ -31,6 +31,11 @@ impl TesseractBackend {
         }
     }
 
+    /// Create a new Tesseract backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        Self { config }
+    }
+
     /// Run Tesseract on an image file.
     fn run_tesseract_impl(&self, image_path: &Path) -> Result<String, OcrError> {
         let output = Command::new("tesseract")
