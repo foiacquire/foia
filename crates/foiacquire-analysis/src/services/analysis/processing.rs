@@ -1,6 +1,6 @@
 //! OCR processing helper functions.
 
-use crate::ocr::{FallbackOcrBackend, OcrBackend, OcrConfig as OcrBackendConfig, TextExtractor};
+use crate::ocr::{BackendConfig, FallbackOcrBackend, OcrBackend, TextExtractor};
 use foiacquire::config::OcrConfig;
 use foiacquire::models::{Document, DocumentPage, PageOcrStatus};
 use foiacquire::repository::DieselDocumentRepository;
@@ -229,7 +229,7 @@ pub fn ocr_document_page_with_config(
         } else {
             // Run OCR with this entry (single backend or fallback chain)
             let fallback =
-                FallbackOcrBackend::from_names(&backend_names, OcrBackendConfig::default());
+                FallbackOcrBackend::from_names(&backend_names, BackendConfig::default());
 
             match fallback.ocr_pdf_page(&file_path, page.page_number) {
                 Ok(result) => {

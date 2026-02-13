@@ -9,10 +9,11 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use thiserror::Error;
 
+use foiacquire::http_client::HttpClient;
 use foiacquire::privacy::PrivacyConfig;
 
 use super::model_utils::build_ocr_result;
@@ -152,7 +153,7 @@ pub trait OcrBackend: Send + Sync {
     }
 }
 
-/// Configuration for OCR backends.
+/// Configuration for OCR backends (language, GPU, model paths).
 #[derive(Debug, Clone)]
 pub struct OcrConfig {
     /// Language for OCR (e.g., "eng", "chi_sim").
@@ -163,9 +164,6 @@ pub struct OcrConfig {
     pub use_gpu: bool,
     /// Device ID for GPU (if multiple GPUs).
     pub gpu_device_id: u32,
-    /// Privacy configuration for API-based backends (Gemini, Groq).
-    /// When None, HttpClient picks up env overrides (SOCKS_PROXY, etc.).
-    pub privacy: Option<PrivacyConfig>,
 }
 
 impl Default for OcrConfig {
@@ -175,8 +173,57 @@ impl Default for OcrConfig {
             model_path: None,
             use_gpu: false,
             gpu_device_id: 0,
+        }
+    }
+}
+
+/// Shared base configuration embedded by all OCR backends.
+///
+/// Bundles the OCR-specific settings with privacy configuration
+/// so each backend doesn't need to define them independently.
+#[derive(Debug, Clone)]
+pub struct BackendConfig {
+    pub ocr: OcrConfig,
+    pub privacy: Option<PrivacyConfig>,
+}
+
+impl BackendConfig {
+    pub fn new() -> Self {
+        Self {
+            ocr: OcrConfig::default(),
             privacy: None,
         }
+    }
+
+    pub fn with_config(config: OcrConfig) -> Self {
+        Self {
+            ocr: config,
+            privacy: None,
+        }
+    }
+
+    pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
+        self.privacy = Some(privacy);
+        self
+    }
+
+    /// Create an HTTP client, applying privacy settings if configured.
+    /// When privacy is None, HttpClient picks up env overrides (SOCKS_PROXY, etc.).
+    pub fn create_http_client(&self, service_name: &str) -> Result<HttpClient, OcrError> {
+        let mut builder =
+            HttpClient::builder(service_name, Duration::from_secs(120), Duration::from_millis(0));
+        if let Some(ref privacy) = self.privacy {
+            builder = builder.privacy(privacy);
+        }
+        builder
+            .build()
+            .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
+    }
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

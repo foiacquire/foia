@@ -8,25 +8,27 @@
 use std::path::Path;
 use std::process::Command;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use super::model_utils::{check_binary, check_pdftoppm_hint};
 
 /// Tesseract OCR backend.
 pub struct TesseractBackend {
-    config: OcrConfig,
+    config: BackendConfig,
 }
 
 impl TesseractBackend {
     /// Create a new Tesseract backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
         }
     }
 
     /// Create a new Tesseract backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
-        Self { config }
+        Self {
+            config: BackendConfig::with_config(config),
+        }
     }
 
     /// Run Tesseract on an image file.
@@ -34,7 +36,7 @@ impl TesseractBackend {
         let output = Command::new("tesseract")
             .arg(image_path)
             .arg("stdout")
-            .args(["-l", &self.config.language])
+            .args(["-l", &self.config.ocr.language])
             .output();
 
         match output {

@@ -54,7 +54,9 @@ pub use extractor::TextExtractor;
 pub use foiacquire::utils::UrlFinder;
 
 // OCR backend abstraction for A/B testing and per-source backend selection
-pub use backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrManager, OcrResult};
+pub use backend::{
+    BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrManager, OcrResult,
+};
 pub use deepseek::DeepSeekBackend;
 pub use fallback::FallbackOcrBackend;
 pub use gemini::GeminiBackend;

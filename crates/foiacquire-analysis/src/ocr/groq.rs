@@ -17,19 +17,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
 use super::api_backend;
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError};
-use foiacquire::http_client::HttpClient;
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use foiacquire::privacy::PrivacyConfig;
 
 /// Groq Vision OCR backend using OpenAI-compatible API.
 pub struct GroqBackend {
-    config: OcrConfig,
+    config: BackendConfig,
     api_key: Option<String>,
     model: String,
-    privacy: Option<PrivacyConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,26 +82,24 @@ impl GroqBackend {
     /// Create a new Groq backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: "llama-4-scout-17b-16e-instruct".to_string(),
-            privacy: None,
         }
     }
 
     /// Create a new Groq backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
         Self {
-            config,
+            config: BackendConfig::with_config(config),
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: "llama-4-scout-17b-16e-instruct".to_string(),
-            privacy: None,
         }
     }
 
     /// Set explicit privacy configuration for API requests.
     pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
-        self.privacy = Some(privacy);
+        self.config.privacy = Some(privacy);
         self
     }
 
@@ -118,18 +113,6 @@ impl GroqBackend {
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
-    }
-
-    /// Create an HTTP client for Groq requests.
-    fn create_client(&self) -> Result<HttpClient, OcrError> {
-        let mut builder =
-            HttpClient::builder("groq-ocr", Duration::from_secs(120), Duration::from_millis(0));
-        if let Some(ref privacy) = self.privacy {
-            builder = builder.privacy(privacy);
-        }
-        builder
-            .build()
-            .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
     }
 
     /// Run Groq OCR on an image (async implementation with rate limiting).
@@ -160,7 +143,7 @@ impl GroqBackend {
             temperature: 0.1,
         };
 
-        let client = self.create_client()?;
+        let client = self.config.create_http_client("groq-ocr")?;
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
