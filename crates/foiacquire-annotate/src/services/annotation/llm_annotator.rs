@@ -6,7 +6,7 @@ use foiacquire::llm::{LlmClient, LlmConfig};
 use foiacquire::models::{Document, DocumentStatus};
 use foiacquire::repository::DieselDocumentRepository;
 
-use super::annotator::Annotator;
+use super::annotator::{get_document_text, Annotator};
 use super::types::{AnnotationError, AnnotationOutput};
 
 /// Annotator that generates synopses and tags via an LLM service.
@@ -40,10 +40,6 @@ impl Annotator for LlmAnnotator {
         "LLM Summarization"
     }
 
-    fn version(&self) -> i32 {
-        1
-    }
-
     async fn is_available(&self) -> bool {
         self.llm_client.is_available().await
     }
@@ -57,17 +53,9 @@ impl Annotator for LlmAnnotator {
         doc: &Document,
         doc_repo: &DieselDocumentRepository,
     ) -> Result<AnnotationOutput, AnnotationError> {
-        let version_id = match doc.current_version() {
-            Some(v) => v.id,
-            None => return Ok(AnnotationOutput::Skipped),
-        };
-
-        let text = match doc_repo
-            .get_combined_page_text(&doc.id, version_id as i32)
-            .await
-        {
-            Ok(Some(t)) if !t.is_empty() => t,
-            _ => return Ok(AnnotationOutput::Skipped),
+        let text = match get_document_text(doc, doc_repo).await {
+            Ok(t) => t,
+            Err(output) => return Ok(output),
         };
 
         let result = self

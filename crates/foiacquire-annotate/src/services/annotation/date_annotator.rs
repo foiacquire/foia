@@ -31,18 +31,6 @@ impl Annotator for DateAnnotator {
         "Date Detection"
     }
 
-    fn version(&self) -> i32 {
-        1
-    }
-
-    async fn is_available(&self) -> bool {
-        true
-    }
-
-    fn availability_hint(&self) -> String {
-        String::new()
-    }
-
     async fn annotate(
         &self,
         doc: &Document,

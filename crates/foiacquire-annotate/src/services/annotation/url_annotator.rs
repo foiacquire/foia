@@ -6,7 +6,7 @@ use foiacquire::models::Document;
 use foiacquire::repository::DieselDocumentRepository;
 use foiacquire::utils::UrlFinder;
 
-use super::annotator::Annotator;
+use super::annotator::{get_document_text, Annotator};
 use super::types::{AnnotationError, AnnotationOutput};
 
 /// Annotator that extracts document-like URLs from OCR text.
@@ -40,34 +40,14 @@ impl Annotator for UrlAnnotator {
         "URL Extraction"
     }
 
-    fn version(&self) -> i32 {
-        1
-    }
-
-    async fn is_available(&self) -> bool {
-        true
-    }
-
-    fn availability_hint(&self) -> String {
-        String::new()
-    }
-
     async fn annotate(
         &self,
         doc: &Document,
         doc_repo: &DieselDocumentRepository,
     ) -> Result<AnnotationOutput, AnnotationError> {
-        let version_id = match doc.current_version() {
-            Some(v) => v.id,
-            None => return Ok(AnnotationOutput::Skipped),
-        };
-
-        let text = match doc_repo
-            .get_combined_page_text(&doc.id, version_id as i32)
-            .await
-        {
-            Ok(Some(t)) if !t.is_empty() => t,
-            _ => return Ok(AnnotationOutput::Skipped),
+        let text = match get_document_text(doc, doc_repo).await {
+            Ok(t) => t,
+            Err(output) => return Ok(output),
         };
 
         let urls = self.finder.find_document_urls(&text);

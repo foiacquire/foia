@@ -12,7 +12,7 @@ mod ner_annotator;
 mod types;
 mod url_annotator;
 
-pub use annotator::Annotator;
+pub use annotator::{get_document_text, Annotator};
 pub use date_annotator::DateAnnotator;
 pub use llm_annotator::LlmAnnotator;
 pub use manager::AnnotationManager;
