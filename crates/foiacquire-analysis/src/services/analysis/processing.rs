@@ -61,8 +61,16 @@ pub fn extract_document_text_per_page(
         handle.block_on(doc_repo.set_version_page_count(version.id, page_count))?;
     }
 
-    // Delete any existing pages for this document version (in case of re-processing)
-    handle.block_on(doc_repo.delete_pages(&doc.id, version.id as i32))?;
+    // Skip if pages already exist for this version (text extraction already done)
+    let existing_pages = handle.block_on(doc_repo.count_pages(&doc.id, version.id as i32))?;
+    if existing_pages > 0 {
+        tracing::debug!(
+            "Document {} already has {} pages, skipping text extraction",
+            doc.id,
+            existing_pages
+        );
+        return Ok(0);
+    }
 
     let mut pages_created = 0;
 
