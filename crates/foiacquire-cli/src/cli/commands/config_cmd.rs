@@ -44,8 +44,8 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
     let hash = hex::encode(hasher.finalize());
 
     // Save to DB
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     let inserted = config_repo.insert_if_new(&json, "json", &hash).await?;
 
@@ -66,8 +66,8 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
 
 /// Get a config value from the database.
 pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     // Load latest config
     let entry = config_repo.get_latest().await?.ok_or_else(|| {
@@ -92,8 +92,8 @@ pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Resul
 
 /// Set a config value in the database.
 pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     // Load latest config or start with empty
     let mut json_value: serde_json::Value = match config_repo.get_latest().await? {

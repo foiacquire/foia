@@ -109,13 +109,12 @@ pub async fn cmd_annotate(
     interval: u64,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
-    let manager = AnnotationManager::new(doc_repo.clone());
+    let repos = settings.repositories()?;
+    let manager = AnnotationManager::new(repos.documents.clone());
 
     // Initial config load
     let config = Config::load().await;
-    let config_history = ctx.config_history();
+    let config_history = repos.config_history;
 
     let mut config_watcher =
         ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
@@ -261,11 +260,10 @@ pub async fn cmd_detect_dates(
     limit: usize,
     dry_run: bool,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
 
     let annotator = DateAnnotator::new(dry_run);
-    let manager = AnnotationManager::new(doc_repo);
+    let manager = AnnotationManager::new(repos.documents);
 
     let total_count = manager.count_needing(&annotator, source_id).await?;
 
@@ -322,11 +320,10 @@ pub async fn cmd_extract_entities(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
 
     let annotator = NerAnnotator::new();
-    let manager = AnnotationManager::new(doc_repo);
+    let manager = AnnotationManager::new(repos.documents);
 
     let total_count = manager.count_needing(&annotator, source_id).await?;
 
@@ -371,8 +368,8 @@ pub async fn cmd_annotate_reset(
     source_id: Option<&str>,
     confirm: bool,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     let count = doc_repo.count_annotated(source_id).await?;
 

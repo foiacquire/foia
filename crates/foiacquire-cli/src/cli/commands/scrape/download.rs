@@ -7,7 +7,7 @@ use console::style;
 
 use foiacquire::config::{Config, Settings};
 use foiacquire::privacy::PrivacyConfig;
-use foiacquire::repository::diesel_context::DieselDbContext;
+use foiacquire::repository::DieselCrawlRepository;
 
 /// Download pending documents from the queue.
 pub async fn cmd_download(
@@ -24,12 +24,13 @@ pub async fn cmd_download(
 
     settings.ensure_directories()?;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = Arc::new(ctx.documents());
-    let crawl_repo = Arc::new(ctx.crawl());
+    let repos = settings.repositories()?;
 
     // Check for pending work
-    let initial_pending = get_pending_count(&ctx, source_id).await?;
+    let initial_pending = get_pending_count(&repos.crawl, source_id).await?;
+
+    let doc_repo = Arc::new(repos.documents);
+    let crawl_repo = Arc::new(repos.crawl);
 
     if initial_pending == 0 {
         println!("{} No pending documents to download", style("!").yellow());
@@ -197,9 +198,7 @@ pub async fn cmd_download(
 }
 
 /// Get pending document count for a source or all sources.
-async fn get_pending_count(ctx: &DieselDbContext, source_id: Option<&str>) -> anyhow::Result<u64> {
-    let crawl_repo = ctx.crawl();
-
+async fn get_pending_count(crawl_repo: &DieselCrawlRepository, source_id: Option<&str>) -> anyhow::Result<u64> {
     if let Some(sid) = source_id {
         Ok(crawl_repo.get_crawl_state(sid).await?.urls_pending)
     } else {

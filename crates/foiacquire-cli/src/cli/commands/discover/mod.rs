@@ -81,8 +81,8 @@ pub(super) async fn add_discovered_urls(
         return Ok(0);
     }
 
-    let ctx = settings.create_db_context()?;
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let crawl_repo = repos.crawl;
 
     let mut added = 0;
     for discovered in urls {

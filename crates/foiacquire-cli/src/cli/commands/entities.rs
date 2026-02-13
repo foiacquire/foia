@@ -20,8 +20,8 @@ pub async fn cmd_backfill_entities(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     let source_filter = if source_id.is_some() {
         "AND d.source_id = $1"
@@ -205,8 +205,8 @@ pub async fn cmd_search_entities(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Parse --near flag: "lat,lon,radius_km"
     if let Some(near_str) = near {

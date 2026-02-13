@@ -8,8 +8,8 @@ use super::helpers::truncate;
 
 /// List configured sources.
 pub async fn cmd_source_list(settings: &Settings) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
     let sources = source_repo.get_all().await?;
 
     if sources.is_empty() {
@@ -52,10 +52,10 @@ pub async fn cmd_source_rename(
 ) -> anyhow::Result<()> {
     use std::io::{self, Write};
 
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let doc_repo = ctx.documents();
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let doc_repo = repos.documents;
+    let crawl_repo = repos.crawl;
 
     // Check old source exists
     let old_source = source_repo.get(old_id).await?;

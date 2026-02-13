@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::repository::diesel_context::DieselDbContext;
 use crate::repository::util::is_postgres_url;
+use crate::repository::Repositories;
 
 use super::DEFAULT_DATABASE_FILENAME;
 
@@ -200,6 +201,15 @@ impl Settings {
     /// Returns an error if the database URL is invalid.
     pub fn create_db_context(&self) -> Result<DieselDbContext, diesel::result::Error> {
         DieselDbContext::from_url(&self.database_url(), self.no_tls)
+    }
+
+    /// Create bundled repositories for all database operations.
+    ///
+    /// Preferred over `create_db_context()` in CLI commands — provides direct
+    /// field access to all repository types without intermediate context.
+    pub fn repositories(&self) -> Result<Repositories, diesel::result::Error> {
+        let ctx = self.create_db_context()?;
+        Ok(Repositories::new(ctx))
     }
 
     /// Create a database context and verify the connection works.

@@ -69,9 +69,9 @@ pub async fn cmd_scrape(
         }
         RateLimitBackendType::Database => {
             tracing::debug!("Using database rate limit backend");
-            let ctx = settings.create_db_context()?;
+            let repos = settings.repositories()?;
             let backend = Arc::new(DieselRateLimitBackend::new(
-                ctx.pool().clone(),
+                repos.pool().clone(),
                 base_delay_ms,
             ));
             Arc::new(RateLimiter::new(backend))
@@ -88,9 +88,8 @@ pub async fn cmd_scrape(
         }
     };
 
-    // Use DbContext for config history
-    let ctx = settings.create_db_context()?;
-    let config_history = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_history = repos.config_history;
 
     // Initial config load for source list
     let config = Config::load().await;

@@ -79,9 +79,9 @@ pub async fn cmd_analyze(
         ));
     }
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
-    let config_history = ctx.config_history();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
+    let config_history = repos.config_history;
 
     let mut config_watcher =
         ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;

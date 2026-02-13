@@ -172,8 +172,8 @@ pub async fn cmd_import_urls(
     use url::Url;
 
     settings.ensure_directories()?;
-    let ctx = settings.create_db_context()?;
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let crawl_repo = repos.crawl;
 
     // Read URLs from file
     let file = File::open(file)?;
@@ -262,9 +262,9 @@ pub async fn cmd_import_stdin(
     use foiacquire::storage::compute_storage_path_with_dedup;
 
     settings.ensure_directories()?;
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let doc_repo = repos.documents;
 
     // Validate URL
     let parsed_url = Url::parse(url)?;

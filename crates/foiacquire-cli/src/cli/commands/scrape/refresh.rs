@@ -94,8 +94,8 @@ pub async fn cmd_refresh(
 ) -> anyhow::Result<()> {
     use tokio::sync::Semaphore;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = Arc::new(ctx.documents());
+    let repos = settings.repositories()?;
+    let doc_repo = Arc::new(repos.documents);
 
     // Get documents that need metadata refresh
     let documents = if let Some(sid) = source_id {
