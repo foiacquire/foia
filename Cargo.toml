@@ -36,6 +36,9 @@ libsqlite3-sys = { version = "0.35", features = ["bundled"] }
 
 # Migrations
 cetane = "0.1.1"
+
+# SQL query builder (shared via cetane, used for backend-agnostic upserts)
+sea-query = { version = "0.32", features = ["thread-safe"] }
 rusqlite = "0.37"
 
 # Serialization

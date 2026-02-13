@@ -236,6 +236,24 @@ pub use with_conn;
 #[allow(unused_imports)]
 pub use with_conn_split;
 
+/// Build a SQL string from a sea-query statement using the correct backend.
+///
+/// Returns only the SQL; values are discarded because they are re-bound
+/// through diesel's `sql_query().bind()` for type safety.
+pub fn build_sql<S: sea_query::QueryStatementWriter>(pool: &DbPool, stmt: &S) -> String {
+    match pool {
+        DbPool::Sqlite(_) => {
+            let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+            sql
+        }
+        #[cfg(feature = "postgres")]
+        DbPool::Postgres(_) => {
+            let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+            sql
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -38,7 +38,7 @@ pub struct EntityTextCount {
 
 impl DieselDocumentRepository {
     /// Save document entities.
-    /// Uses INSERT OR IGNORE (SQLite, one at a time) / ON CONFLICT DO NOTHING (Postgres, batch).
+    /// Uses INSERT OR IGNORE (SQLite) / ON CONFLICT DO NOTHING (Postgres).
     pub async fn save_document_entities(
         &self,
         entities: &[NewDocumentEntity<'_>],
@@ -49,7 +49,6 @@ impl DieselDocumentRepository {
 
         with_conn_split!(self.pool,
             sqlite: conn => {
-                // SQLite doesn't support batch insert_or_ignore, insert one at a time
                 for entity in entities {
                     diesel::insert_or_ignore_into(document_entities::table)
                         .values(entity)

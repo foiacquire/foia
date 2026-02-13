@@ -3,12 +3,12 @@
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::{DieselDocumentRepository, LastInsertRowId};
+use super::{DieselDocumentRepository, ReturningId};
 use crate::models::DocumentVersion;
 use crate::repository::diesel_models::DocumentVersionRecord;
 use crate::repository::pool::DieselError;
 use crate::schema::document_versions;
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
 
 impl DieselDocumentRepository {
     /// Load versions for a document.
@@ -66,6 +66,10 @@ impl DieselDocumentRepository {
         document_id: &str,
         version: &DocumentVersion,
     ) -> Result<i64, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentVersions;
+        use sea_query::Query;
+
         let file_path = version
             .file_path
             .as_ref()
@@ -73,65 +77,83 @@ impl DieselDocumentRepository {
         let acquired_at = version.acquired_at.to_rfc3339();
         let file_size = version.file_size as i32;
         let dedup_index = version.dedup_index.map(|i| i as i32);
-
+        let server_date = version.server_date.map(|d| d.to_rfc3339());
+        let page_count = version.page_count.map(|c| c as i32);
         let earliest_archived_at = version.earliest_archived_at.map(|d| d.to_rfc3339());
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::insert_into(document_versions::table)
-                    .values((
-                        document_versions::document_id.eq(document_id),
-                        document_versions::content_hash.eq(&version.content_hash),
-                        document_versions::content_hash_blake3
-                            .eq(version.content_hash_blake3.as_deref()),
-                        document_versions::file_path.eq(file_path.as_deref()),
-                        document_versions::file_size.eq(file_size),
-                        document_versions::mime_type.eq(&version.mime_type),
-                        document_versions::acquired_at.eq(&acquired_at),
-                        document_versions::source_url.eq(version.source_url.as_deref()),
-                        document_versions::original_filename
-                            .eq(version.original_filename.as_deref()),
-                        document_versions::server_date
-                            .eq(version.server_date.map(|d| d.to_rfc3339()).as_deref()),
-                        document_versions::page_count.eq(version.page_count.map(|c| c as i32)),
-                        document_versions::archive_snapshot_id.eq(version.archive_snapshot_id),
-                        document_versions::earliest_archived_at.eq(earliest_archived_at.as_deref()),
-                        document_versions::dedup_index.eq(dedup_index),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                diesel::sql_query("SELECT last_insert_rowid()")
-                    .get_result::<LastInsertRowId>(&mut conn)
-                    .await
-                    .map(|r| r.id)
-            },
-            postgres: conn => {
-                let result: i32 = diesel::insert_into(document_versions::table)
-                    .values((
-                        document_versions::document_id.eq(document_id),
-                        document_versions::content_hash.eq(&version.content_hash),
-                        document_versions::content_hash_blake3
-                            .eq(version.content_hash_blake3.as_deref()),
-                        document_versions::file_path.eq(file_path.as_deref()),
-                        document_versions::file_size.eq(file_size),
-                        document_versions::mime_type.eq(&version.mime_type),
-                        document_versions::acquired_at.eq(&acquired_at),
-                        document_versions::source_url.eq(version.source_url.as_deref()),
-                        document_versions::original_filename
-                            .eq(version.original_filename.as_deref()),
-                        document_versions::server_date
-                            .eq(version.server_date.map(|d| d.to_rfc3339()).as_deref()),
-                        document_versions::page_count.eq(version.page_count.map(|c| c as i32)),
-                        document_versions::archive_snapshot_id.eq(version.archive_snapshot_id),
-                        document_versions::earliest_archived_at.eq(earliest_archived_at.as_deref()),
-                        document_versions::dedup_index.eq(dedup_index),
-                    ))
-                    .returning(document_versions::id)
-                    .get_result(&mut conn)
-                    .await?;
-                Ok(result as i64)
-            }
-        )
+        let stmt = Query::insert()
+            .into_table(DocumentVersions::Table)
+            .columns([
+                DocumentVersions::DocumentId,
+                DocumentVersions::ContentHash,
+                DocumentVersions::ContentHashBlake3,
+                DocumentVersions::FilePath,
+                DocumentVersions::FileSize,
+                DocumentVersions::MimeType,
+                DocumentVersions::AcquiredAt,
+                DocumentVersions::SourceUrl,
+                DocumentVersions::OriginalFilename,
+                DocumentVersions::ServerDate,
+                DocumentVersions::PageCount,
+                DocumentVersions::ArchiveSnapshotId,
+                DocumentVersions::EarliestArchivedAt,
+                DocumentVersions::DedupIndex,
+            ])
+            .values_panic([
+                document_id.to_string().into(),
+                version.content_hash.clone().into(),
+                version.content_hash_blake3.clone().into(),
+                file_path.clone().into(),
+                file_size.into(),
+                version.mime_type.clone().into(),
+                acquired_at.clone().into(),
+                version.source_url.clone().into(),
+                version.original_filename.clone().into(),
+                server_date.clone().into(),
+                page_count.into(),
+                version.archive_snapshot_id.into(),
+                earliest_archived_at.clone().into(),
+                dedup_index.into(),
+            ])
+            .returning_col(DocumentVersions::Id)
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            let result: ReturningId = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(document_id)
+                .bind::<diesel::sql_types::Text, _>(&version.content_hash)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    version.content_hash_blake3.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    file_path.as_deref(),
+                )
+                .bind::<diesel::sql_types::Integer, _>(file_size)
+                .bind::<diesel::sql_types::Text, _>(&version.mime_type)
+                .bind::<diesel::sql_types::Text, _>(&acquired_at)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    version.source_url.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    version.original_filename.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    server_date.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(page_count)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(
+                    version.archive_snapshot_id,
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    earliest_archived_at.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(dedup_index)
+                .get_result(&mut conn)
+                .await?;
+            Ok(result.id as i64)
+        })
     }
 
     /// Get latest version.

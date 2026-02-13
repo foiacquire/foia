@@ -8,7 +8,7 @@ use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{ServiceState, ServiceStatus, ServiceType};
 use crate::schema::service_status;
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
 
 /// Convert a database record to a domain model.
 impl TryFrom<ServiceStatusRecord> for ServiceStatus {
@@ -95,6 +95,10 @@ impl DieselServiceStatusRepository {
 
     /// Upsert a service status (insert or update).
     pub async fn upsert(&self, status: &ServiceStatus) -> Result<(), DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::ServiceStatusTable as Sst;
+        use sea_query::{OnConflict, Query};
+
         let stats_json = serde_json::to_string(&status.stats).unwrap_or_else(|_| "{}".to_string());
         let last_heartbeat = status.last_heartbeat.to_rfc3339();
         let last_activity = status.last_activity.map(|dt| dt.to_rfc3339());
@@ -103,67 +107,94 @@ impl DieselServiceStatusRepository {
         let service_type = status.service_type.as_str().to_string();
         let state = status.status.as_str().to_string();
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(service_status::table)
-                    .values((
-                        service_status::id.eq(&status.id),
-                        service_status::service_type.eq(&service_type),
-                        service_status::source_id.eq(&status.source_id),
-                        service_status::status.eq(&state),
-                        service_status::last_heartbeat.eq(&last_heartbeat),
-                        service_status::last_activity.eq(&last_activity),
-                        service_status::current_task.eq(&status.current_task),
-                        service_status::stats.eq(&stats_json),
-                        service_status::started_at.eq(&started_at),
-                        service_status::host.eq(&status.host),
-                        service_status::version.eq(&status.version),
-                        service_status::last_error.eq(&status.last_error),
-                        service_status::last_error_at.eq(&last_error_at),
-                        service_status::error_count.eq(status.error_count),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            },
-            postgres: conn => {
-                use diesel::upsert::excluded;
-                diesel::insert_into(service_status::table)
-                    .values((
-                        service_status::id.eq(&status.id),
-                        service_status::service_type.eq(&service_type),
-                        service_status::source_id.eq(&status.source_id),
-                        service_status::status.eq(&state),
-                        service_status::last_heartbeat.eq(&last_heartbeat),
-                        service_status::last_activity.eq(&last_activity),
-                        service_status::current_task.eq(&status.current_task),
-                        service_status::stats.eq(&stats_json),
-                        service_status::started_at.eq(&started_at),
-                        service_status::host.eq(&status.host),
-                        service_status::version.eq(&status.version),
-                        service_status::last_error.eq(&status.last_error),
-                        service_status::last_error_at.eq(&last_error_at),
-                        service_status::error_count.eq(status.error_count),
-                    ))
-                    .on_conflict(service_status::id)
-                    .do_update()
-                    .set((
-                        service_status::status.eq(excluded(service_status::status)),
-                        service_status::last_heartbeat.eq(excluded(service_status::last_heartbeat)),
-                        service_status::last_activity.eq(excluded(service_status::last_activity)),
-                        service_status::current_task.eq(excluded(service_status::current_task)),
-                        service_status::stats.eq(excluded(service_status::stats)),
-                        service_status::host.eq(excluded(service_status::host)),
-                        service_status::version.eq(excluded(service_status::version)),
-                        service_status::last_error.eq(excluded(service_status::last_error)),
-                        service_status::last_error_at.eq(excluded(service_status::last_error_at)),
-                        service_status::error_count.eq(excluded(service_status::error_count)),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            }
-        )
+        let stmt = Query::insert()
+            .into_table(Sst::Table)
+            .columns([
+                Sst::Id,
+                Sst::ServiceType,
+                Sst::SourceId,
+                Sst::Status,
+                Sst::LastHeartbeat,
+                Sst::LastActivity,
+                Sst::CurrentTask,
+                Sst::Stats,
+                Sst::StartedAt,
+                Sst::Host,
+                Sst::Version,
+                Sst::LastError,
+                Sst::LastErrorAt,
+                Sst::ErrorCount,
+            ])
+            .values_panic([
+                status.id.clone().into(),
+                service_type.clone().into(),
+                status.source_id.clone().into(),
+                state.clone().into(),
+                last_heartbeat.clone().into(),
+                last_activity.clone().into(),
+                status.current_task.clone().into(),
+                stats_json.clone().into(),
+                started_at.clone().into(),
+                status.host.clone().into(),
+                status.version.clone().into(),
+                status.last_error.clone().into(),
+                last_error_at.clone().into(),
+                status.error_count.into(),
+            ])
+            .on_conflict(
+                OnConflict::column(Sst::Id)
+                    .update_columns([
+                        Sst::Status,
+                        Sst::LastHeartbeat,
+                        Sst::LastActivity,
+                        Sst::CurrentTask,
+                        Sst::Stats,
+                        Sst::Host,
+                        Sst::Version,
+                        Sst::LastError,
+                        Sst::LastErrorAt,
+                        Sst::ErrorCount,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(&status.id)
+                .bind::<diesel::sql_types::Text, _>(&service_type)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    status.source_id.as_deref(),
+                )
+                .bind::<diesel::sql_types::Text, _>(&state)
+                .bind::<diesel::sql_types::Text, _>(&last_heartbeat)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    last_activity.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    status.current_task.as_deref(),
+                )
+                .bind::<diesel::sql_types::Text, _>(&stats_json)
+                .bind::<diesel::sql_types::Text, _>(&started_at)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    status.host.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    status.version.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    status.last_error.as_deref(),
+                )
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    last_error_at.as_deref(),
+                )
+                .bind::<diesel::sql_types::Integer, _>(status.error_count)
+                .execute(&mut conn)
+                .await?;
+            Ok(())
+        })
     }
 
     /// Delete a service status.

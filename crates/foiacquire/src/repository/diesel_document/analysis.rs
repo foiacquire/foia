@@ -7,11 +7,11 @@ use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::DieselDocumentRepository;
-use crate::repository::diesel_models::{DocumentAnalysisResultRecord, NewDocumentAnalysisResult};
+use super::{DieselDocumentRepository, ReturningId};
+use crate::repository::diesel_models::DocumentAnalysisResultRecord;
 use crate::repository::pool::DieselError;
 use crate::schema::document_analysis_results;
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
 
 /// Analysis result status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +96,10 @@ impl DieselDocumentRepository {
         error: Option<&str>,
         metadata: Option<&serde_json::Value>,
     ) -> Result<i64, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentAnalysisResults as Dar;
+        use sea_query::{Expr, OnConflict, Query};
+
         let now = Utc::now().to_rfc3339();
         let status = if error.is_some() {
             AnalysisResultStatus::Failed.as_str()
@@ -104,56 +108,69 @@ impl DieselDocumentRepository {
         };
         let metadata_str = metadata.map(|m| serde_json::to_string(m).unwrap_or_default());
         let processing_time = processing_time_ms.map(|ms| ms as i32);
+        let page_id_i32 = page_id as i32;
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(document_analysis_results::table)
-                    .values(NewDocumentAnalysisResult {
-                        page_id: Some(page_id as i32),
-                        document_id,
-                        version_id,
-                        analysis_type,
-                        backend,
-                        result_text,
-                        confidence,
-                        processing_time_ms: processing_time,
-                        error,
-                        status,
-                        created_at: &now,
-                        metadata: metadata_str.as_deref(),
-                        model,
-                    })
-                    .execute(&mut conn)
-                    .await?;
-                let result: super::LastInsertRowId = diesel::sql_query("SELECT last_insert_rowid()")
-                    .get_result(&mut conn)
-                    .await?;
-                Ok(result.id)
-            },
-            postgres: conn => {
-                // Use raw SQL for upsert with partial unique index (Diesel doesn't support this)
-                #[derive(diesel::QueryableByName)]
-                struct InsertResult {
-                    #[diesel(sql_type = diesel::sql_types::Integer)]
-                    id: i32,
-                }
-                let result: InsertResult = diesel::sql_query(
-                    "INSERT INTO document_analysis_results
-                     (page_id, document_id, version_id, analysis_type, backend, result_text,
-                      confidence, processing_time_ms, error, status, created_at, metadata, model)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                     ON CONFLICT (page_id, analysis_type, backend, COALESCE(model, '')) WHERE page_id IS NOT NULL
-                     DO UPDATE SET result_text = EXCLUDED.result_text,
-                                   confidence = EXCLUDED.confidence,
-                                   processing_time_ms = EXCLUDED.processing_time_ms,
-                                   error = EXCLUDED.error,
-                                   status = EXCLUDED.status,
-                                   created_at = EXCLUDED.created_at,
-                                   metadata = EXCLUDED.metadata,
-                                   model = EXCLUDED.model
-                     RETURNING id"
-                )
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(Some(page_id as i32))
+        let stmt = Query::insert()
+            .into_table(Dar::Table)
+            .columns([
+                Dar::PageId,
+                Dar::DocumentId,
+                Dar::VersionId,
+                Dar::AnalysisType,
+                Dar::Backend,
+                Dar::ResultText,
+                Dar::Confidence,
+                Dar::ProcessingTimeMs,
+                Dar::Error,
+                Dar::Status,
+                Dar::CreatedAt,
+                Dar::Metadata,
+                Dar::Model,
+            ])
+            .values_panic([
+                Some(page_id_i32).into(),
+                document_id.to_string().into(),
+                version_id.into(),
+                analysis_type.to_string().into(),
+                backend.to_string().into(),
+                result_text.map(|s| s.to_string()).into(),
+                confidence.into(),
+                processing_time.into(),
+                error.map(|s| s.to_string()).into(),
+                status.to_string().into(),
+                now.clone().into(),
+                metadata_str.clone().into(),
+                model.map(|s| s.to_string()).into(),
+            ])
+            .on_conflict(
+                OnConflict::new()
+                    .expr(Expr::col(Dar::PageId))
+                    .expr(Expr::col(Dar::AnalysisType))
+                    .expr(Expr::col(Dar::Backend))
+                    .expr(Expr::cust("COALESCE(\"model\", '')"))
+                    .target_and_where(Expr::cust("page_id IS NOT NULL"))
+                    .update_columns([
+                        Dar::ResultText,
+                        Dar::Confidence,
+                        Dar::ProcessingTimeMs,
+                        Dar::Error,
+                        Dar::Status,
+                        Dar::CreatedAt,
+                        Dar::Metadata,
+                        Dar::Model,
+                    ])
+                    .to_owned(),
+            )
+            .returning_col(Dar::Id)
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            let result: ReturningId = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(Some(
+                    page_id_i32,
+                ))
                 .bind::<diesel::sql_types::Text, _>(document_id)
                 .bind::<diesel::sql_types::Integer, _>(version_id)
                 .bind::<diesel::sql_types::Text, _>(analysis_type)
@@ -164,13 +181,14 @@ impl DieselDocumentRepository {
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(error)
                 .bind::<diesel::sql_types::Text, _>(status)
                 .bind::<diesel::sql_types::Text, _>(&now)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(metadata_str.as_deref())
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    metadata_str.as_deref(),
+                )
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
                 .get_result(&mut conn)
                 .await?;
-                Ok(result.id as i64)
-            }
-        )
+            Ok(result.id as i64)
+        })
     }
 
     /// Store an analysis result for a document (document-level, no page).
@@ -188,6 +206,10 @@ impl DieselDocumentRepository {
         error: Option<&str>,
         metadata: Option<&serde_json::Value>,
     ) -> Result<i64, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentAnalysisResults as Dar;
+        use sea_query::{Expr, OnConflict, Query};
+
         let now = Utc::now().to_rfc3339();
         let status = if error.is_some() {
             AnalysisResultStatus::Failed.as_str()
@@ -197,54 +219,66 @@ impl DieselDocumentRepository {
         let metadata_str = metadata.map(|m| serde_json::to_string(m).unwrap_or_default());
         let processing_time = processing_time_ms.map(|ms| ms as i32);
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(document_analysis_results::table)
-                    .values(NewDocumentAnalysisResult {
-                        page_id: None,
-                        document_id,
-                        version_id,
-                        analysis_type,
-                        backend,
-                        result_text,
-                        confidence,
-                        processing_time_ms: processing_time,
-                        error,
-                        status,
-                        created_at: &now,
-                        metadata: metadata_str.as_deref(),
-                        model,
-                    })
-                    .execute(&mut conn)
-                    .await?;
-                let result: super::LastInsertRowId = diesel::sql_query("SELECT last_insert_rowid()")
-                    .get_result(&mut conn)
-                    .await?;
-                Ok(result.id)
-            },
-            postgres: conn => {
-                // Use raw SQL for upsert with partial unique index (Diesel doesn't support this)
-                #[derive(diesel::QueryableByName)]
-                struct InsertResult {
-                    #[diesel(sql_type = diesel::sql_types::Integer)]
-                    id: i32,
-                }
-                let result: InsertResult = diesel::sql_query(
-                    "INSERT INTO document_analysis_results
-                     (page_id, document_id, version_id, analysis_type, backend, result_text,
-                      confidence, processing_time_ms, error, status, created_at, metadata, model)
-                     VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                     ON CONFLICT (document_id, version_id, analysis_type, backend, COALESCE(model, '')) WHERE page_id IS NULL
-                     DO UPDATE SET result_text = EXCLUDED.result_text,
-                                   confidence = EXCLUDED.confidence,
-                                   processing_time_ms = EXCLUDED.processing_time_ms,
-                                   error = EXCLUDED.error,
-                                   status = EXCLUDED.status,
-                                   created_at = EXCLUDED.created_at,
-                                   metadata = EXCLUDED.metadata,
-                                   model = EXCLUDED.model
-                     RETURNING id"
-                )
+        let stmt = Query::insert()
+            .into_table(Dar::Table)
+            .columns([
+                Dar::PageId,
+                Dar::DocumentId,
+                Dar::VersionId,
+                Dar::AnalysisType,
+                Dar::Backend,
+                Dar::ResultText,
+                Dar::Confidence,
+                Dar::ProcessingTimeMs,
+                Dar::Error,
+                Dar::Status,
+                Dar::CreatedAt,
+                Dar::Metadata,
+                Dar::Model,
+            ])
+            .values_panic([
+                Option::<i32>::None.into(),
+                document_id.to_string().into(),
+                version_id.into(),
+                analysis_type.to_string().into(),
+                backend.to_string().into(),
+                result_text.map(|s| s.to_string()).into(),
+                confidence.into(),
+                processing_time.into(),
+                error.map(|s| s.to_string()).into(),
+                status.to_string().into(),
+                now.clone().into(),
+                metadata_str.clone().into(),
+                model.map(|s| s.to_string()).into(),
+            ])
+            .on_conflict(
+                OnConflict::new()
+                    .expr(Expr::col(Dar::DocumentId))
+                    .expr(Expr::col(Dar::VersionId))
+                    .expr(Expr::col(Dar::AnalysisType))
+                    .expr(Expr::col(Dar::Backend))
+                    .expr(Expr::cust("COALESCE(\"model\", '')"))
+                    .target_and_where(Expr::cust("page_id IS NULL"))
+                    .update_columns([
+                        Dar::ResultText,
+                        Dar::Confidence,
+                        Dar::ProcessingTimeMs,
+                        Dar::Error,
+                        Dar::Status,
+                        Dar::CreatedAt,
+                        Dar::Metadata,
+                        Dar::Model,
+                    ])
+                    .to_owned(),
+            )
+            .returning_col(Dar::Id)
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            let result: ReturningId = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
                 .bind::<diesel::sql_types::Text, _>(document_id)
                 .bind::<diesel::sql_types::Integer, _>(version_id)
                 .bind::<diesel::sql_types::Text, _>(analysis_type)
@@ -255,13 +289,14 @@ impl DieselDocumentRepository {
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(error)
                 .bind::<diesel::sql_types::Text, _>(status)
                 .bind::<diesel::sql_types::Text, _>(&now)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(metadata_str.as_deref())
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    metadata_str.as_deref(),
+                )
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
                 .get_result(&mut conn)
                 .await?;
-                Ok(result.id as i64)
-            }
-        )
+            Ok(result.id as i64)
+        })
     }
 
     /// Get analysis results for a document.

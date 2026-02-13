@@ -7,6 +7,7 @@
 pub mod context;
 pub mod models;
 pub mod pool;
+pub mod sea_tables;
 
 // Repositories
 pub mod source;
