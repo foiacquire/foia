@@ -204,7 +204,7 @@ impl DriveFolder {
             .map_err(|e| GoogleDriveError::Http(e.to_string()))?;
 
         if !response.is_success() {
-            if response.status == 429 {
+            if response.is_rate_limited() {
                 return Err(GoogleDriveError::RateLimited);
             }
             return Err(GoogleDriveError::Http(format!("HTTP {}", response.status)));
@@ -276,7 +276,7 @@ impl DriveFolder {
                 id: id.clone(),
                 name,
                 mime_type: if mime_type.is_empty() {
-                    guess_mime_type_from_name(&cap[2])
+                    foiacquire::utils::guess_mime_from_filename(&cap[2]).to_string()
                 } else {
                     mime_type
                 },
@@ -314,7 +314,7 @@ impl DriveFolder {
             let file = DriveFile {
                 id: id.clone(),
                 name: name.clone(),
-                mime_type: guess_mime_type_from_name(&name),
+                mime_type: foiacquire::utils::guess_mime_from_filename(&name).to_string(),
                 size: None,
                 download_url: file_download_url(&id),
                 parent_folder_id: self.folder_id.clone(),
@@ -359,7 +359,7 @@ impl DriveFolder {
             let file = DriveFile {
                 id: id.clone(),
                 name: name.clone(),
-                mime_type: guess_mime_type_from_name(&name),
+                mime_type: foiacquire::utils::guess_mime_from_filename(&name).to_string(),
                 size: None,
                 download_url: file_download_url(&id),
                 parent_folder_id: self.folder_id.clone(),
@@ -380,34 +380,6 @@ impl DriveFolder {
         // Look for next page token in the page
         let token_pattern = Regex::new(r#"pageToken['":\s]+['"]([^'"]+)['"]"#).ok()?;
         token_pattern.captures(html).map(|c| c[1].to_string())
-    }
-}
-
-/// Guess MIME type from filename extension.
-fn guess_mime_type_from_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    if lower.ends_with(".pdf") {
-        "application/pdf".to_string()
-    } else if lower.ends_with(".doc") {
-        "application/msword".to_string()
-    } else if lower.ends_with(".docx") {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()
-    } else if lower.ends_with(".xls") {
-        "application/vnd.ms-excel".to_string()
-    } else if lower.ends_with(".xlsx") {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()
-    } else if lower.ends_with(".txt") {
-        "text/plain".to_string()
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "image/jpeg".to_string()
-    } else if lower.ends_with(".png") {
-        "image/png".to_string()
-    } else if lower.ends_with(".gif") {
-        "image/gif".to_string()
-    } else if lower.ends_with(".zip") {
-        "application/zip".to_string()
-    } else {
-        "application/octet-stream".to_string()
     }
 }
 
@@ -517,15 +489,15 @@ mod tests {
 
     #[test]
     fn test_guess_mime_type() {
-        assert_eq!(guess_mime_type_from_name("document.pdf"), "application/pdf");
-        assert_eq!(guess_mime_type_from_name("DOCUMENT.PDF"), "application/pdf");
+        assert_eq!(foiacquire::utils::guess_mime_from_filename("document.pdf"), "application/pdf");
+        assert_eq!(foiacquire::utils::guess_mime_from_filename("DOCUMENT.PDF"), "application/pdf");
         assert_eq!(
-            guess_mime_type_from_name("file.docx"),
+            foiacquire::utils::guess_mime_from_filename("file.docx"),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
-        assert_eq!(guess_mime_type_from_name("image.jpg"), "image/jpeg");
+        assert_eq!(foiacquire::utils::guess_mime_from_filename("image.jpg"), "image/jpeg");
         assert_eq!(
-            guess_mime_type_from_name("unknown"),
+            foiacquire::utils::guess_mime_from_filename("unknown"),
             "application/octet-stream"
         );
     }

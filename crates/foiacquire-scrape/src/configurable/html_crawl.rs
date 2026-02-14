@@ -823,15 +823,7 @@ fn extract_links_from_html(
         if is_document {
             doc_urls.push(full_url);
         } else {
-            let looks_like_page = !full_url.ends_with(".pdf")
-                && !full_url.ends_with(".jpg")
-                && !full_url.ends_with(".jpeg")
-                && !full_url.ends_with(".png")
-                && !full_url.ends_with(".gif")
-                && !full_url.ends_with(".zip")
-                && !full_url.ends_with(".doc")
-                && !full_url.ends_with(".docx")
-                && !full_url.ends_with(".xls");
+            let looks_like_page = !foiacquire::utils::has_file_extension(&full_url);
             if looks_like_page {
                 page_urls.push(full_url);
             }

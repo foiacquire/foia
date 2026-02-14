@@ -67,7 +67,7 @@ async fn handle_refresh_result(
             false
         }
         RefreshResult::Redownloaded(updated_doc) => {
-            if let Err(e) = doc_repo.save(&updated_doc).await {
+            if let Err(e) = doc_repo.save_with_versions(&updated_doc).await {
                 pb.println(format!(
                     "{} Failed to save {}: {}",
                     style("✗").red(),
@@ -94,8 +94,8 @@ pub async fn cmd_refresh(
 ) -> anyhow::Result<()> {
     use tokio::sync::Semaphore;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = Arc::new(ctx.documents());
+    let repos = settings.repositories()?;
+    let doc_repo = Arc::new(repos.documents);
 
     // Get documents that need metadata refresh
     let documents = if let Some(sid) = source_id {
@@ -177,13 +177,14 @@ pub async fn cmd_refresh(
         let via = via_mappings.clone();
 
         let handle = tokio::spawn(async move {
-            let client = match foiacquire::http_client::HttpClient::with_privacy(
+            let client = match foiacquire::http_client::HttpClient::builder(
                 "refresh",
                 std::time::Duration::from_secs(30),
                 std::time::Duration::from_millis(100),
-                None,
-                &privacy,
-            ) {
+            )
+            .privacy(&privacy)
+            .build()
+            {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Failed to create HTTP client: {}", e);

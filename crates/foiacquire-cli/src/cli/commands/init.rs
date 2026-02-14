@@ -14,9 +14,8 @@ pub async fn cmd_init(settings: &Settings) -> anyhow::Result<()> {
     println!("{} Running migrations...", style("→").cyan());
     migrations::run_migrations(&settings.database_url(), settings.no_tls).await?;
 
-    // Create database context for source management
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
 
     // Load sources from config
     let config = Config::load().await;

@@ -78,36 +78,13 @@ impl DiscoveredUrl {
 
     /// Check if this URL looks like a listing page based on patterns.
     pub fn detect_listing_page(&mut self) {
-        let url_lower = self.url.to_lowercase();
-        let listing_patterns = [
-            "/index",
-            "/browse",
-            "/list",
-            "/search",
-            "/documents/",
-            "/reports/",
-            "/publications/",
-            "/library/",
-            "/reading-room",
-            "/foia/",
-            "/archive",
-            "page=",
-            "?q=",
-        ];
-
-        // Check URL patterns
-        if listing_patterns.iter().any(|p| url_lower.contains(p)) {
+        if is_listing_url(&self.url) {
             self.is_listing_page = true;
             self.confidence = (self.confidence + 0.1).min(1.0);
         }
 
         // Check if URL doesn't end in a file extension (likely a page)
-        if !url_lower.ends_with(".pdf")
-            && !url_lower.ends_with(".doc")
-            && !url_lower.ends_with(".docx")
-            && !url_lower.ends_with(".xls")
-            && !url_lower.ends_with(".xlsx")
-        {
+        if !foiacquire::utils::has_document_extension(&self.url) {
             self.confidence = (self.confidence + 0.05).min(1.0);
         }
 
@@ -125,6 +102,35 @@ impl DiscoveredUrl {
             }
         }
     }
+}
+
+/// URL path patterns that indicate a listing/index page rather than a document.
+const LISTING_PATTERNS: &[&str] = &[
+    "/index",
+    "/browse",
+    "/list",
+    "/search",
+    "/documents/",
+    "/reports/",
+    "/publications/",
+    "/library/",
+    "/reading-room",
+    "/foia/",
+    "/archive",
+    "page=",
+    "?q=",
+];
+
+/// Check if a URL looks like a listing/index page based on path patterns.
+///
+/// Returns `false` for URLs with document extensions (PDF, DOCX, etc.).
+pub fn is_listing_url(url: &str) -> bool {
+    if foiacquire::utils::has_document_extension(url) {
+        return false;
+    }
+
+    let url_lower = url.to_lowercase();
+    LISTING_PATTERNS.iter().any(|p| url_lower.contains(p))
 }
 
 #[cfg(test)]

@@ -10,13 +10,14 @@ mod result;
 
 pub mod sources;
 pub mod term_extraction;
+pub mod url_utils;
 
 // Re-export config types for public API
 #[allow(unused_imports)]
 pub use config::{
     DiscoverySourceConfig, ExternalDiscoveryConfig, SearchEngineSourceConfig, TermExtractionConfig,
 };
-pub use result::DiscoveredUrl;
+pub use result::{is_listing_url, DiscoveredUrl};
 
 use async_trait::async_trait;
 
@@ -62,7 +63,9 @@ pub trait DiscoverySource: Send + Sync {
     /// Whether this source requires browser-based fetching.
     ///
     /// Sources like Google Search need a browser to bypass bot detection.
-    fn requires_browser(&self) -> bool;
+    fn requires_browser(&self) -> bool {
+        false
+    }
 
     /// Discover URLs for a target domain using the given search terms.
     ///

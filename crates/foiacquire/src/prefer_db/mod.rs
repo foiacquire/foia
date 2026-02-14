@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use prefer_db::{ConfigEntry, ConfigLoader, DbSource};
 
-use crate::config::{AppConfigSnapshot, Config};
+use crate::config::{Config, SourcesConfig};
 use crate::repository::diesel_context::DieselDbContext;
 
 /// Foiacquire database configuration loader.
@@ -26,11 +26,11 @@ impl FoiaConfigLoader {
         }
     }
 
-    /// Load app config snapshot from the database using native prefer.
+    /// Load source interaction settings from the database using native prefer.
     ///
     /// Uses prefer's ConfigBuilder with DbSource for native FromValue conversion.
     /// Falls back to full Config for backwards compatibility with old DB entries.
-    pub async fn load_snapshot(&self) -> Option<AppConfigSnapshot> {
+    pub async fn load_snapshot(&self) -> Option<SourcesConfig> {
         use prefer::FromValue;
 
         let source = DbSource::new(SelfLoader {
@@ -43,14 +43,14 @@ impl FoiaConfigLoader {
             .await
             .ok()?;
 
-        // Try AppConfigSnapshot first (new format)
-        if let Ok(snapshot) = AppConfigSnapshot::from_value(config.data()) {
-            return Some(snapshot);
+        // Try SourcesConfig first (new format)
+        if let Ok(sources) = SourcesConfig::from_value(config.data()) {
+            return Some(sources);
         }
 
-        // Fall back to full Config (old format) and extract app portion
+        // Fall back to full Config (old format) and extract sources portion
         if let Ok(full_config) = Config::from_value(config.data()) {
-            return Some(full_config.to_app_snapshot());
+            return Some(full_config.to_sources_config());
         }
 
         None

@@ -8,9 +8,7 @@ mod runner;
 pub mod sources;
 
 pub use runner::{FileStorageMode, ImportConfig, ImportRunner};
-pub use sources::{
-    guess_mime_type_from_url, ConcordanceImportSource, MultiPageMode, WarcImportSource,
-};
+pub use sources::{ConcordanceImportSource, MultiPageMode, WarcImportSource};
 
 use std::path::{Path, PathBuf};
 
@@ -117,10 +115,39 @@ pub trait ImportSource: Send + Sync {
     }
 
     /// Load previous progress for resumption.
+    ///
+    /// Supports both JSON format (current) and legacy text format
+    /// ("done", "offset:N", "error:msg") from older WARC imports.
     fn load_progress(&self) -> Option<ImportProgress> {
         let path = self.progress_path();
         let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        let content = content.trim();
+
+        if content == "done" {
+            return Some(ImportProgress {
+                position: 0,
+                done: true,
+                error: None,
+            });
+        }
+        if let Some(error_msg) = content.strip_prefix("error:") {
+            return Some(ImportProgress {
+                position: 0,
+                done: false,
+                error: Some(error_msg.to_string()),
+            });
+        }
+        if let Some(offset_str) = content.strip_prefix("offset:") {
+            if let Ok(offset) = offset_str.parse::<u64>() {
+                return Some(ImportProgress {
+                    position: offset,
+                    done: false,
+                    error: None,
+                });
+            }
+        }
+
+        serde_json::from_str(content).ok()
     }
 
     /// Save current progress for checkpointing.
@@ -175,25 +202,6 @@ mod tests {
 
 /// Guess MIME type from file extension.
 pub fn guess_mime_type(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("pdf") | Some("PDF") => "application/pdf",
-        Some("tif") | Some("tiff") | Some("TIF") | Some("TIFF") => "image/tiff",
-        Some("jpg") | Some("jpeg") | Some("JPG") | Some("JPEG") => "image/jpeg",
-        Some("png") | Some("PNG") => "image/png",
-        Some("gif") | Some("GIF") => "image/gif",
-        Some("doc") | Some("DOC") => "application/msword",
-        Some("docx") | Some("DOCX") => {
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        }
-        Some("txt") | Some("TXT") => "text/plain",
-        Some("html") | Some("htm") | Some("HTML") | Some("HTM") => "text/html",
-        Some("msg") | Some("MSG") => "application/vnd.ms-outlook",
-        Some("eml") | Some("EML") => "message/rfc822",
-        Some("xls") | Some("XLS") => "application/vnd.ms-excel",
-        Some("xlsx") | Some("XLSX") => {
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        }
-        _ => "application/octet-stream",
-    }
-    .to_string()
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    foiacquire::utils::guess_mime_from_filename(name).to_string()
 }

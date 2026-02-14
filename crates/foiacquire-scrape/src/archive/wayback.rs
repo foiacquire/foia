@@ -1,14 +1,14 @@
 //! Wayback Machine (web.archive.org) archive source.
 //!
 //! Uses the CDX API to query snapshot metadata efficiently without
-//! downloading actual content. The CDX API returns tab-separated data
-//! with fields: urlkey, timestamp, original, mimetype, statuscode, digest, length
+//! downloading actual content.
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 use super::{ArchiveError, ArchiveSource, SnapshotInfo};
+use crate::cdx::{self, CdxQuery, CdxRow};
 use crate::HttpClient;
 use foiacquire::models::ArchiveService;
 use foiacquire::privacy::PrivacyConfig;
@@ -26,12 +26,9 @@ impl Default for WaybackSource {
 }
 
 impl WaybackSource {
-    /// CDX API base URL
-    const CDX_API: &'static str = "https://web.archive.org/cdx/search/cdx";
-
     pub fn new() -> Self {
         Self {
-            cdx_url: Self::CDX_API.to_string(),
+            cdx_url: cdx::WAYBACK_CDX_API_URL.to_string(),
             privacy: PrivacyConfig::default(),
         }
     }
@@ -39,7 +36,7 @@ impl WaybackSource {
     /// Create with privacy configuration.
     pub fn with_privacy(privacy: PrivacyConfig) -> Self {
         Self {
-            cdx_url: Self::CDX_API.to_string(),
+            cdx_url: cdx::WAYBACK_CDX_API_URL.to_string(),
             privacy,
         }
     }
@@ -52,77 +49,21 @@ impl WaybackSource {
         }
     }
 
-    /// Parse a CDX timestamp (YYYYMMDDhhmmss) into DateTime<Utc>.
-    fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
-        // CDX format: YYYYMMDDhhmmss (14 digits)
-        if ts.len() < 14 {
-            return None;
-        }
-
-        NaiveDateTime::parse_from_str(&ts[..14], "%Y%m%d%H%M%S")
-            .ok()
-            .map(|dt| dt.and_utc())
-    }
-
-    /// Format a DateTime as CDX timestamp.
-    fn format_timestamp(dt: DateTime<Utc>) -> String {
-        dt.format("%Y%m%d%H%M%S").to_string()
-    }
-
-    /// Build the archive URL for retrieving content.
-    fn build_archive_url(&self, timestamp: &str, original_url: &str) -> String {
-        // Wayback URL format: https://web.archive.org/web/{timestamp}/{original_url}
-        format!("https://web.archive.org/web/{}/{}", timestamp, original_url)
-    }
-
-    /// Build the raw archive URL (without Wayback's toolbar/frame).
-    fn build_raw_archive_url(&self, timestamp: &str, original_url: &str) -> String {
-        // Adding 'id_' after timestamp gives raw content
-        format!(
-            "https://web.archive.org/web/{}id_/{}",
-            timestamp, original_url
-        )
-    }
-
-    /// Parse a CDX response line into SnapshotInfo.
-    fn parse_cdx_line(&self, line: &str) -> Option<SnapshotInfo> {
-        // CDX format: urlkey timestamp original mimetype statuscode digest length
-        let fields: Vec<&str> = line.split_whitespace().collect();
-
-        if fields.len() < 7 {
-            return None;
-        }
-
-        let timestamp = fields[1];
-        let original_url = fields[2];
-        let mimetype = fields[3];
-        let status_code = fields[4];
-        let digest = fields[5];
-        let length = fields[6];
-
-        let captured_at = Self::parse_timestamp(timestamp)?;
+    /// Convert a CDX row into a SnapshotInfo.
+    fn row_to_snapshot(row: &CdxRow) -> Option<SnapshotInfo> {
+        let timestamp = row.get_raw("timestamp")?;
+        let original_url = row.get_raw("original")?;
+        let captured_at = cdx::parse_cdx_timestamp(timestamp)?;
 
         Some(SnapshotInfo {
             service: ArchiveService::Wayback,
             original_url: original_url.to_string(),
-            archive_url: self.build_raw_archive_url(timestamp, original_url),
+            archive_url: cdx::build_raw_archive_url(timestamp, original_url),
             captured_at,
-            http_status: status_code.parse().ok(),
-            mimetype: if mimetype == "-" {
-                None
-            } else {
-                Some(mimetype.to_string())
-            },
-            content_length: if length == "-" {
-                None
-            } else {
-                length.parse().ok()
-            },
-            digest: if digest == "-" {
-                None
-            } else {
-                Some(digest.to_string())
-            },
+            http_status: row.get("statuscode").and_then(|s| s.parse().ok()),
+            mimetype: row.get("mimetype").map(|s| s.to_string()),
+            content_length: row.get("length").and_then(|s| s.parse().ok()),
+            digest: row.get("digest").map(|s| s.to_string()),
         })
     }
 
@@ -133,31 +74,38 @@ impl WaybackSource {
         from: Option<DateTime<Utc>>,
         to: Option<DateTime<Utc>>,
     ) -> Result<Vec<SnapshotInfo>, ArchiveError> {
-        let mut query_url = format!(
-            "{}?url={}&output=json&fl=urlkey,timestamp,original,mimetype,statuscode,digest,length",
-            self.cdx_url,
-            urlencoding::encode(url)
-        );
+        let mut query = CdxQuery::new(url)
+            .base_url(&self.cdx_url)
+            .fields(&[
+                "urlkey",
+                "timestamp",
+                "original",
+                "mimetype",
+                "statuscode",
+                "digest",
+                "length",
+            ]);
 
         if let Some(from) = from {
-            query_url.push_str(&format!("&from={}", Self::format_timestamp(from)));
+            query = query.from_date(cdx::format_cdx_timestamp(from));
         }
         if let Some(to) = to {
-            query_url.push_str(&format!("&to={}", Self::format_timestamp(to)));
+            query = query.to_date(cdx::format_cdx_timestamp(to));
         }
 
-        // Create HTTP client with privacy configuration
-        let client = HttpClient::with_privacy(
+        let query_url = query.build();
+
+        let client = HttpClient::builder(
             "wayback_archive",
             Duration::from_secs(30),
             Duration::from_millis(500),
-            Some("FOIAcquire/0.7 (archive-research; +https://github.com/monokrome/foiacquire)"),
-            &self.privacy,
         )
+        .user_agent("FOIAcquire/0.7 (archive-research; +https://github.com/monokrome/foiacquire)")
+        .privacy(&self.privacy)
+        .build()
         .map_err(|e| ArchiveError::Parse(format!("Failed to create HTTP client: {}", e)))?;
 
         let body = client.get_text(&query_url).await.map_err(|e| {
-            // Check if it's a rate limit or server error based on error message
             let err_str = e.to_string();
             if err_str.contains("429") {
                 ArchiveError::RateLimited
@@ -168,63 +116,13 @@ impl WaybackSource {
             }
         })?;
 
-        // CDX with output=json returns array of arrays
-        // First row is headers, rest are data
-        let rows: Vec<Vec<String>> = serde_json::from_str(&body).map_err(|e| {
-            // Might be empty response (no snapshots)
-            if body.trim().is_empty() {
-                return ArchiveError::NotFound;
-            }
-            ArchiveError::Parse(format!("Failed to parse CDX JSON: {}", e))
+        let rows = cdx::parse_cdx_response(&body).map_err(|e| match e {
+            cdx::CdxParseError::Empty => ArchiveError::NotFound,
+            cdx::CdxParseError::Json(msg) => ArchiveError::Parse(msg),
         })?;
 
-        // Skip header row
-        let snapshots: Vec<SnapshotInfo> = rows
-            .into_iter()
-            .skip(1)
-            .filter_map(|row| self.parse_cdx_row(&row))
-            .collect();
-
+        let snapshots = rows.iter().filter_map(Self::row_to_snapshot).collect();
         Ok(snapshots)
-    }
-
-    /// Parse a CDX JSON row into SnapshotInfo.
-    fn parse_cdx_row(&self, row: &[String]) -> Option<SnapshotInfo> {
-        if row.len() < 7 {
-            return None;
-        }
-
-        let timestamp = &row[1];
-        let original_url = &row[2];
-        let mimetype = &row[3];
-        let status_code = &row[4];
-        let digest = &row[5];
-        let length = &row[6];
-
-        let captured_at = Self::parse_timestamp(timestamp)?;
-
-        Some(SnapshotInfo {
-            service: ArchiveService::Wayback,
-            original_url: original_url.clone(),
-            archive_url: self.build_raw_archive_url(timestamp, original_url),
-            captured_at,
-            http_status: status_code.parse().ok(),
-            mimetype: if mimetype == "-" {
-                None
-            } else {
-                Some(mimetype.clone())
-            },
-            content_length: if length == "-" {
-                None
-            } else {
-                length.parse().ok()
-            },
-            digest: if digest == "-" {
-                None
-            } else {
-                Some(digest.clone())
-            },
-        })
     }
 }
 
@@ -251,84 +149,34 @@ impl ArchiveSource for WaybackSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Datelike, Timelike};
 
     #[test]
-    fn test_parse_timestamp() {
-        let ts = "20231215143022";
-        let dt = WaybackSource::parse_timestamp(ts).unwrap();
-        assert_eq!(dt.year(), 2023);
-        assert_eq!(dt.month(), 12);
-        assert_eq!(dt.day(), 15);
-        assert_eq!(dt.hour(), 14);
-        assert_eq!(dt.minute(), 30);
-        assert_eq!(dt.second(), 22);
-    }
+    fn row_to_snapshot_basic() {
+        let json = r#"[
+            ["urlkey","timestamp","original","mimetype","statuscode","digest","length"],
+            ["com,example)/doc.pdf","20231215143022","https://example.com/doc.pdf","application/pdf","200","ABCD1234EFGH5678","12345"]
+        ]"#;
+        let rows = cdx::parse_cdx_response(json).unwrap();
+        let snapshot = WaybackSource::row_to_snapshot(&rows[0]).unwrap();
 
-    #[test]
-    fn test_format_timestamp() {
-        use chrono::TimeZone;
-        let dt = Utc.with_ymd_and_hms(2023, 12, 15, 14, 30, 22).unwrap();
-        let ts = WaybackSource::format_timestamp(dt);
-        assert_eq!(ts, "20231215143022");
-    }
-
-    #[test]
-    fn test_build_archive_url() {
-        let source = WaybackSource::new();
-        let url = source.build_archive_url("20231215143022", "https://example.com/doc.pdf");
-        assert_eq!(
-            url,
-            "https://web.archive.org/web/20231215143022/https://example.com/doc.pdf"
-        );
-    }
-
-    #[test]
-    fn test_build_raw_archive_url() {
-        let source = WaybackSource::new();
-        let url = source.build_raw_archive_url("20231215143022", "https://example.com/doc.pdf");
-        assert_eq!(
-            url,
-            "https://web.archive.org/web/20231215143022id_/https://example.com/doc.pdf"
-        );
-    }
-
-    #[test]
-    fn test_parse_cdx_row() {
-        let source = WaybackSource::new();
-        let row = vec![
-            "com,example)/doc.pdf".to_string(),
-            "20231215143022".to_string(),
-            "https://example.com/doc.pdf".to_string(),
-            "application/pdf".to_string(),
-            "200".to_string(),
-            "ABCD1234EFGH5678".to_string(),
-            "12345".to_string(),
-        ];
-
-        let snapshot = source.parse_cdx_row(&row).unwrap();
         assert_eq!(snapshot.service, ArchiveService::Wayback);
         assert_eq!(snapshot.original_url, "https://example.com/doc.pdf");
         assert_eq!(snapshot.http_status, Some(200));
         assert_eq!(snapshot.mimetype, Some("application/pdf".to_string()));
         assert_eq!(snapshot.content_length, Some(12345));
         assert_eq!(snapshot.digest, Some("ABCD1234EFGH5678".to_string()));
+        assert!(snapshot.archive_url.contains("20231215143022id_/"));
     }
 
     #[test]
-    fn test_parse_cdx_row_with_dashes() {
-        let source = WaybackSource::new();
-        let row = vec![
-            "com,example)/doc.pdf".to_string(),
-            "20231215143022".to_string(),
-            "https://example.com/doc.pdf".to_string(),
-            "-".to_string(),
-            "200".to_string(),
-            "-".to_string(),
-            "-".to_string(),
-        ];
+    fn row_to_snapshot_with_dashes() {
+        let json = r#"[
+            ["urlkey","timestamp","original","mimetype","statuscode","digest","length"],
+            ["com,example)/doc.pdf","20231215143022","https://example.com/doc.pdf","-","200","-","-"]
+        ]"#;
+        let rows = cdx::parse_cdx_response(json).unwrap();
+        let snapshot = WaybackSource::row_to_snapshot(&rows[0]).unwrap();
 
-        let snapshot = source.parse_cdx_row(&row).unwrap();
         assert_eq!(snapshot.mimetype, None);
         assert_eq!(snapshot.content_length, None);
         assert_eq!(snapshot.digest, None);

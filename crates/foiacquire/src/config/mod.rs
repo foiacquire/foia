@@ -1,6 +1,7 @@
 //! Configuration management for FOIAcquire using the prefer crate.
 
 mod analysis;
+pub mod browser;
 pub mod discovery;
 mod loader;
 pub mod scraper;
@@ -19,6 +20,7 @@ use crate::privacy::PrivacyConfig;
 use crate::repository::util::validate_database_url;
 
 pub use analysis::{AnalysisConfig, AnalysisMethodConfig, OcrConfig};
+pub use browser::{BrowserEngineConfig, BrowserEngineType, SelectionStrategyType};
 pub use loader::{load_settings_with_options, LoadOptions};
 pub use scraper::{ScraperConfig, ViaMode};
 pub use settings::Settings;
@@ -95,11 +97,11 @@ fn is_via_mode_default(mode: &ViaMode) -> bool {
     *mode == ViaMode::default()
 }
 
-/// App-level configuration snapshot for database storage.
-/// Contains only settings that should be synced across devices.
-/// Excludes device-specific (data_dir, privacy) and bootstrap (rate_limit_backend, broker_url) settings.
+/// Source interaction settings synced to database.
+/// Describes how to reach and interact with sources (HTTP behavior, scraper configs, proxy routing).
+/// Excludes device-specific (data_dir, privacy, analysis, llm) and bootstrap (rate_limit_backend, broker_url) settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, prefer::FromValue)]
-pub struct AppConfigSnapshot {
+pub struct SourcesConfig {
     /// User agent string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
@@ -116,14 +118,6 @@ pub struct AppConfigSnapshot {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[prefer(default)]
     pub scrapers: HashMap<String, ScraperConfig>,
-    /// LLM configuration (app portion only - device settings excluded via serde skip).
-    #[serde(default, skip_serializing_if = "LlmConfig::is_default")]
-    #[prefer(default)]
-    pub llm: LlmConfig,
-    /// Analysis configuration for text extraction methods.
-    #[serde(default, skip_serializing_if = "AnalysisConfig::is_default")]
-    #[prefer(default)]
-    pub analysis: AnalysisConfig,
     /// URL rewriting for caching proxies (CDN bypass).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[prefer(default)]
@@ -322,7 +316,7 @@ impl Config {
 
     /// Serialize config to JSON with paths converted to relative.
     /// Any paths pointing to `base_dir` are converted to relative paths.
-    /// Note: This serializes the full config (for config files). For DB storage, use `to_app_snapshot()`.
+    /// Note: This serializes the full config (for config files). For DB storage, use `to_sources_config()`.
     #[allow(dead_code)]
     pub fn to_json_relative(&self, base_dir: &Path) -> String {
         let mut config = self.clone();
@@ -361,33 +355,29 @@ impl Config {
         serde_json::to_string_pretty(&config).unwrap_or_default()
     }
 
-    /// Extract app-level settings for database storage.
+    /// Extract source interaction settings for database storage.
     /// Excludes device-specific and bootstrap settings that shouldn't be synced.
-    pub fn to_app_snapshot(&self) -> AppConfigSnapshot {
-        AppConfigSnapshot {
+    pub fn to_sources_config(&self) -> SourcesConfig {
+        SourcesConfig {
             user_agent: self.user_agent.clone(),
             request_timeout: self.request_timeout,
             request_delay_ms: self.request_delay_ms,
             default_refresh_ttl_days: self.default_refresh_ttl_days,
             scrapers: self.scrapers.clone(),
-            llm: self.llm.clone(),
-            analysis: self.analysis.clone(),
             via: self.via.clone(),
             via_mode: self.via_mode,
         }
     }
 
-    /// Apply app-level settings from a snapshot (loaded from DB).
-    pub fn apply_app_snapshot(&mut self, snapshot: AppConfigSnapshot) {
-        self.user_agent = snapshot.user_agent;
-        self.request_timeout = snapshot.request_timeout;
-        self.request_delay_ms = snapshot.request_delay_ms;
-        self.default_refresh_ttl_days = snapshot.default_refresh_ttl_days;
-        self.scrapers = snapshot.scrapers;
-        self.llm = snapshot.llm;
-        self.analysis = snapshot.analysis;
-        self.via = snapshot.via;
-        self.via_mode = snapshot.via_mode;
+    /// Apply source interaction settings from database.
+    pub fn apply_sources_config(&mut self, sources: SourcesConfig) {
+        self.user_agent = sources.user_agent;
+        self.request_timeout = sources.request_timeout;
+        self.request_delay_ms = sources.request_delay_ms;
+        self.default_refresh_ttl_days = sources.default_refresh_ttl_days;
+        self.scrapers = sources.scrapers;
+        self.via = sources.via;
+        self.via_mode = sources.via_mode;
     }
 
     /// Load configuration from database history.
@@ -402,7 +392,7 @@ impl Config {
         // Start with default config (gets device settings from env)
         let mut config = Config::default();
         // Apply app settings from DB
-        config.apply_app_snapshot(snapshot);
+        config.apply_sources_config(snapshot);
         Some(config)
     }
 }

@@ -22,14 +22,20 @@ pub trait Annotator: Send + Sync {
 
     /// Schema version of this annotator's output.
     /// Bumping the version causes documents to be re-annotated.
-    fn version(&self) -> i32;
+    fn version(&self) -> i32 {
+        1
+    }
 
     /// Whether the backend is ready to run.
     /// LLM checks service availability; date/URL always return true.
-    async fn is_available(&self) -> bool;
+    async fn is_available(&self) -> bool {
+        true
+    }
 
     /// Human-readable reason when `is_available` returns false.
-    fn availability_hint(&self) -> String;
+    fn availability_hint(&self) -> String {
+        String::new()
+    }
 
     /// Annotate a single document.
     async fn annotate(
@@ -48,5 +54,24 @@ pub trait Annotator: Send + Sync {
         _output: &AnnotationOutput,
     ) -> Result<(), AnnotationError> {
         Ok(())
+    }
+}
+
+/// Extract combined page text for a document, returning Err(Skipped) if
+/// no version or no text is available.
+pub async fn get_document_text(
+    doc: &Document,
+    doc_repo: &DieselDocumentRepository,
+) -> Result<String, AnnotationOutput> {
+    let version_id = match doc.current_version() {
+        Some(v) => v.id,
+        None => return Err(AnnotationOutput::Skipped),
+    };
+    match doc_repo
+        .get_combined_page_text(&doc.id, version_id as i32)
+        .await
+    {
+        Ok(Some(t)) if !t.is_empty() => Ok(t),
+        _ => Err(AnnotationOutput::Skipped),
     }
 }

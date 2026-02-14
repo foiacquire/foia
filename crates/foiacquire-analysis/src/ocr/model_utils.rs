@@ -21,6 +21,19 @@ pub fn check_binary(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Message shown when pdftoppm is not found.
+pub const PDFTOPPM_NOT_FOUND: &str =
+    "pdftoppm not found. Install poppler-utils for PDF page rendering";
+
+/// Check pdftoppm availability, returning a hint message if missing.
+pub fn check_pdftoppm_hint() -> Option<String> {
+    if check_binary("pdftoppm") {
+        None
+    } else {
+        Some(PDFTOPPM_NOT_FOUND.to_string())
+    }
+}
+
 /// Model file specification for downloading.
 pub struct ModelSpec {
     /// URL to download from.
@@ -76,7 +89,7 @@ impl ModelDirConfig {
 /// Respects SOCKS_PROXY environment variable for privacy routing.
 pub fn download_file(url: &str, dest: &Path) -> Result<(), OcrError> {
     // Check for SOCKS proxy configuration
-    let socks_proxy = std::env::var("SOCKS_PROXY").ok();
+    let socks_proxy = foiacquire::privacy::socks_proxy_from_env();
 
     let mut curl_cmd = Command::new("curl");
     curl_cmd.args(["-fSL", "--progress-bar", "-o"]);

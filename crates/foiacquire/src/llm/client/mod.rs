@@ -29,7 +29,7 @@ pub struct SummarizeResult {
 /// LLM client for document processing.
 pub struct LlmClient {
     config: LlmConfig,
-    privacy: PrivacyConfig,
+    privacy: Option<PrivacyConfig>,
 }
 
 // ============================================================================
@@ -95,20 +95,24 @@ struct OpenAIMessageResponse {
 impl LlmClient {
     /// Create a new LLM client with the given configuration.
     ///
-    /// Uses default privacy configuration (no Tor/proxy).
+    /// Privacy settings are picked up from environment variables (SOCKS_PROXY, etc.)
+    /// via the HttpClient defaults.
     pub fn new(config: LlmConfig) -> Self {
         Self {
             config,
-            privacy: PrivacyConfig::default(),
+            privacy: None,
         }
     }
 
-    /// Create a new LLM client with privacy configuration.
+    /// Create a new LLM client with explicit privacy configuration.
     ///
     /// External LLM services (OpenAI, Groq, etc.) will route through Tor/SOCKS if configured.
     /// Local Ollama instances are not affected by privacy settings.
     pub fn with_privacy(config: LlmConfig, privacy: PrivacyConfig) -> Self {
-        Self { config, privacy }
+        Self {
+            config,
+            privacy: Some(privacy),
+        }
     }
 
     /// Get the config.
@@ -118,14 +122,15 @@ impl LlmClient {
 
     /// Create an HTTP client for LLM requests.
     fn create_client(&self) -> Result<HttpClient, Box<dyn std::error::Error>> {
-        HttpClient::with_privacy(
+        let mut builder = HttpClient::builder(
             "llm",
             Duration::from_secs(300), // 5 min timeout for slow models
             Duration::from_millis(0), // No rate limiting for LLM
-            None,                     // Use default user agent
-            &self.privacy,
-        )
-        .map_err(|e| e.into())
+        );
+        if let Some(ref privacy) = self.privacy {
+            builder = builder.privacy(privacy);
+        }
+        builder.build().map_err(|e| e.into())
     }
 
     /// Check if the LLM service is available.
@@ -471,33 +476,19 @@ Focus on terms specifically relevant to {domain}. Return ONLY a comma-separated 
 }
 
 /// Errors that can occur during LLM operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    /// Failed to connect to LLM service
+    #[error("Connection error: {0}")]
     Connection(String),
-    /// API returned an error
+    #[error("API error: {0}")]
     Api(String),
-    /// Failed to parse response
+    #[error("Parse error: {0}")]
     Parse(String),
-    /// Model not available
+    #[error("Model not found: {0}")]
     ModelNotFound(String),
-    /// LLM is disabled
+    #[error("LLM is disabled")]
     Disabled,
 }
-
-impl std::fmt::Display for LlmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LlmError::Connection(msg) => write!(f, "Connection error: {}", msg),
-            LlmError::Api(msg) => write!(f, "API error: {}", msg),
-            LlmError::Parse(msg) => write!(f, "Parse error: {}", msg),
-            LlmError::ModelNotFound(msg) => write!(f, "Model not found: {}", msg),
-            LlmError::Disabled => write!(f, "LLM is disabled"),
-        }
-    }
-}
-
-impl std::error::Error for LlmError {}
 
 #[cfg(test)]
 mod tests {

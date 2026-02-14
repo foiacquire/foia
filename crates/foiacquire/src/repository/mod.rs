@@ -7,6 +7,7 @@
 pub mod context;
 pub mod models;
 pub mod pool;
+pub mod sea_tables;
 
 // Repositories
 pub mod source;
@@ -18,7 +19,6 @@ pub mod diesel_document;
 
 // Keep these until fully migrated
 pub mod diesel_context;
-pub mod diesel_models;
 pub mod diesel_service_status;
 pub mod diesel_source;
 
@@ -72,6 +72,44 @@ pub use models::{
 };
 
 use chrono::{DateTime, Utc};
+
+use self::diesel_context::DieselDbContext;
+
+/// Bundled repository access for all database operations.
+///
+/// Constructed via [`crate::config::Settings::repositories()`] to eliminate
+/// repetitive `create_db_context()` boilerplate in CLI commands.
+pub struct Repositories {
+    pub sources: DieselSourceRepository,
+    pub crawl: DieselCrawlRepository,
+    pub documents: DieselDocumentRepository,
+    pub config_history: DieselConfigHistoryRepository,
+    pub service_status: DieselServiceStatusRepository,
+    pool: DbPool,
+}
+
+impl Repositories {
+    pub fn new(ctx: DieselDbContext) -> Self {
+        Self {
+            sources: ctx.sources(),
+            crawl: ctx.crawl(),
+            documents: ctx.documents(),
+            config_history: ctx.config_history(),
+            service_status: ctx.service_status(),
+            pool: ctx.pool().clone(),
+        }
+    }
+
+    pub fn pool(&self) -> &DbPool {
+        &self.pool
+    }
+
+    pub async fn schema_version(&self) -> Result<Option<String>, DieselError> {
+        DieselDbContext::with_pool(self.pool.clone())
+            .get_schema_version()
+            .await
+    }
+}
 
 /// Parse a datetime string from the database, defaulting to Unix epoch on error.
 pub fn parse_datetime(s: &str) -> DateTime<Utc> {

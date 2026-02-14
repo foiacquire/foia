@@ -9,7 +9,15 @@
 #![allow(dead_code)]
 
 use std::path::Path;
+use std::time::{Duration, Instant};
+use tempfile::TempDir;
 use thiserror::Error;
+
+use foiacquire::http_client::HttpClient;
+use foiacquire::privacy::PrivacyConfig;
+
+use super::model_utils::build_ocr_result;
+use super::pdf_utils;
 
 /// Errors from OCR backends.
 #[derive(Debug, Error)]
@@ -110,15 +118,42 @@ pub trait OcrBackend: Send + Sync {
     /// Get a description of what's needed to make this backend available.
     fn availability_hint(&self) -> String;
 
-    /// Run OCR on an image file.
-    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError>;
+    /// Core OCR: extract text from an image file.
+    fn run_ocr(&self, image_path: &Path) -> Result<String, OcrError>;
+
+    /// Model name for this backend, if applicable.
+    fn model_name(&self) -> Option<String> {
+        None
+    }
+
+    /// Run OCR on an image file, returning a timed result.
+    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
+        let start = Instant::now();
+        let text = self.run_ocr(image_path)?;
+        Ok(build_ocr_result(
+            text,
+            self.backend_type(),
+            self.model_name(),
+            start,
+        ))
+    }
 
     /// Run OCR on a specific page of a PDF file.
-    /// Default implementation converts page to image first.
-    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError>;
+    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError> {
+        let start = Instant::now();
+        let temp_dir = TempDir::new()?;
+        let image_path = pdf_utils::pdf_page_to_image(pdf_path, page, temp_dir.path())?;
+        let text = self.run_ocr(&image_path)?;
+        Ok(build_ocr_result(
+            text,
+            self.backend_type(),
+            self.model_name(),
+            start,
+        ))
+    }
 }
 
-/// Configuration for OCR backends.
+/// Configuration for OCR backends (language, GPU, model paths).
 #[derive(Debug, Clone)]
 pub struct OcrConfig {
     /// Language for OCR (e.g., "eng", "chi_sim").
@@ -139,6 +174,56 @@ impl Default for OcrConfig {
             use_gpu: false,
             gpu_device_id: 0,
         }
+    }
+}
+
+/// Shared base configuration embedded by all OCR backends.
+///
+/// Bundles the OCR-specific settings with privacy configuration
+/// so each backend doesn't need to define them independently.
+#[derive(Debug, Clone)]
+pub struct BackendConfig {
+    pub ocr: OcrConfig,
+    pub privacy: Option<PrivacyConfig>,
+}
+
+impl BackendConfig {
+    pub fn new() -> Self {
+        Self {
+            ocr: OcrConfig::default(),
+            privacy: None,
+        }
+    }
+
+    pub fn with_config(config: OcrConfig) -> Self {
+        Self {
+            ocr: config,
+            privacy: None,
+        }
+    }
+
+    pub fn with_privacy(mut self, privacy: PrivacyConfig) -> Self {
+        self.privacy = Some(privacy);
+        self
+    }
+
+    /// Create an HTTP client, applying privacy settings if configured.
+    /// When privacy is None, HttpClient picks up env overrides (SOCKS_PROXY, etc.).
+    pub fn create_http_client(&self, service_name: &str) -> Result<HttpClient, OcrError> {
+        let mut builder =
+            HttpClient::builder(service_name, Duration::from_secs(120), Duration::from_millis(0));
+        if let Some(ref privacy) = self.privacy {
+            builder = builder.privacy(privacy);
+        }
+        builder
+            .build()
+            .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
+    }
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

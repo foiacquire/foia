@@ -6,7 +6,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use foiacquire::config::Settings;
 use foiacquire::repository::diesel_document::entities::EntityFilter;
 use foiacquire::repository::diesel_document::DocIdRow;
-use foiacquire::repository::diesel_models::NewDocumentEntity;
+use foiacquire::repository::models::NewDocumentEntity;
 #[cfg(feature = "gis")]
 use foiacquire::services::geolookup;
 use foiacquire_annotate::services::ner::{EntityType, NerResult};
@@ -20,8 +20,8 @@ pub async fn cmd_backfill_entities(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     let source_filter = if source_id.is_some() {
         "AND d.source_id = $1"
@@ -205,8 +205,8 @@ pub async fn cmd_search_entities(
     source_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Parse --near flag: "lat,lon,radius_km"
     if let Some(near_str) = near {

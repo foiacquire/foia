@@ -242,11 +242,11 @@ struct SourceStats {
 
 /// Fetch all status data from the database.
 async fn fetch_status_data(settings: &Settings) -> anyhow::Result<StatusData> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
-    let source_repo = ctx.sources();
-    let crawl_repo = ctx.crawl();
-    let service_repo = ctx.service_status();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
+    let source_repo = repos.sources;
+    let crawl_repo = repos.crawl;
+    let service_repo = repos.service_status;
 
     let sources_list = source_repo.get_all().await?;
     let total_docs = doc_repo.count().await?;

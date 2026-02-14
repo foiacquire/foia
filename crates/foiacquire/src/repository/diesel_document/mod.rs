@@ -23,12 +23,12 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::{DocumentRecord, DocumentVersionRecord, VirtualFileRecord};
+use super::models::{DocumentRecord, DocumentVersionRecord, VirtualFileRecord};
 use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Document, DocumentStatus, DocumentVersion, VirtualFile, VirtualFileStatus};
 use crate::schema::{document_versions, documents, virtual_files};
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
 
 /// OCR result for a page.
 #[derive(Debug, Clone)]
@@ -153,7 +153,9 @@ impl DieselDocumentRepository {
     /// This also computes and sets the category_id based on the document's
     /// current version's MIME type.
     pub async fn save(&self, doc: &Document) -> Result<(), DieselError> {
-        use crate::utils::mime_type_category;
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::Documents;
+        use sea_query::{OnConflict, Query};
 
         let metadata = serde_json::to_string(&doc.metadata)
             .map_err(|e| diesel::result::Error::SerializationError(Box::new(e)))?;
@@ -161,59 +163,83 @@ impl DieselDocumentRepository {
         let updated_at = doc.updated_at.to_rfc3339();
         let status = doc.status.as_str().to_string();
 
-        // Compute category from current version's MIME type
         let category_id: Option<String> = doc
             .current_version()
-            .map(|v| mime_type_category(&v.mime_type).id().to_string());
+            .map(|v| crate::utils::mime_type_category(&v.mime_type).id().to_string());
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(documents::table)
-                    .values((
-                        documents::id.eq(&doc.id),
-                        documents::source_id.eq(&doc.source_id),
-                        documents::source_url.eq(&doc.source_url),
-                        documents::title.eq(&doc.title),
-                        documents::status.eq(&status),
-                        documents::metadata.eq(&metadata),
-                        documents::created_at.eq(&created_at),
-                        documents::updated_at.eq(&updated_at),
-                        documents::category_id.eq(&category_id),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            },
-            postgres: conn => {
-                use diesel::upsert::excluded;
-                diesel::insert_into(documents::table)
-                    .values((
-                        documents::id.eq(&doc.id),
-                        documents::source_id.eq(&doc.source_id),
-                        documents::source_url.eq(&doc.source_url),
-                        documents::title.eq(&doc.title),
-                        documents::status.eq(&status),
-                        documents::metadata.eq(&metadata),
-                        documents::created_at.eq(&created_at),
-                        documents::updated_at.eq(&updated_at),
-                        documents::category_id.eq(&category_id),
-                    ))
-                    .on_conflict(documents::id)
-                    .do_update()
-                    .set((
-                        documents::source_id.eq(excluded(documents::source_id)),
-                        documents::source_url.eq(excluded(documents::source_url)),
-                        documents::title.eq(excluded(documents::title)),
-                        documents::status.eq(excluded(documents::status)),
-                        documents::metadata.eq(excluded(documents::metadata)),
-                        documents::updated_at.eq(excluded(documents::updated_at)),
-                        documents::category_id.eq(excluded(documents::category_id)),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
+        let stmt = Query::insert()
+            .into_table(Documents::Table)
+            .columns([
+                Documents::Id,
+                Documents::SourceId,
+                Documents::SourceUrl,
+                Documents::Title,
+                Documents::Status,
+                Documents::Metadata,
+                Documents::CreatedAt,
+                Documents::UpdatedAt,
+                Documents::CategoryId,
+            ])
+            .values_panic([
+                doc.id.clone().into(),
+                doc.source_id.clone().into(),
+                doc.source_url.clone().into(),
+                doc.title.clone().into(),
+                status.clone().into(),
+                metadata.clone().into(),
+                created_at.clone().into(),
+                updated_at.clone().into(),
+                category_id.clone().into(),
+            ])
+            .on_conflict(
+                OnConflict::column(Documents::Id)
+                    .update_columns([
+                        Documents::SourceId,
+                        Documents::SourceUrl,
+                        Documents::Title,
+                        Documents::Status,
+                        Documents::Metadata,
+                        Documents::UpdatedAt,
+                        Documents::CategoryId,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(&doc.id)
+                .bind::<diesel::sql_types::Text, _>(&doc.source_id)
+                .bind::<diesel::sql_types::Text, _>(&doc.source_url)
+                .bind::<diesel::sql_types::Text, _>(&doc.title)
+                .bind::<diesel::sql_types::Text, _>(&status)
+                .bind::<diesel::sql_types::Text, _>(&metadata)
+                .bind::<diesel::sql_types::Text, _>(&created_at)
+                .bind::<diesel::sql_types::Text, _>(&updated_at)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&category_id)
+                .execute(&mut conn)
+                .await?;
+            Ok(())
+        })
+    }
+
+    /// Save a document and persist any new versions (id == 0).
+    ///
+    /// Use this instead of `save()` when creating a new document or adding
+    /// versions, so the version rows are actually written to document_versions.
+    /// Use `save()` alone when only updating document metadata/status.
+    pub async fn save_with_versions(&self, doc: &Document) -> Result<(), DieselError> {
+        self.save(doc).await?;
+
+        for version in &doc.versions {
+            if version.id == 0 {
+                self.add_version(&doc.id, version).await?;
             }
-        )
+        }
+
+        Ok(())
     }
 
     /// Delete a document.
@@ -283,9 +309,16 @@ impl DieselDocumentRepository {
     }
 
     /// Get all document URLs as a HashSet.
+    ///
+    /// Only includes documents that have at least one version row, since
+    /// documents without versions are incomplete imports that should be retried.
     pub async fn get_all_urls_set(&self) -> Result<std::collections::HashSet<String>, DieselError> {
         with_conn!(self.pool, conn, {
             let urls: Vec<String> = documents::table
+                .filter(diesel::dsl::exists(
+                    document_versions::table
+                        .filter(document_versions::document_id.eq(documents::id)),
+                ))
                 .select(documents::source_url)
                 .load(&mut conn)
                 .await?;
@@ -716,9 +749,9 @@ pub struct BrowseRow {
 }
 
 #[derive(diesel::QueryableByName)]
-pub(crate) struct LastInsertRowId {
-    #[diesel(sql_type = diesel::sql_types::BigInt, column_name = "last_insert_rowid()")]
-    pub id: i64,
+pub(crate) struct ReturningId {
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub id: i32,
 }
 
 #[cfg(test)]

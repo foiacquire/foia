@@ -6,12 +6,31 @@ use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::{DieselDocumentRepository, LastInsertRowId, OcrResult};
+use super::{DieselDocumentRepository, OcrResult, ReturningId};
 use crate::models::{DocumentPage, PageOcrStatus};
-use crate::repository::diesel_models::{DocumentPageRecord, NewPageOcrResult, PageOcrResultRecord};
+use crate::repository::models::{DocumentPageRecord, PageOcrResultRecord};
+use crate::repository::parse_datetime;
 use crate::repository::pool::DieselError;
 use crate::schema::{document_pages, page_ocr_results};
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
+
+impl From<DocumentPageRecord> for DocumentPage {
+    fn from(r: DocumentPageRecord) -> Self {
+        Self {
+            id: r.id as i64,
+            document_id: r.document_id,
+            version_id: r.version_id as i64,
+            page_number: r.page_number as u32,
+            pdf_text: r.pdf_text,
+            ocr_text: r.ocr_text,
+            final_text: r.final_text,
+            ocr_status: PageOcrStatus::from_str(&r.ocr_status)
+                .unwrap_or(PageOcrStatus::Pending),
+            created_at: parse_datetime(&r.created_at),
+            updated_at: parse_datetime(&r.updated_at),
+        }
+    }
+}
 
 impl DieselDocumentRepository {
     /// Count pages for a document.
@@ -30,62 +49,74 @@ impl DieselDocumentRepository {
 
     /// Save a document page. Returns the page ID.
     pub async fn save_page(&self, page: &DocumentPage) -> Result<i64, DieselError> {
-        let now = Utc::now().to_rfc3339();
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentPages;
+        use sea_query::{OnConflict, Query};
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(document_pages::table)
-                    .values((
-                        document_pages::document_id.eq(&page.document_id),
-                        document_pages::version_id.eq(page.version_id as i32),
-                        document_pages::page_number.eq(page.page_number as i32),
-                        document_pages::pdf_text.eq(&page.pdf_text),
-                        document_pages::ocr_text.eq(&page.ocr_text),
-                        document_pages::final_text.eq(&page.final_text),
-                        document_pages::ocr_status.eq(page.ocr_status.as_str()),
-                        document_pages::created_at.eq(&now),
-                        document_pages::updated_at.eq(&now),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                let result: LastInsertRowId = diesel::sql_query("SELECT last_insert_rowid()")
-                    .get_result(&mut conn)
-                    .await?;
-                Ok(result.id)
-            },
-            postgres: conn => {
-                use diesel::upsert::excluded;
-                let result: i32 = diesel::insert_into(document_pages::table)
-                    .values((
-                        document_pages::document_id.eq(&page.document_id),
-                        document_pages::version_id.eq(page.version_id as i32),
-                        document_pages::page_number.eq(page.page_number as i32),
-                        document_pages::pdf_text.eq(&page.pdf_text),
-                        document_pages::ocr_text.eq(&page.ocr_text),
-                        document_pages::final_text.eq(&page.final_text),
-                        document_pages::ocr_status.eq(page.ocr_status.as_str()),
-                        document_pages::created_at.eq(&now),
-                        document_pages::updated_at.eq(&now),
-                    ))
-                    .on_conflict((
-                        document_pages::document_id,
-                        document_pages::version_id,
-                        document_pages::page_number,
-                    ))
-                    .do_update()
-                    .set((
-                        document_pages::pdf_text.eq(excluded(document_pages::pdf_text)),
-                        document_pages::ocr_text.eq(excluded(document_pages::ocr_text)),
-                        document_pages::final_text.eq(excluded(document_pages::final_text)),
-                        document_pages::ocr_status.eq(excluded(document_pages::ocr_status)),
-                        document_pages::updated_at.eq(excluded(document_pages::updated_at)),
-                    ))
-                    .returning(document_pages::id)
-                    .get_result(&mut conn)
-                    .await?;
-                Ok(result as i64)
-            }
-        )
+        let now = Utc::now().to_rfc3339();
+        let version_id = page.version_id as i32;
+        let page_number = page.page_number as i32;
+        let ocr_status = page.ocr_status.as_str().to_string();
+
+        let stmt = Query::insert()
+            .into_table(DocumentPages::Table)
+            .columns([
+                DocumentPages::DocumentId,
+                DocumentPages::VersionId,
+                DocumentPages::PageNumber,
+                DocumentPages::PdfText,
+                DocumentPages::OcrText,
+                DocumentPages::FinalText,
+                DocumentPages::OcrStatus,
+                DocumentPages::CreatedAt,
+                DocumentPages::UpdatedAt,
+            ])
+            .values_panic([
+                page.document_id.clone().into(),
+                version_id.into(),
+                page_number.into(),
+                page.pdf_text.clone().into(),
+                page.ocr_text.clone().into(),
+                page.final_text.clone().into(),
+                ocr_status.clone().into(),
+                now.clone().into(),
+                now.clone().into(),
+            ])
+            .on_conflict(
+                OnConflict::columns([
+                    DocumentPages::DocumentId,
+                    DocumentPages::VersionId,
+                    DocumentPages::PageNumber,
+                ])
+                .update_columns([
+                    DocumentPages::PdfText,
+                    DocumentPages::OcrText,
+                    DocumentPages::FinalText,
+                    DocumentPages::OcrStatus,
+                    DocumentPages::UpdatedAt,
+                ])
+                .to_owned(),
+            )
+            .returning_col(DocumentPages::Id)
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            let result: ReturningId = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(&page.document_id)
+                .bind::<diesel::sql_types::Integer, _>(version_id)
+                .bind::<diesel::sql_types::Integer, _>(page_number)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.pdf_text)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.ocr_text)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.final_text)
+                .bind::<diesel::sql_types::Text, _>(&ocr_status)
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .get_result(&mut conn)
+                .await?;
+            Ok(result.id as i64)
+        })
     }
 
     /// Get document pages.
@@ -103,22 +134,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Get pages needing OCR.
@@ -144,22 +160,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Store OCR result for a page from a specific backend.
@@ -175,91 +176,91 @@ impl DieselDocumentRepository {
         processing_time_ms: Option<i32>,
         image_hash: Option<&str>,
     ) -> Result<(), DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::PageOcrResults;
+        use sea_query::{Expr, OnConflict, Query};
+
         let now = Utc::now().to_rfc3339();
         let char_count = text.map(|t| t.chars().count() as i32);
         let word_count = text.map(|t| t.split_whitespace().count() as i32);
+        let page_id_i32 = page_id as i32;
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                let new_result = NewPageOcrResult {
-                    page_id: page_id as i32,
-                    backend,
-                    text,
-                    confidence,
-                    quality_score: None,
-                    char_count,
-                    word_count,
-                    processing_time_ms,
-                    error_message: None,
-                    created_at: &now,
-                    model,
-                    image_hash,
-                };
-                diesel::insert_into(page_ocr_results::table)
-                    .values(&new_result)
-                    .on_conflict((page_ocr_results::page_id, page_ocr_results::backend))
-                    .do_update()
-                    .set((
-                        page_ocr_results::text.eq(text),
-                        page_ocr_results::confidence.eq(confidence),
-                        page_ocr_results::char_count.eq(char_count),
-                        page_ocr_results::word_count.eq(word_count),
-                        page_ocr_results::processing_time_ms.eq(processing_time_ms),
-                        page_ocr_results::created_at.eq(&now),
-                        page_ocr_results::image_hash.eq(image_hash),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
+        let stmt = Query::insert()
+            .into_table(PageOcrResults::Table)
+            .columns([
+                PageOcrResults::PageId,
+                PageOcrResults::Backend,
+                PageOcrResults::Text,
+                PageOcrResults::Confidence,
+                PageOcrResults::QualityScore,
+                PageOcrResults::CharCount,
+                PageOcrResults::WordCount,
+                PageOcrResults::ProcessingTimeMs,
+                PageOcrResults::ErrorMessage,
+                PageOcrResults::CreatedAt,
+                PageOcrResults::Model,
+                PageOcrResults::ImageHash,
+            ])
+            .values_panic([
+                page_id_i32.into(),
+                backend.to_string().into(),
+                text.map(|s| s.to_string()).into(),
+                confidence.into(),
+                Option::<i32>::None.into(),
+                char_count.into(),
+                word_count.into(),
+                processing_time_ms.into(),
+                Option::<String>::None.into(),
+                now.clone().into(),
+                model.map(|s| s.to_string()).into(),
+                image_hash.map(|s| s.to_string()).into(),
+            ])
+            .on_conflict(
+                OnConflict::new()
+                    .expr(Expr::col(PageOcrResults::PageId))
+                    .expr(Expr::col(PageOcrResults::Backend))
+                    .expr(Expr::cust("COALESCE(\"model\", '')"))
+                    .update_columns([
+                        PageOcrResults::Text,
+                        PageOcrResults::Confidence,
+                        PageOcrResults::CharCount,
+                        PageOcrResults::WordCount,
+                        PageOcrResults::ProcessingTimeMs,
+                        PageOcrResults::CreatedAt,
+                        PageOcrResults::ImageHash,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
 
-                diesel::update(document_pages::table.find(page_id as i32))
-                    .set((
-                        document_pages::ocr_text.eq(text),
-                        document_pages::ocr_status.eq("ocr_complete"),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            },
-            postgres: conn => {
-                // Raw SQL for upsert: unique index uses COALESCE(model, '')
-                // which Diesel's on_conflict API can't express
-                diesel::sql_query(
-                    "INSERT INTO page_ocr_results
-                     (page_id, backend, text, confidence, quality_score, char_count, word_count,
-                      processing_time_ms, error_message, created_at, model, image_hash)
-                     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, NULL, $8, $9, $10)
-                     ON CONFLICT (page_id, backend, COALESCE(model, ''))
-                     DO UPDATE SET text = EXCLUDED.text,
-                                   confidence = EXCLUDED.confidence,
-                                   char_count = EXCLUDED.char_count,
-                                   word_count = EXCLUDED.word_count,
-                                   processing_time_ms = EXCLUDED.processing_time_ms,
-                                   created_at = EXCLUDED.created_at,
-                                   image_hash = EXCLUDED.image_hash"
-                )
-                .bind::<diesel::sql_types::Integer, _>(page_id as i32)
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Integer, _>(page_id_i32)
                 .bind::<diesel::sql_types::Text, _>(backend)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(text)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Float>, _>(confidence)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(char_count)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(word_count)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(processing_time_ms)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(None::<&str>)
                 .bind::<diesel::sql_types::Text, _>(&now)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(image_hash)
                 .execute(&mut conn)
                 .await?;
 
-                diesel::update(document_pages::table.find(page_id as i32))
-                    .set((
-                        document_pages::ocr_text.eq(text),
-                        document_pages::ocr_status.eq("ocr_complete"),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            }
-        )
+            diesel::update(document_pages::table.find(page_id_i32))
+                .set((
+                    document_pages::ocr_text.eq(text),
+                    document_pages::ocr_status.eq("ocr_complete"),
+                ))
+                .execute(&mut conn)
+                .await?;
+            Ok(())
+        })
     }
 
     /// Store OCR error for a page from a specific backend.
@@ -271,58 +272,77 @@ impl DieselDocumentRepository {
         model: Option<&str>,
         error_message: &str,
     ) -> Result<(), DieselError> {
-        let now = Utc::now().to_rfc3339();
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::PageOcrResults;
+        use sea_query::{Expr, OnConflict, Query};
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                let new_result = NewPageOcrResult {
-                    page_id: page_id as i32,
-                    backend,
-                    text: None,
-                    confidence: None,
-                    quality_score: None,
-                    char_count: None,
-                    word_count: None,
-                    processing_time_ms: None,
-                    error_message: Some(error_message),
-                    created_at: &now,
-                    model,
-                    image_hash: None,
-                };
-                diesel::insert_into(page_ocr_results::table)
-                    .values(&new_result)
-                    .on_conflict((page_ocr_results::page_id, page_ocr_results::backend))
-                    .do_update()
-                    .set((
-                        page_ocr_results::text.eq::<Option<&str>>(None),
-                        page_ocr_results::error_message.eq(Some(error_message)),
-                        page_ocr_results::created_at.eq(&now),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            },
-            postgres: conn => {
-                diesel::sql_query(
-                    "INSERT INTO page_ocr_results
-                     (page_id, backend, text, confidence, quality_score, char_count, word_count,
-                      processing_time_ms, error_message, created_at, model, image_hash)
-                     VALUES ($1, $2, NULL, NULL, NULL, NULL, NULL, NULL, $3, $4, $5, NULL)
-                     ON CONFLICT (page_id, backend, COALESCE(model, ''))
-                     DO UPDATE SET text = NULL,
-                                   error_message = EXCLUDED.error_message,
-                                   created_at = EXCLUDED.created_at"
-                )
-                .bind::<diesel::sql_types::Integer, _>(page_id as i32)
+        let now = Utc::now().to_rfc3339();
+        let page_id_i32 = page_id as i32;
+
+        let stmt = Query::insert()
+            .into_table(PageOcrResults::Table)
+            .columns([
+                PageOcrResults::PageId,
+                PageOcrResults::Backend,
+                PageOcrResults::Text,
+                PageOcrResults::Confidence,
+                PageOcrResults::QualityScore,
+                PageOcrResults::CharCount,
+                PageOcrResults::WordCount,
+                PageOcrResults::ProcessingTimeMs,
+                PageOcrResults::ErrorMessage,
+                PageOcrResults::CreatedAt,
+                PageOcrResults::Model,
+                PageOcrResults::ImageHash,
+            ])
+            .values_panic([
+                page_id_i32.into(),
+                backend.to_string().into(),
+                Option::<String>::None.into(),
+                Option::<f32>::None.into(),
+                Option::<i32>::None.into(),
+                Option::<i32>::None.into(),
+                Option::<i32>::None.into(),
+                Option::<i32>::None.into(),
+                error_message.to_string().into(),
+                now.clone().into(),
+                model.map(|s| s.to_string()).into(),
+                Option::<String>::None.into(),
+            ])
+            .on_conflict(
+                OnConflict::new()
+                    .expr(Expr::col(PageOcrResults::PageId))
+                    .expr(Expr::col(PageOcrResults::Backend))
+                    .expr(Expr::cust("COALESCE(\"model\", '')"))
+                    .update_columns([
+                        PageOcrResults::Text,
+                        PageOcrResults::ErrorMessage,
+                        PageOcrResults::CreatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Integer, _>(page_id_i32)
                 .bind::<diesel::sql_types::Text, _>(backend)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(None::<&str>)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Float>, _>(None::<f32>)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>)
                 .bind::<diesel::sql_types::Text, _>(error_message)
                 .bind::<diesel::sql_types::Text, _>(&now)
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(model)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(None::<&str>)
                 .execute(&mut conn)
                 .await?;
-                Ok(())
-            }
-        )
+            Ok(())
+        })
     }
 
     /// Get all OCR results for a page from different backends.
@@ -433,22 +453,7 @@ impl DieselDocumentRepository {
                 .await
         })?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| DocumentPage {
-                id: r.id as i64,
-                document_id: r.document_id,
-                version_id: r.version_id as i64,
-                page_number: r.page_number as u32,
-                pdf_text: r.pdf_text,
-                ocr_text: r.ocr_text,
-                final_text: None,
-                ocr_status: PageOcrStatus::from_str(&r.ocr_status)
-                    .unwrap_or(PageOcrStatus::Pending),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-            .collect())
+        Ok(records.into_iter().map(DocumentPage::from).collect())
     }
 
     /// Get combined page text for a document.

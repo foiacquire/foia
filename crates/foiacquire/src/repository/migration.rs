@@ -289,8 +289,8 @@ pub trait DatabaseImporter: Send + Sync {
 }
 
 /// Conversion from database record to portable format.
-impl From<super::diesel_models::SourceRecord> for PortableSource {
-    fn from(r: super::diesel_models::SourceRecord) -> Self {
+impl From<super::models::SourceRecord> for PortableSource {
+    fn from(r: super::models::SourceRecord) -> Self {
         PortableSource {
             id: r.id,
             source_type: r.source_type,
@@ -303,8 +303,8 @@ impl From<super::diesel_models::SourceRecord> for PortableSource {
     }
 }
 
-impl From<super::diesel_models::DocumentRecord> for PortableDocument {
-    fn from(r: super::diesel_models::DocumentRecord) -> Self {
+impl From<super::models::DocumentRecord> for PortableDocument {
+    fn from(r: super::models::DocumentRecord) -> Self {
         PortableDocument {
             id: r.id,
             source_id: r.source_id,
@@ -327,8 +327,8 @@ impl From<super::diesel_models::DocumentRecord> for PortableDocument {
     }
 }
 
-impl From<super::diesel_models::DocumentVersionRecord> for PortableDocumentVersion {
-    fn from(r: super::diesel_models::DocumentVersionRecord) -> Self {
+impl From<super::models::DocumentVersionRecord> for PortableDocumentVersion {
+    fn from(r: super::models::DocumentVersionRecord) -> Self {
         PortableDocumentVersion {
             id: r.id,
             document_id: r.document_id,
@@ -346,8 +346,8 @@ impl From<super::diesel_models::DocumentVersionRecord> for PortableDocumentVersi
     }
 }
 
-impl From<super::diesel_models::DocumentPageRecord> for PortableDocumentPage {
-    fn from(r: super::diesel_models::DocumentPageRecord) -> Self {
+impl From<super::models::DocumentPageRecord> for PortableDocumentPage {
+    fn from(r: super::models::DocumentPageRecord) -> Self {
         PortableDocumentPage {
             id: r.id,
             document_id: r.document_id,
@@ -363,8 +363,8 @@ impl From<super::diesel_models::DocumentPageRecord> for PortableDocumentPage {
     }
 }
 
-impl From<super::diesel_models::VirtualFileRecord> for PortableVirtualFile {
-    fn from(r: super::diesel_models::VirtualFileRecord) -> Self {
+impl From<super::models::VirtualFileRecord> for PortableVirtualFile {
+    fn from(r: super::models::VirtualFileRecord) -> Self {
         PortableVirtualFile {
             id: r.id,
             document_id: r.document_id,
@@ -383,8 +383,8 @@ impl From<super::diesel_models::VirtualFileRecord> for PortableVirtualFile {
     }
 }
 
-impl From<super::diesel_models::CrawlUrlRecord> for PortableCrawlUrl {
-    fn from(r: super::diesel_models::CrawlUrlRecord) -> Self {
+impl From<super::models::CrawlUrlRecord> for PortableCrawlUrl {
+    fn from(r: super::models::CrawlUrlRecord) -> Self {
         PortableCrawlUrl {
             id: r.id,
             url: r.url,
@@ -407,8 +407,8 @@ impl From<super::diesel_models::CrawlUrlRecord> for PortableCrawlUrl {
     }
 }
 
-impl From<super::diesel_models::CrawlRequestRecord> for PortableCrawlRequest {
-    fn from(r: super::diesel_models::CrawlRequestRecord) -> Self {
+impl From<super::models::CrawlRequestRecord> for PortableCrawlRequest {
+    fn from(r: super::models::CrawlRequestRecord) -> Self {
         PortableCrawlRequest {
             id: r.id,
             source_id: r.source_id,
@@ -428,8 +428,8 @@ impl From<super::diesel_models::CrawlRequestRecord> for PortableCrawlRequest {
     }
 }
 
-impl From<super::diesel_models::CrawlConfigRecord> for PortableCrawlConfig {
-    fn from(r: super::diesel_models::CrawlConfigRecord) -> Self {
+impl From<super::models::CrawlConfigRecord> for PortableCrawlConfig {
+    fn from(r: super::models::CrawlConfigRecord) -> Self {
         PortableCrawlConfig {
             source_id: r.source_id,
             config_hash: r.config_hash,
@@ -438,8 +438,8 @@ impl From<super::diesel_models::CrawlConfigRecord> for PortableCrawlConfig {
     }
 }
 
-impl From<super::diesel_models::ConfigHistoryRecord> for PortableConfigHistory {
-    fn from(r: super::diesel_models::ConfigHistoryRecord) -> Self {
+impl From<super::models::ConfigHistoryRecord> for PortableConfigHistory {
+    fn from(r: super::models::ConfigHistoryRecord) -> Self {
         PortableConfigHistory {
             uuid: r.uuid,
             created_at: r.created_at,
@@ -450,8 +450,8 @@ impl From<super::diesel_models::ConfigHistoryRecord> for PortableConfigHistory {
     }
 }
 
-impl From<super::diesel_models::RateLimitStateRecord> for PortableRateLimitState {
-    fn from(r: super::diesel_models::RateLimitStateRecord) -> Self {
+impl From<super::models::RateLimitStateRecord> for PortableRateLimitState {
+    fn from(r: super::models::RateLimitStateRecord) -> Self {
         PortableRateLimitState {
             domain: r.domain,
             current_delay_ms: r.current_delay_ms,

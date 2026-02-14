@@ -13,7 +13,7 @@ use std::time::Duration;
 use super::config::{ScraperConfig, ViaMode};
 use super::HttpClient;
 #[cfg(feature = "browser")]
-use foiacquire::browser::BrowserEngineConfig;
+use foiacquire::config::BrowserEngineConfig;
 use foiacquire::models::Source;
 #[allow(unused_imports)]
 use foiacquire::privacy::PrivacyConfig;
@@ -102,48 +102,23 @@ impl ConfigurableScraper {
         // Apply per-source privacy overrides to global config
         let effective_privacy = privacy_config.map(|global| config.privacy.apply_to(global));
 
-        let client = match (rate_limiter, effective_privacy.as_ref()) {
-            (Some(limiter), Some(privacy)) => HttpClient::with_rate_limiter_and_privacy(
-                &source.id,
-                Duration::from_secs(30),
-                request_delay,
-                limiter,
-                config.user_agent.as_deref(),
-                privacy,
-            )?,
-            (Some(limiter), None) => HttpClient::with_rate_limiter_and_user_agent(
-                &source.id,
-                Duration::from_secs(30),
-                request_delay,
-                limiter,
-                config.user_agent.as_deref(),
-            )?,
-            (None, Some(privacy)) => HttpClient::with_privacy(
-                &source.id,
-                Duration::from_secs(30),
-                request_delay,
-                config.user_agent.as_deref(),
-                privacy,
-            )?,
-            (None, None) => HttpClient::with_user_agent(
-                &source.id,
-                Duration::from_secs(30),
-                request_delay,
-                config.user_agent.as_deref(),
-            )?,
-        };
-        let client = if let Some(repo) = crawl_repo.clone() {
-            client.with_crawl_repo(repo)
-        } else {
-            client
-        };
+        let mut builder = HttpClient::builder(&source.id, Duration::from_secs(30), request_delay);
+        if let Some(ua) = config.user_agent.as_deref() {
+            builder = builder.user_agent(ua);
+        }
+        if let Some(privacy) = effective_privacy.as_ref() {
+            builder = builder.privacy(privacy);
+        }
+        if let Some(limiter) = rate_limiter {
+            builder = builder.rate_limiter(limiter);
+        }
+        if let Some(repo) = crawl_repo.clone() {
+            builder = builder.crawl_repo(repo);
+        }
+        let client = builder.build()?;
 
         #[cfg(feature = "browser")]
-        let browser_config = config
-            .browser
-            .as_ref()
-            .filter(|b| b.enabled)
-            .map(|b| b.to_engine_config());
+        let browser_config = config.browser.as_ref().filter(|b| b.enabled).cloned();
 
         Ok(Self {
             source,

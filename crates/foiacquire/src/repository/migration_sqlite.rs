@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::*;
+use super::models::*;
 use super::migration::{
     DatabaseExporter, DatabaseImporter, PortableConfigHistory, PortableCrawlConfig,
     PortableCrawlRequest, PortableCrawlUrl, PortableDocument, PortableDocumentPage,

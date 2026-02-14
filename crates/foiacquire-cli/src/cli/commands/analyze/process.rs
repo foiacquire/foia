@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use foiacquire::config::{Config, Settings};
 use foiacquire_analysis::ocr::TextExtractor;
 
-use crate::cli::commands::scrape::ReloadMode;
+use crate::cli::commands::daemon::{ConfigWatcher, DaemonAction, ReloadMode};
 
 /// Analyze documents: detect MIME types, extract text, and run OCR.
 #[allow(clippy::too_many_arguments)]
@@ -79,19 +79,12 @@ pub async fn cmd_analyze(
         ));
     }
 
-    // Set up config watcher for stop-process and inplace modes
-    // Try file watching first, fall back to DB polling if no config file
-    let mut config_watcher =
-        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            prefer::watch("foiacquire").await.ok()
-        } else {
-            None
-        };
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
+    let config_history = repos.config_history;
 
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
-    let config_history = ctx.config_history();
-    let mut current_config_hash = config.hash();
+    let mut config_watcher =
+        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
 
     let service = AnalysisService::with_ocr_config(
         doc_repo,
@@ -383,67 +376,9 @@ pub async fn cmd_analyze(
             break;
         }
 
-        // Sleep with config watching for stop-process and inplace modes
-        println!(
-            "{} Sleeping for {}s before next check...",
-            style("→").dim(),
-            interval
-        );
-
-        if let Some(ref mut watcher) = config_watcher {
-            // File-based config watching
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
-                result = watcher.recv() => {
-                    if result.is_some() {
-                        match reload {
-                            ReloadMode::StopProcess => {
-                                println!(
-                                    "{} Config file changed, exiting for restart...",
-                                    style("↻").cyan()
-                                );
-                                return Ok(());
-                            }
-                            ReloadMode::Inplace => {
-                                println!(
-                                    "{} Config file changed, continuing...",
-                                    style("↻").cyan()
-                                );
-                                // OCR doesn't use config, so just continue
-                            }
-                            ReloadMode::NextRun => {}
-                        }
-                    }
-                }
-            }
-        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            // DB-based config polling (no config file available)
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-
-            // Check if config changed in DB
-            if let Ok(Some(latest_hash)) = config_history.get_latest_hash().await {
-                if latest_hash != current_config_hash {
-                    match reload {
-                        ReloadMode::StopProcess => {
-                            println!(
-                                "{} Config changed in database, exiting for restart...",
-                                style("↻").cyan()
-                            );
-                            return Ok(());
-                        }
-                        ReloadMode::Inplace => {
-                            println!(
-                                "{} Config changed in database, continuing...",
-                                style("↻").cyan()
-                            );
-                            current_config_hash = latest_hash;
-                        }
-                        ReloadMode::NextRun => {}
-                    }
-                }
-            }
-        } else {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        match config_watcher.sleep_or_reload(interval, "continuing").await {
+            DaemonAction::Exit => return Ok(()),
+            DaemonAction::Continue | DaemonAction::Reload => {}
         }
     }
 

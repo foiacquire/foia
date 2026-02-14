@@ -11,8 +11,8 @@ use foiacquire::config::Settings;
 /// Requires PostgreSQL with PostGIS. Loads Natural Earth country boundaries
 /// and optionally US state boundaries from embedded or user-provided GeoJSON.
 pub async fn cmd_load_regions(settings: &Settings, file: Option<&str>) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let doc_repo = repos.documents;
 
     // Check if we're on PostgreSQL with PostGIS
     let is_postgis = foiacquire::with_conn_split!(doc_repo.pool,

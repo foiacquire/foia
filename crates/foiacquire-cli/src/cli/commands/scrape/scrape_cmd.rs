@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use console::style;
 
+use crate::cli::commands::daemon::{ConfigWatcher, DaemonAction, ReloadMode};
 use crate::cli::commands::RateLimitBackendType;
 use foiacquire::config::{Config, Settings};
 use foiacquire::models::{ScraperStats, ServiceStatus};
@@ -43,18 +44,6 @@ pub(super) async fn maybe_update_heartbeat(
     }
 }
 
-/// Reload mode for daemon operation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
-pub enum ReloadMode {
-    /// Reload config at the start of each daemon cycle
-    #[default]
-    NextRun,
-    /// Exit process when config file changes (for process manager restart)
-    StopProcess,
-    /// Watch config file and reload immediately when it changes
-    Inplace,
-}
-
 /// Scrape documents from one or more sources.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_scrape(
@@ -70,15 +59,6 @@ pub async fn cmd_scrape(
     rate_limit_backend_type: RateLimitBackendType,
     privacy_config: &PrivacyConfig,
 ) -> anyhow::Result<()> {
-    // Set up config watcher for stop-process and inplace modes
-    // Try file watching first, fall back to DB polling if no config file
-    let mut config_watcher =
-        if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            prefer::watch("foiacquire").await.ok()
-        } else {
-            None
-        };
-
     // Create rate limiter with selected backend
     let base_delay_ms = settings.request_delay_ms;
     let rate_limiter = match rate_limit_backend_type {
@@ -89,9 +69,9 @@ pub async fn cmd_scrape(
         }
         RateLimitBackendType::Database => {
             tracing::debug!("Using database rate limit backend");
-            let ctx = settings.create_db_context()?;
+            let repos = settings.repositories()?;
             let backend = Arc::new(DieselRateLimitBackend::new(
-                ctx.pool().clone(),
+                repos.pool().clone(),
                 base_delay_ms,
             ));
             Arc::new(RateLimiter::new(backend))
@@ -108,13 +88,14 @@ pub async fn cmd_scrape(
         }
     };
 
-    // Use DbContext for config history
-    let ctx = settings.create_db_context()?;
-    let config_history = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_history = repos.config_history;
 
     // Initial config load for source list
     let config = Config::load().await;
-    let mut current_config_hash = config.hash();
+
+    let mut config_watcher =
+        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
 
     // Determine initial sources to scrape
     let mut sources_to_scrape: Vec<String> = if all {
@@ -313,66 +294,9 @@ pub async fn cmd_scrape(
             break;
         }
 
-        // Sleep with config watching for stop-process and inplace modes
-        println!(
-            "{} Sleeping for {}s before next check...",
-            style("→").dim(),
-            interval
-        );
-
-        if let Some(ref mut watcher) = config_watcher {
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {}
-                result = watcher.recv() => {
-                    if result.is_some() {
-                        match reload {
-                            ReloadMode::StopProcess => {
-                                println!(
-                                    "{} Config file changed, exiting for restart...",
-                                    style("↻").cyan()
-                                );
-                                return Ok(());
-                            }
-                            ReloadMode::Inplace => {
-                                println!(
-                                    "{} Config file changed, reloading...",
-                                    style("↻").cyan()
-                                );
-                                // Config will be reloaded at start of next iteration
-                            }
-                            ReloadMode::NextRun => {}
-                        }
-                    }
-                }
-            }
-        } else if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
-            // DB-based config polling (no config file available)
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-
-            // Check if config changed in DB
-            if let Ok(Some(latest_hash)) = config_history.get_latest_hash().await {
-                if latest_hash != current_config_hash {
-                    match reload {
-                        ReloadMode::StopProcess => {
-                            println!(
-                                "{} Config changed in database, exiting for restart...",
-                                style("↻").cyan()
-                            );
-                            return Ok(());
-                        }
-                        ReloadMode::Inplace => {
-                            println!(
-                                "{} Config changed in database, reloading...",
-                                style("↻").cyan()
-                            );
-                            current_config_hash = latest_hash;
-                        }
-                        ReloadMode::NextRun => {}
-                    }
-                }
-            }
-        } else {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        match config_watcher.sleep_or_reload(interval, "reloading").await {
+            DaemonAction::Exit => return Ok(()),
+            DaemonAction::Continue | DaemonAction::Reload => {}
         }
     }
 

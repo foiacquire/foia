@@ -18,16 +18,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Instant;
-use tempfile::TempDir;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
-use super::model_utils::check_binary;
-use super::pdf_utils;
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
+use super::model_utils::{check_binary, check_pdftoppm_hint};
 
 /// DeepSeek OCR backend using subprocess.
 pub struct DeepSeekBackend {
-    config: OcrConfig,
+    config: BackendConfig,
     /// Path to the deepseek-ocr binary.
     binary_path: PathBuf,
     /// Device to use (cpu, metal, cuda).
@@ -42,7 +39,7 @@ impl DeepSeekBackend {
     /// Create a new DeepSeek backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
             binary_path: PathBuf::from("deepseek-ocr-cli"),
             device: "cpu".to_string(),
             dtype: "f32".to_string(),
@@ -54,6 +51,20 @@ impl DeepSeekBackend {
     pub fn with_config(config: OcrConfig) -> Self {
         let device = if config.use_gpu { "cuda" } else { "cpu" };
         let dtype = if config.use_gpu { "f16" } else { "f32" };
+
+        Self {
+            config: BackendConfig::with_config(config),
+            binary_path: PathBuf::from("deepseek-ocr-cli"),
+            device: device.to_string(),
+            dtype: dtype.to_string(),
+            model: "deepseek-ocr".to_string(),
+        }
+    }
+
+    /// Create a new DeepSeek backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
+        let device = if config.ocr.use_gpu { "cuda" } else { "cpu" };
+        let dtype = if config.ocr.use_gpu { "f16" } else { "f32" };
 
         Self {
             config,
@@ -100,7 +111,7 @@ impl DeepSeekBackend {
     }
 
     /// Run DeepSeek OCR on an image.
-    fn run_deepseek(&self, image_path: &Path) -> Result<String, OcrError> {
+    fn run_deepseek_impl(&self, image_path: &Path) -> Result<String, OcrError> {
         // DeepSeek-OCR uses a prompt with <image> placeholder
         let prompt = "Extract all text from this image. Return only the extracted text, nothing else. <image>";
 
@@ -156,8 +167,8 @@ impl OcrBackend for DeepSeekBackend {
                  cargo install --path crates/cli --features cuda  # or --features metal for Mac",
                 self.binary_path.display()
             )
-        } else if !check_binary("pdftoppm") {
-            "pdftoppm not installed. Install with: apt install poppler-utils".to_string()
+        } else if let Some(hint) = check_pdftoppm_hint() {
+            hint
         } else {
             format!(
                 "DeepSeek-OCR is available (device: {}, model: {})",
@@ -166,37 +177,11 @@ impl OcrBackend for DeepSeekBackend {
         }
     }
 
-    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-        let text = self.run_deepseek(image_path)?;
-        let elapsed = start.elapsed();
-
-        Ok(OcrResult {
-            text,
-            confidence: None, // DeepSeek doesn't provide confidence scores directly
-            backend: OcrBackendType::DeepSeek,
-            model: Some(self.model.clone()),
-            processing_time_ms: elapsed.as_millis() as u64,
-        })
+    fn run_ocr(&self, image_path: &Path) -> Result<String, OcrError> {
+        self.run_deepseek_impl(image_path)
     }
 
-    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-
-        // Create temp directory for the image
-        let temp_dir = TempDir::new()?;
-        let image_path = pdf_utils::pdf_page_to_image(pdf_path, page, temp_dir.path())?;
-
-        // Run OCR on the image
-        let text = self.run_deepseek(&image_path)?;
-        let elapsed = start.elapsed();
-
-        Ok(OcrResult {
-            text,
-            confidence: None,
-            backend: OcrBackendType::DeepSeek,
-            model: Some(self.model.clone()),
-            processing_time_ms: elapsed.as_millis() as u64,
-        })
+    fn model_name(&self) -> Option<String> {
+        Some(self.model.clone())
     }
 }

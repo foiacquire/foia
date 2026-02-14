@@ -4,18 +4,19 @@
 
 use async_trait::async_trait;
 use scraper::{Html, Selector};
-use std::time::Duration;
 use tracing::{debug, warn};
 
 use super::QueryBuilder;
+use crate::discovery::sources::create_discovery_client;
+use crate::discovery::url_utils::extract_domain;
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
-use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
 
 /// DuckDuckGo search URL.
 const DDG_SEARCH_URL: &str = "https://html.duckduckgo.com/html/";
 
 /// Discovery source using DuckDuckGo search.
+#[derive(Default)]
 pub struct DuckDuckGoSource {}
 
 impl DuckDuckGoSource {
@@ -32,15 +33,8 @@ impl DuckDuckGoSource {
     ) -> Result<Vec<SearchResult>, DiscoveryError> {
         debug!("DuckDuckGo search: {}", query);
 
-        // Create HTTP client with privacy configuration
-        let client = HttpClient::with_privacy(
-            "duckduckgo",
-            Duration::from_secs(30),
-            Duration::from_millis(config.rate_limit_ms),
-            Some("impersonate"), // Use realistic browser user agent
-            &config.privacy,
-        )
-        .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))?;
+        let client =
+            create_discovery_client("duckduckgo", config, None, Some("impersonate"))?;
 
         let response = client
             .post(DDG_SEARCH_URL, &[("q", query), ("kl", "us-en")])
@@ -135,41 +129,7 @@ impl DuckDuckGoSource {
 
     /// Check if URL looks like a listing page.
     fn is_likely_listing(&self, url: &str) -> bool {
-        let url_lower = url.to_lowercase();
-
-        // Document extensions are not listings
-        if url_lower.ends_with(".pdf")
-            || url_lower.ends_with(".doc")
-            || url_lower.ends_with(".docx")
-            || url_lower.ends_with(".xls")
-            || url_lower.ends_with(".xlsx")
-        {
-            return false;
-        }
-
-        // Listing patterns
-        let listing_patterns = [
-            "/index",
-            "/browse",
-            "/list",
-            "/search",
-            "/documents/",
-            "/reports/",
-            "/publications/",
-            "/library/",
-            "/reading-room",
-            "/foia/",
-            "/archive",
-            "page=",
-        ];
-
-        listing_patterns.iter().any(|p| url_lower.contains(p))
-    }
-}
-
-impl Default for DuckDuckGoSource {
-    fn default() -> Self {
-        Self::new()
+        crate::discovery::is_listing_url(url)
     }
 }
 
@@ -190,25 +150,13 @@ impl DiscoverySource for DuckDuckGoSource {
         DiscoveryMethod::SearchEngine
     }
 
-    fn requires_browser(&self) -> bool {
-        false
-    }
-
     async fn discover(
         &self,
         target_domain: &str,
         search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        // Extract domain from URL if needed
-        let domain = if target_domain.starts_with("http") {
-            url::Url::parse(target_domain)
-                .ok()
-                .and_then(|u| u.host_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| target_domain.to_string())
-        } else {
-            target_domain.to_string()
-        };
+        let domain = extract_domain(target_domain);
 
         let mut all_results: Vec<DiscoveredUrl> = Vec::new();
         let mut seen_urls = std::collections::HashSet::new();

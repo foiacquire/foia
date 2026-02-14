@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use reqwest::{Client, Proxy, StatusCode};
+use reqwest::{Client, Proxy, Response, StatusCode};
 #[cfg(feature = "browser")]
 use tracing::debug;
 
@@ -71,7 +71,158 @@ pub struct HttpClient {
     browser_pool: Option<Arc<BrowserPool>>,
 }
 
+fn extract_response_headers(response: &Response) -> HashMap<String, String> {
+    response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+/// Builder for constructing `HttpClient` with optional configuration.
+///
+/// Required parameters (source_id, timeout, request_delay) are provided
+/// via `HttpClient::builder()`. All other configuration is optional and
+/// set through chainable methods before calling `build()`.
+pub struct HttpClientBuilder {
+    source_id: String,
+    timeout: Duration,
+    request_delay: Duration,
+    user_agent: Option<String>,
+    privacy: Option<PrivacyConfig>,
+    rate_limiter: Option<RateLimiter>,
+    via_mappings: Option<HashMap<String, String>>,
+    via_mode: Option<ViaMode>,
+    crawl_repo: Option<Arc<DieselCrawlRepository>>,
+    referer: Option<String>,
+}
+
+impl HttpClientBuilder {
+    /// Set the user agent string.
+    /// - `"impersonate"`: Use random real browser user agent
+    /// - Any other string: Use as-is
+    /// - Not called: Use default FOIAcquire user agent
+    pub fn user_agent(mut self, ua: &str) -> Self {
+        self.user_agent = Some(ua.to_string());
+        self
+    }
+
+    /// Set explicit privacy configuration.
+    /// Without this, uses `PrivacyConfig::default().with_env_overrides()`.
+    pub fn privacy(mut self, config: &PrivacyConfig) -> Self {
+        self.privacy = Some(config.clone());
+        self
+    }
+
+    /// Set a shared rate limiter.
+    /// Without this, creates a per-client `InMemoryRateLimitBackend`.
+    pub fn rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(limiter);
+        self
+    }
+
+    /// Set via URL rewriting mappings and mode for caching proxies.
+    pub fn via(mut self, mappings: HashMap<String, String>, mode: ViaMode) -> Self {
+        self.via_mappings = Some(mappings);
+        self.via_mode = Some(mode);
+        self
+    }
+
+    /// Set the crawl repository for request logging.
+    pub fn crawl_repo(mut self, repo: Arc<DieselCrawlRepository>) -> Self {
+        self.crawl_repo = Some(repo);
+        self
+    }
+
+    /// Set the Referer header for requests.
+    pub fn referer(mut self, referer: String) -> Self {
+        self.referer = Some(referer);
+        self
+    }
+
+    /// Build the `HttpClient`.
+    ///
+    /// # Errors
+    /// Returns an error if Tor mode is requested but unavailable, or if a
+    /// proxy is configured but cannot be initialized.
+    pub fn build(self) -> Result<HttpClient, String> {
+        let user_agent = resolve_user_agent(self.user_agent.as_deref());
+
+        let privacy_config = self
+            .privacy
+            .unwrap_or_else(|| PrivacyConfig::default().with_env_overrides());
+
+        let (client, privacy_mode) =
+            HttpClient::build_client(&user_agent, self.timeout, Some(&privacy_config))?;
+
+        let rate_limiter = self.rate_limiter.unwrap_or_else(|| {
+            let backend = Arc::new(InMemoryRateLimitBackend::new(
+                self.request_delay.as_millis() as u64,
+            ));
+            RateLimiter::new(backend)
+        });
+
+        let via_mappings = self.via_mappings.unwrap_or_default();
+        let via_mode = self.via_mode.unwrap_or_default();
+
+        if !via_mappings.is_empty() {
+            tracing::info!(
+                "HTTP client configured with {} via mapping(s) for caching proxy (mode: {:?})",
+                via_mappings.len(),
+                via_mode
+            );
+            for (from, to) in &via_mappings {
+                tracing::debug!("  Via: {} -> {}", from, to);
+            }
+        }
+
+        Ok(HttpClient {
+            client,
+            crawl_repo: self.crawl_repo,
+            source_id: self.source_id,
+            request_delay: self.request_delay,
+            referer: self.referer,
+            rate_limiter,
+            privacy_mode,
+            via_mappings: Arc::new(via_mappings),
+            via_mode,
+            #[cfg(feature = "browser")]
+            browser_pool: HttpClient::create_browser_pool(),
+        })
+    }
+}
+
 impl HttpClient {
+    /// Create a builder for configuring an `HttpClient`.
+    ///
+    /// The three required parameters are the minimum needed for any client:
+    /// - `source_id`: Identifier for logging and rate limiting
+    /// - `timeout`: Request timeout duration
+    /// - `request_delay`: Base delay between requests
+    pub fn builder(
+        source_id: &str,
+        timeout: Duration,
+        request_delay: Duration,
+    ) -> HttpClientBuilder {
+        HttpClientBuilder {
+            source_id: source_id.to_string(),
+            timeout,
+            request_delay,
+            user_agent: None,
+            privacy: None,
+            rate_limiter: None,
+            via_mappings: None,
+            via_mode: None,
+            crawl_repo: None,
+            referer: None,
+        }
+    }
+
     /// Rewrite a URL using via mappings if a matching prefix is found.
     /// Returns the rewritten URL (for fetching) and whether it was rewritten.
     ///
@@ -184,246 +335,6 @@ impl HttpClient {
         Ok((client, mode))
     }
 
-    /// Create a new HTTP client with privacy configuration from environment.
-    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
-    /// This makes privacy opt-out instead of opt-in for better security.
-    ///
-    /// # Errors
-    /// Returns an error if a proxy is configured (e.g. SOCKS_PROXY) but cannot
-    /// be initialized. This is fail-closed by design — we never silently
-    /// downgrade to direct connections.
-    pub fn new(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-    ) -> Result<Self, String> {
-        Self::with_user_agent(source_id, timeout, request_delay, None)
-    }
-
-    /// Create a new HTTP client with custom user agent configuration.
-    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
-    /// - None: Use default FOIAcquire user agent
-    /// - Some("impersonate"): Use random real browser user agent
-    /// - Some(custom): Use custom user agent string
-    ///
-    /// # Errors
-    /// Returns an error if a proxy is configured (e.g. SOCKS_PROXY) but cannot
-    /// be initialized. This is fail-closed by design — we never silently
-    /// downgrade to direct connections.
-    pub fn with_user_agent(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        user_agent_config: Option<&str>,
-    ) -> Result<Self, String> {
-        let user_agent = resolve_user_agent(user_agent_config);
-
-        // Read privacy config from environment (SOCKS_PROXY, etc.)
-        // If no env vars set, this defaults to Direct mode (backward compatible)
-        let default_privacy = PrivacyConfig::default().with_env_overrides();
-
-        let (client, privacy_mode) =
-            Self::build_client(&user_agent, timeout, Some(&default_privacy))?;
-
-        // Default in-memory backend with request_delay as base
-        let backend = Arc::new(InMemoryRateLimitBackend::new(
-            request_delay.as_millis() as u64
-        ));
-        Ok(Self {
-            client,
-            crawl_repo: None,
-            source_id: source_id.to_string(),
-            request_delay,
-            referer: None,
-            rate_limiter: RateLimiter::new(backend),
-            privacy_mode,
-            via_mappings: Arc::new(HashMap::new()),
-            via_mode: ViaMode::default(),
-            #[cfg(feature = "browser")]
-            browser_pool: Self::create_browser_pool(),
-        })
-    }
-
-    /// Create a new HTTP client with privacy configuration.
-    /// - None: Use default FOIAcquire user agent
-    /// - Some("impersonate"): Use random real browser user agent
-    /// - Some(custom): Use custom user agent string
-    ///
-    /// # Errors
-    /// Returns an error if Tor mode is requested but Tor is not available.
-    pub fn with_privacy(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        user_agent_config: Option<&str>,
-        privacy_config: &PrivacyConfig,
-    ) -> Result<Self, String> {
-        let user_agent = resolve_user_agent(user_agent_config);
-        let (client, privacy_mode) =
-            Self::build_client(&user_agent, timeout, Some(privacy_config))?;
-
-        // Default in-memory backend with request_delay as base
-        let backend = Arc::new(InMemoryRateLimitBackend::new(
-            request_delay.as_millis() as u64
-        ));
-        Ok(Self {
-            client,
-            crawl_repo: None,
-            source_id: source_id.to_string(),
-            request_delay,
-            referer: None,
-            rate_limiter: RateLimiter::new(backend),
-            privacy_mode,
-            via_mappings: Arc::new(HashMap::new()),
-            via_mode: ViaMode::default(),
-            #[cfg(feature = "browser")]
-            browser_pool: Self::create_browser_pool(),
-        })
-    }
-
-    /// Create a new HTTP client with via URL rewriting for caching proxies.
-    ///
-    /// # Arguments
-    /// * `source_id` - Identifier for this source (for logging/rate limiting)
-    /// * `timeout` - Request timeout
-    /// * `request_delay` - Delay between requests
-    /// * `user_agent_config` - User agent configuration
-    /// * `privacy_config` - Privacy/proxy configuration
-    /// * `via_mappings` - URL prefix mappings for caching proxies
-    /// * `via_mode` - Controls when via mappings are used for requests
-    ///
-    /// # Errors
-    /// Returns an error if Tor mode is requested but Tor is not available.
-    pub fn with_via(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        user_agent_config: Option<&str>,
-        privacy_config: &PrivacyConfig,
-        via_mappings: HashMap<String, String>,
-        via_mode: ViaMode,
-    ) -> Result<Self, String> {
-        let user_agent = resolve_user_agent(user_agent_config);
-        let (client, privacy_mode) =
-            Self::build_client(&user_agent, timeout, Some(privacy_config))?;
-
-        // Default in-memory backend with request_delay as base
-        let backend = Arc::new(InMemoryRateLimitBackend::new(
-            request_delay.as_millis() as u64
-        ));
-
-        if !via_mappings.is_empty() {
-            tracing::info!(
-                "HTTP client configured with {} via mapping(s) for caching proxy (mode: {:?})",
-                via_mappings.len(),
-                via_mode
-            );
-            for (from, to) in &via_mappings {
-                tracing::debug!("  Via: {} -> {}", from, to);
-            }
-        }
-
-        Ok(Self {
-            client,
-            crawl_repo: None,
-            source_id: source_id.to_string(),
-            request_delay,
-            referer: None,
-            rate_limiter: RateLimiter::new(backend),
-            privacy_mode,
-            via_mappings: Arc::new(via_mappings),
-            via_mode,
-            #[cfg(feature = "browser")]
-            browser_pool: Self::create_browser_pool(),
-        })
-    }
-
-    /// Create a new HTTP client with a shared rate limiter.
-    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
-    ///
-    /// # Errors
-    /// Returns an error if a proxy is configured but cannot be initialized.
-    pub fn with_rate_limiter(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        rate_limiter: RateLimiter,
-    ) -> Result<Self, String> {
-        Self::with_rate_limiter_and_user_agent(
-            source_id,
-            timeout,
-            request_delay,
-            rate_limiter,
-            None,
-        )
-    }
-
-    /// Create a new HTTP client with a shared rate limiter and custom user agent.
-    /// Respects SOCKS_PROXY env var if set, otherwise uses direct connections.
-    ///
-    /// # Errors
-    /// Returns an error if a proxy is configured but cannot be initialized.
-    pub fn with_rate_limiter_and_user_agent(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        rate_limiter: RateLimiter,
-        user_agent_config: Option<&str>,
-    ) -> Result<Self, String> {
-        let user_agent = resolve_user_agent(user_agent_config);
-
-        // Read privacy config from environment (SOCKS_PROXY, etc.)
-        let default_privacy = PrivacyConfig::default().with_env_overrides();
-
-        let (client, privacy_mode) =
-            Self::build_client(&user_agent, timeout, Some(&default_privacy))?;
-
-        Ok(Self {
-            client,
-            crawl_repo: None,
-            source_id: source_id.to_string(),
-            request_delay,
-            referer: None,
-            rate_limiter,
-            privacy_mode,
-            via_mappings: Arc::new(HashMap::new()),
-            via_mode: ViaMode::default(),
-            #[cfg(feature = "browser")]
-            browser_pool: Self::create_browser_pool(),
-        })
-    }
-
-    /// Create a new HTTP client with a shared rate limiter and privacy configuration.
-    ///
-    /// # Errors
-    /// Returns an error if Tor mode is requested but Tor is not available.
-    pub fn with_rate_limiter_and_privacy(
-        source_id: &str,
-        timeout: Duration,
-        request_delay: Duration,
-        rate_limiter: RateLimiter,
-        user_agent_config: Option<&str>,
-        privacy_config: &PrivacyConfig,
-    ) -> Result<Self, String> {
-        let user_agent = resolve_user_agent(user_agent_config);
-        let (client, privacy_mode) =
-            Self::build_client(&user_agent, timeout, Some(privacy_config))?;
-
-        Ok(Self {
-            client,
-            crawl_repo: None,
-            source_id: source_id.to_string(),
-            request_delay,
-            referer: None,
-            rate_limiter,
-            privacy_mode,
-            via_mappings: Arc::new(HashMap::new()),
-            via_mode: ViaMode::default(),
-            #[cfg(feature = "browser")]
-            browser_pool: Self::create_browser_pool(),
-        })
-    }
-
     /// Set the via mappings and mode for URL rewriting (caching proxy support).
     pub fn with_via_config(mut self, via: HashMap<String, String>, via_mode: ViaMode) -> Self {
         if !via.is_empty() {
@@ -491,6 +402,33 @@ impl HttpClient {
         &self.via_mappings
     }
 
+    async fn finalize_request(
+        &self,
+        request_log: &mut CrawlRequest,
+        url: &str,
+        domain: &Option<String>,
+        status_code: u16,
+        response_headers: &HashMap<String, String>,
+        duration: Duration,
+    ) {
+        request_log.response_at = Some(Utc::now());
+        request_log.duration_ms = Some(duration.as_millis() as u64);
+        request_log.response_status = Some(status_code);
+        request_log.response_headers = response_headers.clone();
+
+        if let Some(repo) = &self.crawl_repo {
+            let _ = repo.log_request(request_log).await;
+        }
+
+        if let Some(ref domain) = domain {
+            self.rate_limiter
+                .report_response_status(domain, status_code, url, response_headers)
+                .await;
+        }
+
+        tokio::time::sleep(self.request_delay).await;
+    }
+
     /// Make a GET request with optional conditional headers.
     /// Uses adaptive rate limiting per domain.
     /// When BROWSER_URL is configured, routes through browser pool.
@@ -535,7 +473,7 @@ impl HttpClient {
         // Make first browser request
         if let Some(response) = self.do_browser_fetch(pool, &initial_url, url).await {
             let status = response.status.as_u16();
-            let should_retry = can_fallback && (status == 429 || status == 503);
+            let should_retry = can_fallback && RateLimiter::is_definite_rate_limit(status);
 
             if should_retry {
                 let alternate_url = match self.via_mode {
@@ -597,28 +535,19 @@ impl HttpClient {
                     original_url.to_string(),
                     "GET".to_string(),
                 );
-                request_log.response_at = Some(Utc::now());
-                request_log.duration_ms = Some(duration.as_millis() as u64);
-                request_log.response_status = Some(status_code);
-
-                if let Some(repo) = &self.crawl_repo {
-                    let _ = repo.log_request(&request_log).await;
-                }
-
-                if let Some(ref domain) = domain {
-                    if (200..400).contains(&status_code) {
-                        self.rate_limiter.report_success(domain).await;
-                    } else if status_code == 429 || status_code == 503 {
-                        self.rate_limiter
-                            .report_rate_limit(domain, status_code)
-                            .await;
-                    }
-                }
-
-                tokio::time::sleep(self.request_delay).await;
 
                 let mut headers = HashMap::new();
                 headers.insert("content-type".to_string(), browser_response.content_type);
+
+                self.finalize_request(
+                    &mut request_log,
+                    original_url,
+                    &domain,
+                    status_code,
+                    &headers,
+                    duration,
+                )
+                .await;
 
                 Some(HttpResponse::from_bytes(
                     StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK),
@@ -668,7 +597,7 @@ impl HttpClient {
 
         // Check if we should retry with alternate URL
         let status = result.status.as_u16();
-        let should_retry = can_fallback && (status == 429 || status == 503);
+        let should_retry = can_fallback && RateLimiter::is_definite_rate_limit(status);
 
         if should_retry {
             let alternate_url = match self.via_mode {
@@ -736,52 +665,18 @@ impl HttpClient {
         let duration = start.elapsed();
 
         let status_code = response.status().as_u16();
-
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
         request_log.was_not_modified = response.status() == StatusCode::NOT_MODIFIED;
 
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter for adaptive backoff
-        if let Some(ref domain) = domain {
-            let has_retry_after = response_headers.contains_key("retry-after");
-
-            if status_code == 429 || status_code == 503 {
-                // Definite rate limit
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code == 403 {
-                // Possible rate limit - needs pattern detection
-                self.rate_limiter
-                    .report_403(domain, original_url, has_retry_after)
-                    .await;
-            } else if status_code >= 500 {
-                // Server error - mild backoff
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() || status_code == 304 {
-                // Success - may recover from backoff
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay (rate limiter handles additional adaptive delay)
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            original_url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HttpResponse::from_reqwest(
             response.status(),
@@ -824,40 +719,16 @@ impl HttpClient {
 
         let status_code = response.status().as_u16();
 
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
-
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter for adaptive backoff
-        if let Some(ref domain) = domain {
-            if status_code == 429 || status_code == 503 {
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code >= 500 {
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() {
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HttpResponse::from_reqwest(
             response.status(),
@@ -917,40 +788,16 @@ impl HttpClient {
 
         let status_code = response.status().as_u16();
 
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
-
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter for adaptive backoff
-        if let Some(ref domain) = domain {
-            if status_code == 429 || status_code == 503 {
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code >= 500 {
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() {
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HttpResponse::from_reqwest(
             response.status(),
@@ -983,50 +830,16 @@ impl HttpClient {
 
         let status_code = response.status().as_u16();
 
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
-
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter for adaptive backoff
-        if let Some(ref domain) = domain {
-            let has_retry_after = response_headers.contains_key("retry-after");
-
-            if status_code == 429 || status_code == 503 {
-                // Definite rate limit
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code == 403 {
-                // Possible rate limit - needs pattern detection
-                self.rate_limiter
-                    .report_403(domain, url, has_retry_after)
-                    .await;
-            } else if status_code >= 500 {
-                // Server error - mild backoff
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() {
-                // Success - may recover from backoff
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay (rate limiter handles additional adaptive delay)
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HttpResponse::from_reqwest(
             response.status(),
@@ -1059,50 +872,16 @@ impl HttpClient {
 
         let status_code = response.status().as_u16();
 
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
-
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter for adaptive backoff
-        if let Some(ref domain) = domain {
-            let has_retry_after = response_headers.contains_key("retry-after");
-
-            if status_code == 429 || status_code == 503 {
-                // Definite rate limit
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code == 403 {
-                // Possible rate limit - needs pattern detection
-                self.rate_limiter
-                    .report_403(domain, url, has_retry_after)
-                    .await;
-            } else if status_code >= 500 {
-                // Server error - mild backoff
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() {
-                // Success - may recover from backoff
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay (rate limiter handles additional adaptive delay)
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HttpResponse::from_reqwest(
             response.status(),
@@ -1152,48 +931,18 @@ impl HttpClient {
         let duration = start.elapsed();
 
         let status_code = response.status().as_u16();
-
-        // Update request log
-        request_log.response_at = Some(Utc::now());
-        request_log.duration_ms = Some(duration.as_millis() as u64);
-        request_log.response_status = Some(status_code);
         request_log.was_not_modified = response.status() == StatusCode::NOT_MODIFIED;
 
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (name, value) in response.headers() {
-            if let Ok(v) = value.to_str() {
-                response_headers.insert(name.to_string(), v.to_string());
-            }
-        }
-        request_log.response_headers = response_headers.clone();
-
-        // Log the request
-        if let Some(repo) = &self.crawl_repo {
-            let _ = repo.log_request(&request_log).await;
-        }
-
-        // Report status to rate limiter
-        if let Some(ref domain) = domain {
-            let has_retry_after = response_headers.contains_key("retry-after");
-
-            if status_code == 429 || status_code == 503 {
-                self.rate_limiter
-                    .report_rate_limit(domain, status_code)
-                    .await;
-            } else if status_code == 403 {
-                self.rate_limiter
-                    .report_403(domain, url, has_retry_after)
-                    .await;
-            } else if status_code >= 500 {
-                self.rate_limiter.report_server_error(domain).await;
-            } else if response.status().is_success() || status_code == 304 {
-                self.rate_limiter.report_success(domain).await;
-            }
-        }
-
-        // Apply base delay
-        tokio::time::sleep(self.request_delay).await;
+        let response_headers = extract_response_headers(&response);
+        self.finalize_request(
+            &mut request_log,
+            url,
+            &domain,
+            status_code,
+            &response_headers,
+            duration,
+        )
+        .await;
 
         Ok(HeadResponse {
             status: response.status(),
@@ -1370,5 +1119,44 @@ mod tests {
         assert!(result.is_ok());
         let (_, mode) = result.unwrap();
         assert_eq!(mode, PrivacyMode::Direct);
+    }
+
+    fn test_delay() -> Duration {
+        Duration::from_millis(100)
+    }
+
+    #[test]
+    fn test_builder_basic() {
+        let client = HttpClient::builder("test", test_timeout(), test_delay())
+            .privacy(&direct_config())
+            .build();
+        assert!(client.is_ok());
+        let client = client.unwrap();
+        assert_eq!(client.privacy_mode(), PrivacyMode::Direct);
+    }
+
+    #[test]
+    fn test_builder_with_privacy() {
+        let config = tor_direct_config();
+        let result = HttpClient::builder("test", test_timeout(), test_delay())
+            .privacy(&config)
+            .build();
+        let err = result.err().expect("expected error for Tor without Tor available");
+        assert!(
+            err.contains("Tor mode requested"),
+            "Expected Tor error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_with_rate_limiter() {
+        let backend = Arc::new(InMemoryRateLimitBackend::new(100));
+        let limiter = RateLimiter::new(backend);
+        let client = HttpClient::builder("test", test_timeout(), test_delay())
+            .privacy(&direct_config())
+            .rate_limiter(limiter)
+            .build();
+        assert!(client.is_ok());
     }
 }

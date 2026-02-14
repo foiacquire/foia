@@ -7,9 +7,7 @@ use console::style;
 
 use foiacquire::config::Settings;
 use foiacquire::models::{CrawlUrl, DiscoveryMethod};
-use foiacquire_import::{
-    guess_mime_type_from_url, FileStorageMode, ImportRunner, ImportStats, WarcImportSource,
-};
+use foiacquire_import::{FileStorageMode, ImportRunner, ImportStats, WarcImportSource};
 
 /// Import documents from WARC archive files.
 #[allow(clippy::too_many_arguments)]
@@ -174,8 +172,8 @@ pub async fn cmd_import_urls(
     use url::Url;
 
     settings.ensure_directories()?;
-    let ctx = settings.create_db_context()?;
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let crawl_repo = repos.crawl;
 
     // Read URLs from file
     let file = File::open(file)?;
@@ -264,9 +262,9 @@ pub async fn cmd_import_stdin(
     use foiacquire::storage::compute_storage_path_with_dedup;
 
     settings.ensure_directories()?;
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let doc_repo = ctx.documents();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let doc_repo = repos.documents;
 
     // Validate URL
     let parsed_url = Url::parse(url)?;
@@ -290,7 +288,7 @@ pub async fn cmd_import_stdin(
     let mime_type = content_type
         .map(|s| s.to_string())
         .or_else(|| infer::get(&content).map(|t| t.mime_type().to_string()))
-        .unwrap_or_else(|| guess_mime_type_from_url(url));
+        .unwrap_or_else(|| foiacquire::utils::guess_mime_from_url(url).to_string());
 
     // Extract filename from URL if not specified
     let original_filename = filename.map(|s| s.to_string()).or_else(|| {
@@ -361,7 +359,7 @@ pub async fn cmd_import_stdin(
     let (doc_id, is_new) = if let Some(mut doc) = existing.into_iter().next() {
         let added = doc.add_version(version);
         if added {
-            doc_repo.save(&doc).await?;
+            doc_repo.save_with_versions(&doc).await?;
         }
         (doc.id.clone(), false)
     } else {
@@ -375,7 +373,7 @@ pub async fn cmd_import_stdin(
             serde_json::json!({ "discovery_method": "stdin-import" }),
         );
         let doc_id = doc.id.clone();
-        doc_repo.save(&doc).await?;
+        doc_repo.save_with_versions(&doc).await?;
         (doc_id, true)
     };
 

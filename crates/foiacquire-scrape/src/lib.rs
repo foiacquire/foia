@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod archive;
+pub mod cdx;
 pub mod config;
 pub mod configurable;
 pub mod discovery;
@@ -29,6 +30,8 @@ pub use foiacquire::rate_limit::{
     DieselRateLimitBackend, DomainRateState, InMemoryRateLimitBackend, RateLimitBackend,
     RateLimitError, RateLimiter,
 };
+
+pub use cdx::WAYBACK_CDX_API_URL;
 
 use std::path::Path;
 

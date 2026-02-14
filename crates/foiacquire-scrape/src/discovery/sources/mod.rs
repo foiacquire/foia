@@ -13,8 +13,10 @@ pub use wayback::WaybackSource;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::discovery::{DiscoveryError, DiscoverySource};
+use crate::discovery::{DiscoveryError, DiscoverySource, DiscoverySourceConfig};
+use crate::HttpClient;
 
 /// Registry of all available discovery sources.
 pub struct SourceRegistry {
@@ -57,6 +59,27 @@ impl Default for SourceRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (compatible; FOIAcquire/1.0)";
+
+/// Build an HttpClient configured for discovery with the given overrides.
+pub fn create_discovery_client(
+    service_name: &str,
+    config: &DiscoverySourceConfig,
+    timeout: Option<Duration>,
+    user_agent: Option<&str>,
+) -> Result<HttpClient, DiscoveryError> {
+    HttpClient::builder(
+        service_name,
+        timeout.unwrap_or(DEFAULT_TIMEOUT),
+        Duration::from_millis(config.rate_limit_ms),
+    )
+    .user_agent(user_agent.unwrap_or(DEFAULT_USER_AGENT))
+    .privacy(&config.privacy)
+    .build()
+    .map_err(|e| DiscoveryError::Config(format!("Failed to create HTTP client: {}", e)))
 }
 
 /// Helper to create sources from config.

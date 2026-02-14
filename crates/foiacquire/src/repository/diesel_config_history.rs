@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::{ConfigHistoryRecord, NewConfigHistory};
+use super::models::{ConfigHistoryRecord, NewConfigHistory};
 use super::parse_datetime;
 use super::pool::{DbPool, DieselError};
 use crate::schema::configuration_history;

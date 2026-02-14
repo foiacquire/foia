@@ -84,7 +84,10 @@ impl DownloadService {
 
             let handle = tokio::spawn(async move {
                 let client =
-                    match HttpClient::with_privacy("download", timeout, delay, None, &privacy) {
+                    match HttpClient::builder("download", timeout, delay)
+                        .privacy(&privacy)
+                        .build()
+                    {
                         Ok(c) => c,
                         Err(e) => {
                             tracing::error!("Failed to create HTTP client: {}", e);

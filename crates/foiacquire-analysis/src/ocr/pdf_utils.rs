@@ -7,6 +7,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 use super::backend::OcrError;
+use super::model_utils::PDFTOPPM_NOT_FOUND;
 
 /// Convert a PDF page to an image using pdftoppm.
 ///
@@ -32,7 +33,7 @@ pub fn pdf_page_to_image(
             "pdftoppm failed to convert PDF page".to_string(),
         )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(OcrError::BackendNotAvailable(
-            "pdftoppm not found (install poppler-utils)".to_string(),
+            PDFTOPPM_NOT_FOUND.to_string(),
         )),
         Err(e) => Err(OcrError::Io(e)),
     }

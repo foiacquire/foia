@@ -6,7 +6,7 @@ use console::style;
 use sha2::{Digest, Sha256};
 
 use crate::cli::icons::{error, success};
-use foiacquire::config::{AppConfigSnapshot, Config, Settings};
+use foiacquire::config::{Config, Settings, SourcesConfig};
 
 /// Migrate a config file into the database.
 pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> anyhow::Result<()> {
@@ -32,8 +32,8 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "auto-discovered".to_string());
 
-    // Extract AppConfigSnapshot
-    let snapshot = config.to_app_snapshot();
+    // Extract SourcesConfig
+    let snapshot = config.to_sources_config();
 
     // Serialize to JSON
     let json = serde_json::to_string_pretty(&snapshot)?;
@@ -44,8 +44,8 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
     let hash = hex::encode(hasher.finalize());
 
     // Save to DB
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     let inserted = config_repo.insert_if_new(&json, "json", &hash).await?;
 
@@ -66,8 +66,8 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
 
 /// Get a config value from the database.
 pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     // Load latest config
     let entry = config_repo.get_latest().await?.ok_or_else(|| {
@@ -92,13 +92,13 @@ pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Resul
 
 /// Set a config value in the database.
 pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let config_repo = ctx.config_history();
+    let repos = settings.repositories()?;
+    let config_repo = repos.config_history;
 
     // Load latest config or start with empty
     let mut json_value: serde_json::Value = match config_repo.get_latest().await? {
         Some(entry) => serde_json::from_str(&entry.data)?,
-        None => serde_json::to_value(AppConfigSnapshot::default())?,
+        None => serde_json::to_value(SourcesConfig::default())?,
     };
 
     // Parse the value (try JSON first, fall back to string)
@@ -122,8 +122,8 @@ pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> 
     // Set the value at the path
     set_json_value(&mut json_value, setting, new_value)?;
 
-    // Validate by deserializing into AppConfigSnapshot
-    let _snapshot: AppConfigSnapshot = serde_json::from_value(json_value.clone())
+    // Validate by deserializing into SourcesConfig
+    let _snapshot: SourcesConfig = serde_json::from_value(json_value.clone())
         .map_err(|e| anyhow::anyhow!("Invalid config after update: {}", e))?;
 
     // Serialize back to JSON

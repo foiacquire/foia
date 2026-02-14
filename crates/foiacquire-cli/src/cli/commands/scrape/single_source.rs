@@ -64,7 +64,7 @@ pub(super) async fn cmd_scrape_single_tui(
         && !scraper_config.discovery.search_queries.is_empty()
     {
         let llm_config = config.llm.clone();
-        let llm = LlmClient::new(llm_config);
+        let llm = LlmClient::with_privacy(llm_config, privacy_config.clone());
 
         if llm.is_available().await {
             update_status(&format!("{} expanding search terms...", source_id));
@@ -86,11 +86,11 @@ pub(super) async fn cmd_scrape_single_tui(
         }
     }
 
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let doc_repo = ctx.documents();
-    let crawl_repo = Arc::new(ctx.crawl());
-    let service_status_repo = ctx.service_status();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let doc_repo = repos.documents;
+    let crawl_repo = Arc::new(repos.crawl);
+    let service_status_repo = repos.service_status;
 
     // Run external discovery if enabled
     if scraper_config.discovery.external.is_enabled() {

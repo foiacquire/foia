@@ -8,7 +8,7 @@ use diesel_async::RunQueryDsl;
 
 use super::{CountRow, DieselDocumentRepository, DocIdRow, MimeCount, TagRow};
 use crate::models::{Document, DocumentStatus};
-use crate::repository::diesel_models::DocumentRecord;
+use crate::repository::models::DocumentRecord;
 use crate::repository::document::DocumentNavigation;
 use crate::repository::pool::DieselError;
 use crate::schema::documents;
@@ -109,9 +109,13 @@ impl DieselDocumentRepository {
                 let count: i64 = query.count().get_result(&mut conn).await?;
                 Ok(count as u64)
             } else {
-                // No mime filter, use simple query
+                // No mime filter — require at least one version exists
                 let mut query = documents::table
                     .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
+                    .filter(diesel::dsl::exists(
+                        document_versions::table
+                            .filter(document_versions::document_id.eq(documents::id)),
+                    ))
                     .into_boxed();
                 if let Some(sid) = source_id {
                     query = query.filter(documents::source_id.eq(sid));
@@ -1441,8 +1445,13 @@ impl DieselDocumentRepository {
                     .load(&mut conn)
                     .await
             } else {
+                // No mime filter — require at least one version exists
                 let mut query = documents::table
                     .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
+                    .filter(diesel::dsl::exists(
+                        document_versions::table
+                            .filter(document_versions::document_id.eq(documents::id)),
+                    ))
                     .into_boxed();
 
                 if let Some(sid) = source_id {

@@ -8,16 +8,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
-use tempfile::TempDir;
 
 use paddle_ocr_rs::ocr_lite::OcrLite;
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 use super::model_utils::{
-    build_ocr_result, ensure_models_present, model_availability_hint, ModelDirConfig, ModelSpec,
+    ensure_models_present, model_availability_hint, ModelDirConfig, ModelSpec,
 };
-use super::pdf_utils;
 
 /// Global cached OcrLite instance (initialized once, reused for all OCR calls).
 /// OcrLite is Send+Sync, wrapped in Mutex since detect_from_path needs &mut self.
@@ -55,27 +52,34 @@ const CLS_MODEL: ModelSpec = ModelSpec {
 
 /// PaddleOCR backend via ONNX Runtime.
 pub struct PaddleBackend {
-    config: OcrConfig,
+    config: BackendConfig,
 }
 
 impl PaddleBackend {
     /// Create a new PaddleOCR backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
         }
     }
 
     /// Create a new PaddleOCR backend with custom configuration.
     #[allow(dead_code)]
     pub fn with_config(config: OcrConfig) -> Self {
+        Self {
+            config: BackendConfig::with_config(config),
+        }
+    }
+
+    /// Create a new PaddleOCR backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
         Self { config }
     }
 
     /// Find model directory, checking config path, standard locations, and legacy names.
     fn find_model_dir(&self) -> Option<PathBuf> {
         // Check config path first
-        if let Some(ref path) = self.config.model_path {
+        if let Some(ref path) = self.config.ocr.model_path {
             if MODEL_CONFIG.has_required_files(path) || Self::has_legacy_models(path) {
                 return Some(path.clone());
             }
@@ -170,7 +174,7 @@ impl PaddleBackend {
     }
 
     /// Run OCR on an image path.
-    fn run_paddle(&self, image_path: &Path) -> Result<String, OcrError> {
+    fn run_paddle_impl(&self, image_path: &Path) -> Result<String, OcrError> {
         let engine_mutex = self.get_or_init_engine()?;
         let mut ocr = engine_mutex
             .lock()
@@ -219,34 +223,14 @@ impl OcrBackend for PaddleBackend {
 
     fn availability_hint(&self) -> String {
         model_availability_hint(
-            self.config.model_path.as_ref(),
+            self.config.ocr.model_path.as_ref(),
             &MODEL_CONFIG,
             "PaddleOCR",
             "15 MB",
         )
     }
 
-    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-        let text = self.run_paddle(image_path)?;
-        Ok(build_ocr_result(
-            text,
-            OcrBackendType::PaddleOcr,
-            None,
-            start,
-        ))
-    }
-
-    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-        let temp_dir = TempDir::new()?;
-        let image_path = pdf_utils::pdf_page_to_image(pdf_path, page, temp_dir.path())?;
-        let text = self.run_paddle(&image_path)?;
-        Ok(build_ocr_result(
-            text,
-            OcrBackendType::PaddleOcr,
-            None,
-            start,
-        ))
+    fn run_ocr(&self, image_path: &Path) -> Result<String, OcrError> {
+        self.run_paddle_impl(image_path)
     }
 }

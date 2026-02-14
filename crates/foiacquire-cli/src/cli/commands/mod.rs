@@ -5,6 +5,7 @@
 mod analyze;
 mod annotate;
 mod config_cmd;
+mod daemon;
 mod db;
 mod discover;
 mod documents;
@@ -27,7 +28,7 @@ use clap::{Parser, Subcommand};
 use foiacquire::config::{load_settings_with_options, LoadOptions};
 
 // Re-export ReloadMode for use by other modules
-pub use scrape::ReloadMode;
+pub use daemon::ReloadMode;
 
 /// Backend type for rate limiting storage.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]

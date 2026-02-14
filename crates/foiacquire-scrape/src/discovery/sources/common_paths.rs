@@ -3,11 +3,11 @@
 //! Enumerates well-known paths that often contain documents on government sites.
 
 use async_trait::async_trait;
-use std::time::Duration;
 use tracing::debug;
 
+use super::create_discovery_client;
+use crate::discovery::url_utils::normalize_base_url;
 use crate::discovery::{DiscoveredUrl, DiscoveryError, DiscoverySource, DiscoverySourceConfig};
-use crate::HttpClient;
 use foiacquire::models::DiscoveryMethod;
 
 /// Common paths found on government document sites.
@@ -69,6 +69,7 @@ const COMMON_PATHS: &[&str] = &[
 ];
 
 /// Discovery source that checks common document paths.
+#[derive(Default)]
 pub struct CommonPathsSource {
     /// Additional custom paths to check.
     custom_paths: Vec<String>,
@@ -104,14 +105,7 @@ impl CommonPathsSource {
     ) -> Option<(String, u16)> {
         let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
-        // Create HTTP client with privacy configuration
-        let client = match HttpClient::with_privacy(
-            "common_paths",
-            Duration::from_secs(30),
-            Duration::from_millis(config.rate_limit_ms),
-            Some("Mozilla/5.0 (compatible; FOIAcquire/1.0)"),
-            &config.privacy,
-        ) {
+        let client = match create_discovery_client("common_paths", config, None, None) {
             Ok(c) => c,
             Err(_) => return None,
         };
@@ -131,12 +125,6 @@ impl CommonPathsSource {
     }
 }
 
-impl Default for CommonPathsSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[async_trait]
 impl DiscoverySource for CommonPathsSource {
     fn name(&self) -> &str {
@@ -147,21 +135,13 @@ impl DiscoverySource for CommonPathsSource {
         DiscoveryMethod::CommonPath
     }
 
-    fn requires_browser(&self) -> bool {
-        false
-    }
-
     async fn discover(
         &self,
         target_domain: &str,
         _search_terms: &[String],
         config: &DiscoverySourceConfig,
     ) -> Result<Vec<DiscoveredUrl>, DiscoveryError> {
-        let base_url = if target_domain.starts_with("http") {
-            target_domain.trim_end_matches('/').to_string()
-        } else {
-            format!("https://{}", target_domain.trim_end_matches('/'))
-        };
+        let base_url = normalize_base_url(target_domain);
 
         // Get additional paths from config
         let extra_paths: Vec<String> = config

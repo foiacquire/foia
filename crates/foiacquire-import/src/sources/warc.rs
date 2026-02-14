@@ -107,30 +107,6 @@ fn parse_http_response(data: &[u8]) -> Option<(HttpResponseHeaders, &[u8])> {
     ))
 }
 
-/// Guess MIME type from URL extension.
-pub fn guess_mime_type_from_url(url: &str) -> String {
-    let path = url.split('?').next().unwrap_or(url);
-    if path.ends_with(".pdf") || path.ends_with(".PDF") {
-        "application/pdf".to_string()
-    } else if path.ends_with(".html") || path.ends_with(".htm") {
-        "text/html".to_string()
-    } else if path.ends_with(".txt") {
-        "text/plain".to_string()
-    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
-        "image/jpeg".to_string()
-    } else if path.ends_with(".png") {
-        "image/png".to_string()
-    } else if path.ends_with(".gif") {
-        "image/gif".to_string()
-    } else if path.ends_with(".doc") {
-        "application/msword".to_string()
-    } else if path.ends_with(".docx") {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string()
-    } else {
-        "application/octet-stream".to_string()
-    }
-}
-
 /// WARC archive import source.
 pub struct WarcImportSource {
     /// Path to the WARC file.
@@ -342,7 +318,7 @@ impl WarcImportSource {
             let mime_type = headers
                 .content_type
                 .clone()
-                .unwrap_or_else(|| guess_mime_type_from_url(&target_uri));
+                .unwrap_or_else(|| foiacquire::utils::guess_mime_from_url(&target_uri).to_string());
 
             if config.dry_run {
                 println!(
@@ -416,55 +392,6 @@ impl ImportSource for WarcImportSource {
     fn supports_resume(&self) -> bool {
         // Only uncompressed WARC files support byte-offset resume
         !self.is_gzip
-    }
-
-    fn load_progress(&self) -> Option<ImportProgress> {
-        let path = self.progress_path();
-        let content = std::fs::read_to_string(&path).ok()?;
-        let content = content.trim();
-
-        // Handle legacy format: "done", "offset:12345", or "error:message"
-        if content == "done" {
-            return Some(ImportProgress {
-                position: 0,
-                done: true,
-                error: None,
-            });
-        }
-
-        if let Some(error_msg) = content.strip_prefix("error:") {
-            return Some(ImportProgress {
-                position: 0,
-                done: false,
-                error: Some(error_msg.to_string()),
-            });
-        }
-
-        if let Some(offset_str) = content.strip_prefix("offset:") {
-            if let Ok(offset) = offset_str.parse::<u64>() {
-                return Some(ImportProgress {
-                    position: offset,
-                    done: false,
-                    error: None,
-                });
-            }
-        }
-
-        // Try JSON format
-        serde_json::from_str(content).ok()
-    }
-
-    fn save_progress(&self, progress: &ImportProgress) -> std::io::Result<()> {
-        let path = self.progress_path();
-        // Use legacy format for compatibility
-        let content = if progress.done {
-            "done".to_string()
-        } else if let Some(ref err) = progress.error {
-            format!("error:{}", err)
-        } else {
-            format!("offset:{}", progress.position)
-        };
-        std::fs::write(&path, content)
     }
 
     async fn run_import(

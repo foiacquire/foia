@@ -4,12 +4,12 @@ use async_trait::async_trait;
 
 use crate::services::ner::{EntityType, NerBackend, NerResult, RegexNerBackend};
 use foiacquire::models::Document;
-use foiacquire::repository::diesel_models::NewDocumentEntity;
+use foiacquire::repository::models::NewDocumentEntity;
 use foiacquire::repository::DieselDocumentRepository;
 #[cfg(feature = "gis")]
 use foiacquire::services::geolookup;
 
-use super::annotator::Annotator;
+use super::annotator::{get_document_text, Annotator};
 use super::types::{AnnotationError, AnnotationOutput};
 
 /// Annotator that extracts named entities from document text.
@@ -50,34 +50,14 @@ impl Annotator for NerAnnotator {
         "Named Entity Recognition"
     }
 
-    fn version(&self) -> i32 {
-        1
-    }
-
-    async fn is_available(&self) -> bool {
-        true
-    }
-
-    fn availability_hint(&self) -> String {
-        String::new()
-    }
-
     async fn annotate(
         &self,
         doc: &Document,
         doc_repo: &DieselDocumentRepository,
     ) -> Result<AnnotationOutput, AnnotationError> {
-        let version_id = match doc.current_version() {
-            Some(v) => v.id,
-            None => return Ok(AnnotationOutput::Skipped),
-        };
-
-        let text = match doc_repo
-            .get_combined_page_text(&doc.id, version_id as i32)
-            .await
-        {
-            Ok(Some(t)) if !t.is_empty() => t,
-            _ => return Ok(AnnotationOutput::Skipped),
+        let text = match get_document_text(doc, doc_repo).await {
+            Ok(t) => t,
+            Err(output) => return Ok(output),
         };
 
         let result = self.backend.extract(&text);

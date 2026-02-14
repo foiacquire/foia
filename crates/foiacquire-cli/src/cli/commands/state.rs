@@ -17,9 +17,9 @@ pub async fn cmd_crawl_status(
     settings: &Settings,
     source_id: Option<String>,
 ) -> anyhow::Result<()> {
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let crawl_repo = repos.crawl;
 
     let sources = match &source_id {
         Some(id) => source_repo.get(id).await?.into_iter().collect(),
@@ -125,8 +125,8 @@ pub async fn cmd_crawl_clear(
         return Ok(());
     }
 
-    let ctx = settings.create_db_context()?;
-    let crawl_repo = ctx.crawl();
+    let repos = settings.repositories()?;
+    let crawl_repo = repos.crawl;
     crawl_repo.clear_source_all(source_id).await?;
 
     println!(
@@ -156,9 +156,9 @@ pub async fn cmd_crawl(settings: &Settings, source_id: &str, _limit: usize) -> a
         }
     };
 
-    let ctx = settings.create_db_context()?;
-    let source_repo = ctx.sources();
-    let crawl_repo = Arc::new(ctx.crawl());
+    let repos = settings.repositories()?;
+    let source_repo = repos.sources;
+    let crawl_repo = Arc::new(repos.crawl);
 
     // Auto-register source
     let source = match source_repo.get(source_id).await? {

@@ -14,31 +14,18 @@
 
 #![allow(dead_code)]
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
-use tempfile::TempDir;
-use tokio::runtime::Handle;
-use tracing::{debug, warn};
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
-use super::pdf_utils;
-use foiacquire::http_client::HttpClient;
-use foiacquire::privacy::PrivacyConfig;
-use foiacquire::rate_limit::{backoff_delay, get_delay_from_env, parse_retry_after};
-
-/// Maximum retry attempts on rate limit errors.
-const MAX_RETRIES: u32 = 5;
+use super::api_backend;
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 
 /// Groq Vision OCR backend using OpenAI-compatible API.
 pub struct GroqBackend {
-    config: OcrConfig,
+    config: BackendConfig,
     api_key: Option<String>,
     model: String,
-    privacy: PrivacyConfig,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,30 +81,27 @@ impl GroqBackend {
     /// Create a new Groq backend with default configuration.
     pub fn new() -> Self {
         Self {
-            config: OcrConfig::default(),
+            config: BackendConfig::new(),
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: "llama-4-scout-17b-16e-instruct".to_string(),
-            privacy: PrivacyConfig::default(),
         }
     }
 
     /// Create a new Groq backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
         Self {
-            config,
+            config: BackendConfig::with_config(config),
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: "llama-4-scout-17b-16e-instruct".to_string(),
-            privacy: PrivacyConfig::default(),
         }
     }
 
-    /// Create a new Groq backend with privacy configuration.
-    pub fn with_privacy(privacy: PrivacyConfig) -> Self {
+    /// Create a new Groq backend from a full backend configuration.
+    pub fn from_backend_config(config: BackendConfig) -> Self {
         Self {
-            config: OcrConfig::default(),
+            config,
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: "llama-4-scout-17b-16e-instruct".to_string(),
-            privacy,
         }
     }
 
@@ -133,18 +117,6 @@ impl GroqBackend {
         self
     }
 
-    /// Create an HTTP client for Groq requests.
-    fn create_client(&self) -> Result<HttpClient, OcrError> {
-        HttpClient::with_privacy(
-            "groq-ocr",
-            Duration::from_secs(120),
-            Duration::from_millis(0),
-            None,
-            &self.privacy,
-        )
-        .map_err(|e| OcrError::OcrFailed(format!("Failed to create HTTP client: {}", e)))
-    }
-
     /// Run Groq OCR on an image (async implementation with rate limiting).
     async fn run_groq_async(&self, image_path: &Path) -> Result<String, OcrError> {
         let api_key = self.api_key.as_ref().ok_or_else(|| {
@@ -153,15 +125,7 @@ impl GroqBackend {
             )
         })?;
 
-        let image_bytes = fs::read(image_path)?;
-        let image_base64 = base64::engine::general_purpose::STANDARD.encode(&image_bytes);
-
-        let mime_type = if image_path.extension().map(|e| e == "png").unwrap_or(false) {
-            "image/png"
-        } else {
-            "image/jpeg"
-        };
-
+        let (image_base64, mime_type) = api_backend::encode_image_base64(image_path)?;
         let data_url = format!("data:{};base64,{}", mime_type, image_base64);
 
         let request = GroqRequest {
@@ -170,7 +134,7 @@ impl GroqBackend {
                 role: "user".to_string(),
                 content: vec![
                     GroqContent::Text {
-                        text: "Extract all text from this image. Return only the extracted text, preserving the original layout and formatting as much as possible. Do not add any explanations or commentary.".to_string(),
+                        text: api_backend::VISION_OCR_PROMPT.to_string(),
                     },
                     GroqContent::ImageUrl {
                         image_url: GroqImageUrl { url: data_url },
@@ -181,94 +145,53 @@ impl GroqBackend {
             temperature: 0.1,
         };
 
-        let client = self.create_client()?;
+        let client = self.config.create_http_client("groq-ocr")?;
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 
-        // Rate limiting: wait before request (default 200ms)
-        let delay = get_delay_from_env("GROQ_DELAY_MS", 200);
-        if delay > Duration::ZERO {
-            debug!("Groq: waiting {:?} before request", delay);
-            tokio::time::sleep(delay).await;
+        api_backend::apply_rate_delay("GROQ_DELAY_MS", 200, "Groq").await;
+
+        let response = api_backend::retry_on_rate_limit(OcrBackendType::Groq, || {
+            let h = headers.clone();
+            async {
+                client
+                    .post_json_with_headers(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        &request,
+                        h,
+                    )
+                    .await
+                    .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))
+            }
+        })
+        .await?;
+
+        if !response.status.is_success() {
+            let status = response.status;
+            let body = response.text().await.unwrap_or_default();
+            return Err(OcrError::OcrFailed(format!(
+                "Groq API error ({}): {}",
+                status, body
+            )));
         }
 
-        // Retry loop with exponential backoff on 429
-        let mut attempt = 0;
-        loop {
-            let response = client
-                .post_json_with_headers(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    &request,
-                    headers.clone(),
-                )
-                .await
-                .map_err(|e| OcrError::OcrFailed(format!("HTTP request failed: {}", e)))?;
+        let groq_response: GroqResponse = response
+            .json()
+            .await
+            .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
 
-            // Handle rate limiting (429)
-            if response.status.as_u16() == 429 {
-                // Get Retry-After header
-                let retry_after = response.headers.get("retry-after").map(|s| s.as_str());
-                let retry_after_secs = retry_after.and_then(|s| s.parse::<u64>().ok());
-
-                if attempt >= MAX_RETRIES {
-                    // Return RateLimited error so fallback chain can try next backend
-                    return Err(OcrError::RateLimited {
-                        backend: OcrBackendType::Groq,
-                        retry_after_secs,
-                    });
-                }
-
-                let wait =
-                    parse_retry_after(retry_after).unwrap_or_else(|| backoff_delay(attempt, 1000));
-
-                warn!(
-                    "Groq rate limited (attempt {}), waiting {:?}",
-                    attempt + 1,
-                    wait
-                );
-                tokio::time::sleep(wait).await;
-                attempt += 1;
-                continue;
-            }
-
-            if !response.status.is_success() {
-                let status = response.status;
-                let body = response.text().await.unwrap_or_default();
-                return Err(OcrError::OcrFailed(format!(
-                    "Groq API error ({}): {}",
-                    status, body
-                )));
-            }
-
-            let groq_response: GroqResponse = response
-                .json()
-                .await
-                .map_err(|e| OcrError::OcrFailed(format!("Failed to parse response: {}", e)))?;
-
-            if let Some(error) = groq_response.error {
-                return Err(OcrError::OcrFailed(format!(
-                    "Groq API error: {}",
-                    error.message
-                )));
-            }
-
-            let text = groq_response
-                .choices
-                .and_then(|c| c.into_iter().next())
-                .map(|c| c.message.content)
-                .unwrap_or_default();
-
-            return Ok(text);
+        if let Some(error) = groq_response.error {
+            return Err(OcrError::OcrFailed(format!(
+                "Groq API error: {}",
+                error.message
+            )));
         }
-    }
 
-    /// Run Groq OCR on an image (blocking wrapper).
-    fn run_groq(&self, image_path: &Path) -> Result<String, OcrError> {
-        let handle = Handle::try_current().map_err(|_| {
-            OcrError::OcrFailed("No tokio runtime available for Groq OCR".to_string())
-        })?;
-
-        handle.block_on(self.run_groq_async(image_path))
+        groq_response
+            .choices
+            .and_then(|c| c.into_iter().next())
+            .map(|c| c.message.content)
+            .ok_or_else(|| OcrError::OcrFailed("Groq returned no choices".to_string()))
     }
 }
 
@@ -297,35 +220,11 @@ impl OcrBackend for GroqBackend {
         }
     }
 
-    fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-        let text = self.run_groq(image_path)?;
-        let elapsed = start.elapsed();
-
-        Ok(OcrResult {
-            text,
-            confidence: None,
-            backend: OcrBackendType::Groq,
-            model: Some(self.model.clone()),
-            processing_time_ms: elapsed.as_millis() as u64,
-        })
+    fn run_ocr(&self, image_path: &Path) -> Result<String, OcrError> {
+        api_backend::block_on_async("Groq", self.run_groq_async(image_path))
     }
 
-    fn ocr_pdf_page(&self, pdf_path: &Path, page: u32) -> Result<OcrResult, OcrError> {
-        let start = Instant::now();
-
-        let temp_dir = TempDir::new()?;
-        let image_path = pdf_utils::pdf_page_to_image(pdf_path, page, temp_dir.path())?;
-
-        let text = self.run_groq(&image_path)?;
-        let elapsed = start.elapsed();
-
-        Ok(OcrResult {
-            text,
-            confidence: None,
-            backend: OcrBackendType::Groq,
-            model: Some(self.model.clone()),
-            processing_time_ms: elapsed.as_millis() as u64,
-        })
+    fn model_name(&self) -> Option<String> {
+        Some(self.model.clone())
     }
 }

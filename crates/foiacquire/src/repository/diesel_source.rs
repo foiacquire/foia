@@ -7,12 +7,12 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::diesel_models::SourceRecord;
+use super::models::SourceRecord;
 use super::pool::{DbPool, DieselError};
 use super::{parse_datetime, parse_datetime_opt};
 use crate::models::{Source, SourceType};
 use crate::schema::sources;
-use crate::{with_conn, with_conn_split};
+use crate::with_conn;
 
 /// Convert a database record to a domain model.
 impl TryFrom<SourceRecord> for Source {
@@ -70,54 +70,66 @@ impl DieselSourceRepository {
 
     /// Save a source (insert or update).
     pub async fn save(&self, source: &Source) -> Result<(), DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::Sources;
+        use sea_query::{OnConflict, Query};
+
         let metadata_json =
             serde_json::to_string(&source.metadata).unwrap_or_else(|_| "{}".to_string());
         let created_at = source.created_at.to_rfc3339();
         let last_scraped = source.last_scraped.map(|dt| dt.to_rfc3339());
         let source_type = source.source_type.as_str().to_string();
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                diesel::replace_into(sources::table)
-                    .values((
-                        sources::id.eq(&source.id),
-                        sources::source_type.eq(&source_type),
-                        sources::name.eq(&source.name),
-                        sources::base_url.eq(&source.base_url),
-                        sources::metadata.eq(&metadata_json),
-                        sources::created_at.eq(&created_at),
-                        sources::last_scraped.eq(&last_scraped),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            },
-            postgres: conn => {
-                use diesel::upsert::excluded;
-                diesel::insert_into(sources::table)
-                    .values((
-                        sources::id.eq(&source.id),
-                        sources::source_type.eq(&source_type),
-                        sources::name.eq(&source.name),
-                        sources::base_url.eq(&source.base_url),
-                        sources::metadata.eq(&metadata_json),
-                        sources::created_at.eq(&created_at),
-                        sources::last_scraped.eq(&last_scraped),
-                    ))
-                    .on_conflict(sources::id)
-                    .do_update()
-                    .set((
-                        sources::source_type.eq(excluded(sources::source_type)),
-                        sources::name.eq(excluded(sources::name)),
-                        sources::base_url.eq(excluded(sources::base_url)),
-                        sources::metadata.eq(excluded(sources::metadata)),
-                        sources::last_scraped.eq(excluded(sources::last_scraped)),
-                    ))
-                    .execute(&mut conn)
-                    .await?;
-                Ok(())
-            }
-        )
+        let stmt = Query::insert()
+            .into_table(Sources::Table)
+            .columns([
+                Sources::Id,
+                Sources::SourceType,
+                Sources::Name,
+                Sources::BaseUrl,
+                Sources::Metadata,
+                Sources::CreatedAt,
+                Sources::LastScraped,
+            ])
+            .values_panic([
+                source.id.clone().into(),
+                source_type.clone().into(),
+                source.name.clone().into(),
+                source.base_url.clone().into(),
+                metadata_json.clone().into(),
+                created_at.clone().into(),
+                last_scraped.clone().into(),
+            ])
+            .on_conflict(
+                OnConflict::column(Sources::Id)
+                    .update_columns([
+                        Sources::SourceType,
+                        Sources::Name,
+                        Sources::BaseUrl,
+                        Sources::Metadata,
+                        Sources::LastScraped,
+                    ])
+                    .to_owned(),
+            )
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(&source.id)
+                .bind::<diesel::sql_types::Text, _>(&source_type)
+                .bind::<diesel::sql_types::Text, _>(&source.name)
+                .bind::<diesel::sql_types::Text, _>(&source.base_url)
+                .bind::<diesel::sql_types::Text, _>(&metadata_json)
+                .bind::<diesel::sql_types::Text, _>(&created_at)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
+                    last_scraped.as_deref(),
+                )
+                .execute(&mut conn)
+                .await?;
+            Ok(())
+        })
     }
 
     /// Delete a source.
@@ -164,66 +176,51 @@ impl DieselSourceRepository {
     /// Rename a source ID, updating all related tables.
     /// Returns the number of documents and crawl URLs updated.
     pub async fn rename(&self, old_id: &str, new_id: &str) -> Result<(usize, usize), DieselError> {
-        with_conn_split!(self.pool,
-            sqlite: conn => {
-                let docs_updated =
-                    diesel::sql_query("UPDATE documents SET source_id = ?1 WHERE source_id = ?2")
-                        .bind::<diesel::sql_types::Text, _>(new_id)
-                        .bind::<diesel::sql_types::Text, _>(old_id)
-                        .execute(&mut conn)
-                        .await?;
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::{CrawlConfig, CrawlUrls, Documents, Sources};
+        use sea_query::{Expr, Query};
 
-                let crawls_updated =
-                    diesel::sql_query("UPDATE crawl_urls SET source_id = ?1 WHERE source_id = ?2")
-                        .bind::<diesel::sql_types::Text, _>(new_id)
-                        .bind::<diesel::sql_types::Text, _>(old_id)
-                        .execute(&mut conn)
-                        .await?;
+        let update_docs = Query::update()
+            .table(Documents::Table)
+            .value(Documents::SourceId, new_id)
+            .and_where(Expr::col(Documents::SourceId).eq(old_id))
+            .to_owned();
+        let update_crawl_urls = Query::update()
+            .table(CrawlUrls::Table)
+            .value(CrawlUrls::SourceId, new_id)
+            .and_where(Expr::col(CrawlUrls::SourceId).eq(old_id))
+            .to_owned();
+        let update_crawl_config = Query::update()
+            .table(CrawlConfig::Table)
+            .value(CrawlConfig::SourceId, new_id)
+            .and_where(Expr::col(CrawlConfig::SourceId).eq(old_id))
+            .to_owned();
+        let update_sources = Query::update()
+            .table(Sources::Table)
+            .value(Sources::Id, new_id)
+            .and_where(Expr::col(Sources::Id).eq(old_id))
+            .to_owned();
 
-                diesel::sql_query("UPDATE crawl_config SET source_id = ?1 WHERE source_id = ?2")
-                    .bind::<diesel::sql_types::Text, _>(new_id)
-                    .bind::<diesel::sql_types::Text, _>(old_id)
-                    .execute(&mut conn)
-                    .await?;
+        let sql_docs = build_sql(&self.pool, &update_docs);
+        let sql_crawl_urls = build_sql(&self.pool, &update_crawl_urls);
+        let sql_crawl_config = build_sql(&self.pool, &update_crawl_config);
+        let sql_sources = build_sql(&self.pool, &update_sources);
 
-                diesel::sql_query("UPDATE sources SET id = ?1 WHERE id = ?2")
-                    .bind::<diesel::sql_types::Text, _>(new_id)
-                    .bind::<diesel::sql_types::Text, _>(old_id)
-                    .execute(&mut conn)
-                    .await?;
-
-                Ok((docs_updated, crawls_updated))
-            },
-            postgres: conn => {
-                let docs_updated =
-                    diesel::sql_query("UPDATE documents SET source_id = $1 WHERE source_id = $2")
-                        .bind::<diesel::sql_types::Text, _>(new_id)
-                        .bind::<diesel::sql_types::Text, _>(old_id)
-                        .execute(&mut conn)
-                        .await?;
-
-                let crawls_updated =
-                    diesel::sql_query("UPDATE crawl_urls SET source_id = $1 WHERE source_id = $2")
-                        .bind::<diesel::sql_types::Text, _>(new_id)
-                        .bind::<diesel::sql_types::Text, _>(old_id)
-                        .execute(&mut conn)
-                        .await?;
-
-                diesel::sql_query("UPDATE crawl_config SET source_id = $1 WHERE source_id = $2")
-                    .bind::<diesel::sql_types::Text, _>(new_id)
-                    .bind::<diesel::sql_types::Text, _>(old_id)
-                    .execute(&mut conn)
-                    .await?;
-
-                diesel::sql_query("UPDATE sources SET id = $1 WHERE id = $2")
-                    .bind::<diesel::sql_types::Text, _>(new_id)
-                    .bind::<diesel::sql_types::Text, _>(old_id)
-                    .execute(&mut conn)
-                    .await?;
-
-                Ok((docs_updated, crawls_updated))
-            }
-        )
+        with_conn!(self.pool, conn, {
+            let docs_updated = diesel::sql_query(&sql_docs)
+                .execute(&mut conn)
+                .await?;
+            let crawls_updated = diesel::sql_query(&sql_crawl_urls)
+                .execute(&mut conn)
+                .await?;
+            diesel::sql_query(&sql_crawl_config)
+                .execute(&mut conn)
+                .await?;
+            diesel::sql_query(&sql_sources)
+                .execute(&mut conn)
+                .await?;
+            Ok((docs_updated, crawls_updated))
+        })
     }
 }
 

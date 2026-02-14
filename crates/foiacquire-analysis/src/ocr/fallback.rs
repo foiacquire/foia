@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
-use super::backend::{OcrBackend, OcrBackendType, OcrConfig, OcrError, OcrResult};
+use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrError, OcrResult};
 use super::deepseek::DeepSeekBackend;
 use super::gemini::GeminiBackend;
 use super::groq::GroqBackend;
@@ -34,8 +34,8 @@ impl FallbackOcrBackend {
     ///
     /// # Arguments
     /// * `backend_names` - Ordered list of backend names to try (e.g., ["groq", "gemini"])
-    /// * `config` - OCR configuration (language, GPU settings, etc.)
-    pub fn from_names(backend_names: &[&str], config: OcrConfig) -> Self {
+    /// * `config` - Backend configuration (OCR settings, privacy, etc.)
+    pub fn from_names(backend_names: &[&str], config: BackendConfig) -> Self {
         let mut backends: Vec<Arc<dyn OcrBackend>> = Vec::new();
 
         for name in backend_names {
@@ -57,7 +57,7 @@ impl FallbackOcrBackend {
 
         // If no backends available, try tesseract as last resort
         if backends.is_empty() {
-            let tesseract = Arc::new(TesseractBackend::with_config(config));
+            let tesseract = Arc::new(TesseractBackend::from_backend_config(config));
             if tesseract.is_available() {
                 backends.push(tesseract);
             }
@@ -73,28 +73,28 @@ impl FallbackOcrBackend {
 
     /// Create a fallback backend for a single backend (no fallback).
     #[allow(dead_code)]
-    pub fn single(backend_name: &str, config: OcrConfig) -> Self {
+    pub fn single(backend_name: &str, config: BackendConfig) -> Self {
         Self::from_names(&[backend_name], config)
     }
 
     /// Create a backend by name.
-    fn create_backend(name: &str, config: &OcrConfig) -> Option<Arc<dyn OcrBackend>> {
+    fn create_backend(name: &str, config: &BackendConfig) -> Option<Arc<dyn OcrBackend>> {
         match name.to_lowercase().as_str() {
-            "tesseract" => Some(Arc::new(TesseractBackend::with_config(config.clone()))),
-            "groq" => Some(Arc::new(GroqBackend::with_config(config.clone()))),
-            "gemini" => Some(Arc::new(GeminiBackend::with_config(config.clone()))),
-            "deepseek" => Some(Arc::new(DeepSeekBackend::with_config(config.clone()))),
+            "tesseract" => Some(Arc::new(TesseractBackend::from_backend_config(config.clone()))),
+            "groq" => Some(Arc::new(GroqBackend::from_backend_config(config.clone()))),
+            "gemini" => Some(Arc::new(GeminiBackend::from_backend_config(config.clone()))),
+            "deepseek" => Some(Arc::new(DeepSeekBackend::from_backend_config(config.clone()))),
             #[cfg(feature = "ocr-ocrs")]
-            "ocrs" => Some(Arc::new(OcrsBackend::with_config(config.clone()))),
+            "ocrs" => Some(Arc::new(OcrsBackend::from_backend_config(config.clone()))),
             #[cfg(feature = "ocr-paddle")]
-            "paddleocr" | "paddle" => Some(Arc::new(PaddleBackend::with_config(config.clone()))),
+            "paddleocr" | "paddle" => Some(Arc::new(PaddleBackend::from_backend_config(config.clone()))),
             _ => None,
         }
     }
 
     /// Check if a named backend is available (has required binaries/API keys).
     pub fn check_backend_available(name: &str) -> bool {
-        let config = OcrConfig::default();
+        let config = BackendConfig::default();
         Self::create_backend(name, &config)
             .map(|b| b.is_available())
             .unwrap_or(false)
@@ -183,6 +183,10 @@ impl OcrBackend for FallbackOcrBackend {
         }
     }
 
+    fn run_ocr(&self, image_path: &Path) -> Result<String, OcrError> {
+        self.ocr_image(image_path).map(|r| r.text)
+    }
+
     fn ocr_image(&self, image_path: &Path) -> Result<OcrResult, OcrError> {
         self.run_with_fallback(|backend| backend.ocr_image(image_path))
     }
@@ -198,15 +202,17 @@ mod tests {
 
     #[test]
     fn test_empty_config_defaults_to_tesseract() {
-        let backend = FallbackOcrBackend::from_names(&[], OcrConfig::default());
+        let backend = FallbackOcrBackend::from_names(&[], BackendConfig::default());
         // Should have at least tesseract if available
         assert!(backend.backends.len() <= 1);
     }
 
     #[test]
     fn test_unknown_backend_ignored() {
-        let backend =
-            FallbackOcrBackend::from_names(&["unknown_backend", "tesseract"], OcrConfig::default());
+        let backend = FallbackOcrBackend::from_names(
+            &["unknown_backend", "tesseract"],
+            BackendConfig::default(),
+        );
         // Unknown backend should be skipped
         for b in &backend.backends {
             assert_ne!(b.backend_type().as_str(), "unknown_backend");
@@ -215,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_single_backend() {
-        let backend = FallbackOcrBackend::single("tesseract", OcrConfig::default());
+        let backend = FallbackOcrBackend::single("tesseract", BackendConfig::default());
         assert!(backend.backends.len() <= 1);
     }
 }

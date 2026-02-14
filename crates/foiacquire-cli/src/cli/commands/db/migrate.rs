@@ -17,10 +17,10 @@ pub async fn cmd_migrate(settings: &Settings, check: bool, force: bool) -> anyho
         redact_url_password(&settings.database_url())
     );
 
-    let ctx = settings.create_db_context()?;
+    let repos = settings.repositories()?;
 
     // Check current schema version
-    let current_version = ctx.get_schema_version().await.ok().flatten();
+    let current_version = repos.schema_version().await.ok().flatten();
 
     match &current_version {
         Some(v) => println!("  Current schema version: {}", v),
@@ -79,7 +79,7 @@ pub async fn cmd_migrate(settings: &Settings, check: bool, force: bool) -> anyho
     }
 
     // Verify new version
-    if let Ok(Some(new_version)) = ctx.get_schema_version().await {
+    if let Ok(Some(new_version)) = repos.schema_version().await {
         println!("  Schema version is now: {}", new_version);
     }
 
