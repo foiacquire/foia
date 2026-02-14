@@ -115,9 +115,10 @@ pub async fn cmd_annotate(
     // Initial config load
     let config = Config::load().await;
     let config_history = repos.config_history;
+    let scraper_configs = repos.scraper_configs;
 
     let mut config_watcher =
-        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
+        ConfigWatcher::new(daemon, reload, config_history, scraper_configs, config.hash()).await;
     let mut llm_config = config.llm.clone();
     if let Some(ref ep) = endpoint {
         llm_config.set_endpoint(ep.clone());

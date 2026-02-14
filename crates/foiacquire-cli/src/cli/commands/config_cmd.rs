@@ -3,10 +3,9 @@
 use std::path::Path;
 
 use console::style;
-use sha2::{Digest, Sha256};
 
 use crate::cli::icons::{error, success};
-use foiacquire::config::{Config, Settings, SourcesConfig};
+use foiacquire::config::{Config, ScraperConfig, Settings};
 
 /// Migrate a config file into the database.
 pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> anyhow::Result<()> {
@@ -32,78 +31,87 @@ pub async fn cmd_config_transfer(settings: &Settings, file: Option<&Path>) -> an
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "auto-discovered".to_string());
 
-    // Extract SourcesConfig
-    let snapshot = config.to_sources_config();
-
-    // Serialize to JSON
-    let json = serde_json::to_string_pretty(&snapshot)?;
-
-    // Compute hash
-    let mut hasher = Sha256::new();
-    hasher.update(json.as_bytes());
-    let hash = hex::encode(hasher.finalize());
-
-    // Save to DB
-    let repos = settings.repositories()?;
-    let config_repo = repos.config_history;
-
-    let inserted = config_repo.insert_if_new(&json, "json", &hash).await?;
-
-    if inserted {
-        eprintln!("{} Config transferred to database", success());
-        eprintln!("  {} Source: {}", style("→").dim(), source_path);
-        eprintln!("  {} Hash: {}", style("→").dim(), &hash[..16]);
-    } else {
+    if config.scrapers.is_empty() {
         eprintln!(
-            "{} Config already exists in database (same hash)",
+            "{} No scrapers found in config file",
             style("!").yellow()
         );
-        eprintln!("  {} Hash: {}", style("→").dim(), &hash[..16]);
+        return Ok(());
     }
+
+    // Save each scraper config to scraper_configs table
+    let repos = settings.repositories()?;
+    let mut transferred = 0usize;
+    for (source_id, scraper_config) in &config.scrapers {
+        repos.scraper_configs.upsert(source_id, scraper_config).await?;
+        transferred += 1;
+    }
+
+    eprintln!("{} Transferred {} scraper configs to database", success(), transferred);
+    eprintln!("  {} Source: {}", style("→").dim(), source_path);
 
     Ok(())
 }
 
 /// Get a config value from the database.
+///
+/// Supports `<source_id>` to get full config, or `<source_id>.<path>` to navigate.
 pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Result<()> {
     let repos = settings.repositories()?;
-    let config_repo = repos.config_history;
 
-    // Load latest config
-    let entry = config_repo.get_latest().await?.ok_or_else(|| {
-        anyhow::anyhow!("No configuration found in database. Run 'config transfer' first.")
-    })?;
+    // Parse source_id and optional sub-path
+    let (source_id, sub_path) = match setting.split_once('.') {
+        Some((id, path)) => (id, Some(path)),
+        None => (setting, None),
+    };
 
-    // Parse as JSON Value for flexible navigation
-    let value: serde_json::Value = serde_json::from_str(&entry.data)?;
+    let config = repos
+        .scraper_configs
+        .get(source_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No scraper config found for '{}'. Run 'config transfer' first.",
+                source_id
+            )
+        })?;
 
-    // Navigate to the setting
-    let result = navigate_json(&value, setting)?;
+    let value = serde_json::to_value(&config)?;
 
-    // Print the value
+    let result = match sub_path {
+        Some(path) => navigate_json(&value, path)?,
+        None => &value,
+    };
+
     match result {
         serde_json::Value::String(s) => println!("{}", s),
         serde_json::Value::Null => println!("null"),
-        other => println!("{}", serde_json::to_string_pretty(&other)?),
+        other => println!("{}", serde_json::to_string_pretty(other)?),
     }
 
     Ok(())
 }
 
 /// Set a config value in the database.
+///
+/// Path format: `<source_id>.<path>` (e.g., `my-source.fetch.use_browser`)
 pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> anyhow::Result<()> {
     let repos = settings.repositories()?;
-    let config_repo = repos.config_history;
 
-    // Load latest config or start with empty
-    let mut json_value: serde_json::Value = match config_repo.get_latest().await? {
-        Some(entry) => serde_json::from_str(&entry.data)?,
-        None => serde_json::to_value(SourcesConfig::default())?,
+    // Parse source_id and sub-path
+    let (source_id, sub_path) = setting
+        .split_once('.')
+        .ok_or_else(|| anyhow::anyhow!("Setting must be <source_id>.<path> (e.g., my-source.fetch.use_browser)"))?;
+
+    // Load existing config or start with empty
+    let existing = repos.scraper_configs.get(source_id).await?;
+    let mut json_value = match existing {
+        Some(config) => serde_json::to_value(&config)?,
+        None => serde_json::to_value(ScraperConfig::default())?,
     };
 
     // Parse the value (try JSON first, fall back to string)
     let new_value: serde_json::Value = serde_json::from_str(value).unwrap_or_else(|_| {
-        // Try as number
         if let Ok(n) = value.parse::<i64>() {
             serde_json::Value::Number(n.into())
         } else if let Ok(n) = value.parse::<f64>() {
@@ -119,30 +127,18 @@ pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> 
         }
     });
 
-    // Set the value at the path
-    set_json_value(&mut json_value, setting, new_value)?;
+    // Set the value at the sub-path
+    set_json_value(&mut json_value, sub_path, new_value)?;
 
-    // Validate by deserializing into SourcesConfig
-    let _snapshot: SourcesConfig = serde_json::from_value(json_value.clone())
+    // Validate by deserializing into ScraperConfig
+    let config: ScraperConfig = serde_json::from_value(json_value)
         .map_err(|e| anyhow::anyhow!("Invalid config after update: {}", e))?;
 
-    // Serialize back to JSON
-    let json_str = serde_json::to_string_pretty(&json_value)?;
-
-    // Compute hash
-    let mut hasher = Sha256::new();
-    hasher.update(json_str.as_bytes());
-    let hash = hex::encode(hasher.finalize());
-
     // Save to DB
-    let inserted = config_repo.insert_if_new(&json_str, "json", &hash).await?;
+    repos.scraper_configs.upsert(source_id, &config).await?;
 
-    if inserted {
-        eprintln!("{} Config updated", success());
-        eprintln!("  {} {}: {}", style("→").dim(), setting, value);
-    } else {
-        eprintln!("{} No change (value already set)", style("!").yellow());
-    }
+    eprintln!("{} Config updated", success());
+    eprintln!("  {} {}: {}", style("→").dim(), setting, value);
 
     Ok(())
 }

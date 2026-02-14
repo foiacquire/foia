@@ -3,7 +3,7 @@
 use console::style;
 use tokio::sync::mpsc;
 
-use foiacquire::repository::DieselConfigHistoryRepository;
+use foiacquire::repository::{DieselConfigHistoryRepository, DieselScraperConfigRepository};
 
 /// Reload mode for daemon operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -31,6 +31,7 @@ pub enum DaemonAction {
 pub struct ConfigWatcher {
     watcher: Option<mpsc::Receiver<prefer::Config>>,
     config_history: DieselConfigHistoryRepository,
+    scraper_configs: DieselScraperConfigRepository,
     current_hash: String,
     reload: ReloadMode,
     daemon: bool,
@@ -46,6 +47,7 @@ impl ConfigWatcher {
         daemon: bool,
         reload: ReloadMode,
         config_history: DieselConfigHistoryRepository,
+        scraper_configs: DieselScraperConfigRepository,
         initial_hash: String,
     ) -> Self {
         let watcher = if daemon && matches!(reload, ReloadMode::StopProcess | ReloadMode::Inplace) {
@@ -57,6 +59,7 @@ impl ConfigWatcher {
         Self {
             watcher,
             config_history,
+            scraper_configs,
             current_hash: initial_hash,
             reload,
             daemon,
@@ -111,27 +114,42 @@ impl ConfigWatcher {
         {
             tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
 
-            if let Ok(Some(latest_hash)) = self.config_history.get_latest_hash().await {
-                if latest_hash != self.current_hash {
-                    match self.reload {
-                        ReloadMode::StopProcess => {
-                            println!(
-                                "{} Config changed in database, exiting for restart...",
-                                style("↻").cyan()
-                            );
-                            return DaemonAction::Exit;
-                        }
-                        ReloadMode::Inplace => {
-                            println!(
-                                "{} Config changed in database, {}...",
-                                style("↻").cyan(),
-                                inplace_label
-                            );
-                            self.current_hash = latest_hash;
-                            return DaemonAction::Reload;
-                        }
-                        ReloadMode::NextRun => {}
+            // Detect changes via scraper_configs MAX(updated_at)
+            let changed = if let Ok(Some(max_updated)) =
+                self.scraper_configs.max_updated_at().await
+            {
+                max_updated != self.current_hash
+            } else {
+                // Fall back to configuration_history hash
+                self.config_history
+                    .get_latest_hash()
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|h| h != self.current_hash)
+            };
+
+            if changed {
+                match self.reload {
+                    ReloadMode::StopProcess => {
+                        println!(
+                            "{} Config changed in database, exiting for restart...",
+                            style("↻").cyan()
+                        );
+                        return DaemonAction::Exit;
                     }
+                    ReloadMode::Inplace => {
+                        println!(
+                            "{} Config changed in database, {}...",
+                            style("↻").cyan(),
+                            inplace_label
+                        );
+                        if let Ok(Some(max)) = self.scraper_configs.max_updated_at().await {
+                            self.current_hash = max;
+                        }
+                        return DaemonAction::Reload;
+                    }
+                    ReloadMode::NextRun => {}
                 }
             }
         } else {

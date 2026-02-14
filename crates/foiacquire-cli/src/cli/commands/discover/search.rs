@@ -19,7 +19,6 @@ pub async fn cmd_discover_search(
     max_results: usize,
     dry_run: bool,
 ) -> anyhow::Result<()> {
-    use foiacquire::config::Config;
     use foiacquire_scrape::discovery::sources::search::create_search_engine;
     use foiacquire_scrape::discovery::term_extraction::{
         ExtractionContext, LlmTermExtractor, TemplateTermExtractor, TermExtractor,
@@ -41,11 +40,14 @@ pub async fn cmd_discover_search(
     let mut search_terms: Vec<String> = if let Some(t) = terms {
         t.split(',').map(|s| s.trim().to_string()).collect()
     } else {
-        // Try to get terms from config
-        let config = Config::load().await;
-        config
-            .scrapers
+        // Try to get terms from scraper_configs table
+        let repos = settings.repositories()?;
+        repos
+            .scraper_configs
             .get(source_id)
+            .await
+            .ok()
+            .flatten()
             .map(|s| s.discovery.search_queries.clone())
             .unwrap_or_default()
     };

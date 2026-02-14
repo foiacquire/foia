@@ -82,9 +82,10 @@ pub async fn cmd_analyze(
     let repos = settings.repositories()?;
     let doc_repo = repos.documents;
     let config_history = repos.config_history;
+    let scraper_configs = repos.scraper_configs;
 
     let mut config_watcher =
-        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
+        ConfigWatcher::new(daemon, reload, config_history, scraper_configs, config.hash()).await;
 
     let service = AnalysisService::with_ocr_config(
         doc_repo,

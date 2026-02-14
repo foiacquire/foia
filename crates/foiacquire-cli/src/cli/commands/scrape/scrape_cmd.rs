@@ -90,30 +90,25 @@ pub async fn cmd_scrape(
 
     let repos = settings.repositories()?;
     let config_history = repos.config_history;
+    let scraper_config_repo = repos.scraper_configs;
 
     // Initial config load for source list
     let config = Config::load().await;
 
     let mut config_watcher =
-        ConfigWatcher::new(daemon, reload, config_history, config.hash()).await;
+        ConfigWatcher::new(daemon, reload, config_history, scraper_config_repo.clone(), config.hash())
+            .await;
 
     // Determine initial sources to scrape
     let mut sources_to_scrape: Vec<String> = if all {
-        config.scrapers.keys().cloned().collect()
+        scraper_config_repo.list_source_ids().await.unwrap_or_default()
     } else if source_ids.is_empty() {
+        let available = scraper_config_repo.list_source_ids().await.unwrap_or_default();
         println!(
             "{} No sources specified. Use --all or provide source IDs.",
             style("✗").red()
         );
-        println!(
-            "Available sources: {}",
-            config
-                .scrapers
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        println!("Available sources: {}", available.join(", "));
         return Ok(());
     } else {
         source_ids.to_vec()
@@ -129,10 +124,9 @@ pub async fn cmd_scrape(
     }
 
     loop {
-        // For next-run and inplace modes, reload config to get updated source list
+        // For next-run and inplace modes, reload source list from DB
         if daemon && all && matches!(reload, ReloadMode::NextRun | ReloadMode::Inplace) {
-            let new_config = Config::load().await;
-            let new_sources: Vec<String> = new_config.scrapers.keys().cloned().collect();
+            let new_sources = scraper_config_repo.list_source_ids().await.unwrap_or_default();
             if new_sources != sources_to_scrape {
                 println!(
                     "{} Config reloaded ({} sources)",
