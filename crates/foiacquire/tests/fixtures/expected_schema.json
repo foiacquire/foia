@@ -1238,6 +1238,39 @@
         }
       }
     },
+    "scraper_configs": {
+      "name": "scraper_configs",
+      "columns": {
+        "config": {
+          "name": "config",
+          "col_type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "col_type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false
+        },
+        "source_id": {
+          "name": "source_id",
+          "col_type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "col_type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false
+        }
+      }
+    },
     "service_status": {
       "name": "service_status",
       "columns": {
