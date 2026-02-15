@@ -1,4 +1,5 @@
 target/
+.cargo/
+.git/
 *.db
 *.db-*
-.git/
