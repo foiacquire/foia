@@ -121,18 +121,26 @@ pub struct BrowserEngineConfig {
 
     /// Browser selection strategy when multiple URLs are configured.
     /// Options: round-robin (default), random, per-domain.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub selection: SelectionStrategyType,
+}
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
 impl BrowserEngineConfig {
     /// Apply environment variable overrides.
     ///
-    /// - `BROWSER_URL` - Remote Chrome DevTools URL(s), comma-separated for multiple
-    /// - `BROWSER_SELECTION` - Selection strategy (round-robin, random, per-domain)
+    /// - `FOIA_BROWSER_URL` - Remote Chrome DevTools URL(s), comma-separated for multiple
+    /// - `FOIA_BROWSER_SELECTION` - Selection strategy (round-robin, random, per-domain)
     /// - `SOCKS_PROXY` - SOCKS proxy for browser traffic (e.g., "socks5://127.0.0.1:9050")
     pub fn with_env_overrides(mut self) -> Self {
-        if let Ok(val) = std::env::var("BROWSER_URL") {
+        if let Ok(val) = std::env::var("FOIA_BROWSER_URL") {
             if !val.is_empty() {
                 // Check if comma-separated (multiple browsers)
                 if val.contains(',') {
@@ -148,7 +156,7 @@ impl BrowserEngineConfig {
             }
         }
 
-        if let Ok(val) = std::env::var("BROWSER_SELECTION") {
+        if let Ok(val) = std::env::var("FOIA_BROWSER_SELECTION") {
             if let Some(strategy) = SelectionStrategyType::from_str(&val) {
                 self.selection = strategy;
             }

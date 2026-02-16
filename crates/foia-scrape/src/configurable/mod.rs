@@ -118,7 +118,12 @@ impl ConfigurableScraper {
         let client = builder.build()?;
 
         #[cfg(feature = "browser")]
-        let browser_config = config.browser.as_ref().filter(|b| b.enabled).cloned();
+        let browser_config = config
+            .browser
+            .as_ref()
+            .filter(|b| b.enabled)
+            .cloned()
+            .map(|c| c.with_env_overrides());
 
         Ok(Self {
             source,

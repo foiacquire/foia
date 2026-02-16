@@ -63,7 +63,7 @@ WORKDIR /opt/foia
 VOLUME /opt/foia
 
 COPY --from=builder /build/target/release/foia /usr/local/bin/foia
-COPY bin/foia-entrypoint.sh /entrypoint.sh
+COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /usr/local/bin/foia /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
