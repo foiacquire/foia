@@ -22,6 +22,7 @@ pub async fn cmd_analyze(
     mime_type: Option<&str>,
     daemon: bool,
     interval: u64,
+    retry_interval: u32,
     reload: ReloadMode,
 ) -> anyhow::Result<()> {
     // Parse methods from comma-separated string (e.g., "ocr,whisper")
@@ -97,7 +98,8 @@ pub async fn cmd_analyze(
         doc_repo,
         config.analysis.ocr.clone(),
         settings.documents_dir.clone(),
-    );
+    )
+    .with_retry_interval(retry_interval);
 
     // If specific doc_id provided, process just that document (no daemon mode)
     if let Some(id) = doc_id {

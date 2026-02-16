@@ -75,55 +75,86 @@ impl DieselDocumentRepository {
         })
     }
 
+    /// Count documents needing a specific analysis type.
+    ///
+    /// A document needs analysis when:
+    /// - No `complete` result exists in `document_analysis_results` for the type
+    /// - No `failed` result exists within the retry window
+    /// - No `pending` result exists within 90 minutes (worker lock)
+    pub async fn count_needing_analysis(
+        &self,
+        analysis_type: &str,
+        source_id: Option<&str>,
+        mime_type: Option<&str>,
+        retry_interval_hours: u32,
+    ) -> Result<u64, DieselError> {
+        use crate::schema::{document_analysis_results as dar, document_versions};
+        use diesel::dsl::{count_distinct, exists, not};
+
+        let retry_cutoff =
+            (Utc::now() - chrono::Duration::hours(i64::from(retry_interval_hours))).to_rfc3339();
+        let lock_cutoff = (Utc::now() - chrono::Duration::minutes(90)).to_rfc3339();
+
+        with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .inner_join(document_versions::table)
+                .filter(documents::status.ne("failed"))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("complete")),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("failed"))
+                        .filter(dar::created_at.gt(&retry_cutoff)),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("pending"))
+                        .filter(dar::created_at.gt(&lock_cutoff)),
+                )))
+                .into_boxed();
+
+            if let Some(sid) = source_id {
+                query = query.filter(documents::source_id.eq(sid));
+            }
+            if let Some(mime) = mime_type {
+                query = query.filter(document_versions::mime_type.eq(mime));
+            }
+
+            let count: i64 = query
+                .select(count_distinct(documents::id))
+                .first(&mut conn)
+                .await?;
+            Ok(count as u64)
+        })
+    }
+
     /// Count documents needing OCR.
-    /// Documents need OCR if status is 'pending' or 'downloaded' and they have a PDF version.
+    #[deprecated(note = "Use count_needing_analysis(\"ocr\", ...) instead")]
     pub async fn count_needing_ocr(&self, source_id: Option<&str>) -> Result<u64, DieselError> {
-        self.count_needing_ocr_filtered(source_id, None).await
+        self.count_needing_analysis("ocr", source_id, None, 12)
+            .await
     }
 
     /// Count documents needing OCR with optional mime type filter.
+    #[deprecated(note = "Use count_needing_analysis(\"ocr\", ...) instead")]
     pub async fn count_needing_ocr_filtered(
         &self,
         source_id: Option<&str>,
         mime_type: Option<&str>,
     ) -> Result<u64, DieselError> {
-        use crate::schema::document_versions;
-
-        with_conn!(self.pool, conn, {
-            if let Some(mime) = mime_type {
-                // Join with versions to filter by mime type
-                let mut query = documents::table
-                    .inner_join(
-                        document_versions::table
-                            .on(document_versions::document_id.eq(documents::id)),
-                    )
-                    .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
-                    .filter(document_versions::mime_type.eq(mime))
-                    .select(documents::id)
-                    .distinct()
-                    .into_boxed();
-
-                if let Some(sid) = source_id {
-                    query = query.filter(documents::source_id.eq(sid));
-                }
-                let count: i64 = query.count().get_result(&mut conn).await?;
-                Ok(count as u64)
-            } else {
-                // No mime filter — require at least one version exists
-                let mut query = documents::table
-                    .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
-                    .filter(diesel::dsl::exists(
-                        document_versions::table
-                            .filter(document_versions::document_id.eq(documents::id)),
-                    ))
-                    .into_boxed();
-                if let Some(sid) = source_id {
-                    query = query.filter(documents::source_id.eq(sid));
-                }
-                let count: i64 = query.count().get_result(&mut conn).await?;
-                Ok(count as u64)
-            }
-        })
+        self.count_needing_analysis("ocr", source_id, mime_type, 12)
+            .await
     }
 
     /// Count documents needing summarization.
@@ -1398,12 +1429,98 @@ impl DieselDocumentRepository {
 
     /// Get documents needing OCR.
     #[allow(dead_code)]
+    #[deprecated(note = "Use get_needing_analysis(\"ocr\", ...) instead")]
     pub async fn get_needing_ocr(&self, limit: usize) -> Result<Vec<Document>, DieselError> {
-        self.get_needing_ocr_filtered(limit, None, None, None).await
+        self.get_needing_analysis("ocr", limit, None, None, None, 12)
+            .await
+    }
+
+    /// Get documents needing a specific analysis type.
+    ///
+    /// Uses cursor-based pagination: pass `after_id` to fetch the next page.
+    /// Returns documents that have no `complete` result in `document_analysis_results`
+    /// for the given type, no recent `failed` result within the retry window,
+    /// and no `pending` result within the lock window (90 minutes).
+    pub async fn get_needing_analysis(
+        &self,
+        analysis_type: &str,
+        limit: usize,
+        source_id: Option<&str>,
+        mime_type: Option<&str>,
+        after_id: Option<&str>,
+        retry_interval_hours: u32,
+    ) -> Result<Vec<Document>, DieselError> {
+        use crate::schema::{document_analysis_results as dar, document_versions};
+        use diesel::dsl::{exists, not};
+
+        let retry_cutoff =
+            (Utc::now() - chrono::Duration::hours(i64::from(retry_interval_hours))).to_rfc3339();
+        let lock_cutoff = (Utc::now() - chrono::Duration::minutes(90)).to_rfc3339();
+
+        let ids: Vec<String> = with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .inner_join(document_versions::table)
+                .filter(documents::status.ne("failed"))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("complete")),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("failed"))
+                        .filter(dar::created_at.gt(&retry_cutoff)),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("pending"))
+                        .filter(dar::created_at.gt(&lock_cutoff)),
+                )))
+                .into_boxed();
+
+            if let Some(sid) = source_id {
+                query = query.filter(documents::source_id.eq(sid));
+            }
+            if let Some(mime) = mime_type {
+                query = query.filter(document_versions::mime_type.eq(mime));
+            }
+            if let Some(cursor) = after_id {
+                query = query.filter(documents::id.gt(cursor));
+            }
+
+            query
+                .select(documents::id)
+                .distinct()
+                .order(documents::id.asc())
+                .limit(limit as i64)
+                .load::<String>(&mut conn)
+                .await
+        })?;
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
+            documents::table
+                .filter(documents::id.eq_any(&ids))
+                .order(documents::id.asc())
+                .load(&mut conn)
+                .await
+        })?;
+
+        self.records_to_documents(records).await
     }
 
     /// Get documents needing OCR with optional source/mime/cursor filters.
-    /// Uses cursor-based pagination: pass `after_id` to fetch the next page.
+    #[deprecated(note = "Use get_needing_analysis(\"ocr\", ...) instead")]
     pub async fn get_needing_ocr_filtered(
         &self,
         limit: usize,
@@ -1411,65 +1528,8 @@ impl DieselDocumentRepository {
         mime_type: Option<&str>,
         after_id: Option<&str>,
     ) -> Result<Vec<Document>, DieselError> {
-        use crate::schema::document_versions;
-
-        let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
-            if let Some(mime) = mime_type {
-                let mut query = documents::table
-                    .inner_join(
-                        document_versions::table
-                            .on(document_versions::document_id.eq(documents::id)),
-                    )
-                    .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
-                    .filter(document_versions::mime_type.eq(mime))
-                    .into_boxed();
-
-                if let Some(sid) = source_id {
-                    query = query.filter(documents::source_id.eq(sid));
-                }
-                if let Some(cursor) = after_id {
-                    query = query.filter(documents::id.gt(cursor));
-                }
-
-                let doc_ids: Vec<String> = query
-                    .select(documents::id)
-                    .distinct()
-                    .order(documents::id.asc())
-                    .limit(limit as i64)
-                    .load(&mut conn)
-                    .await?;
-
-                documents::table
-                    .filter(documents::id.eq_any(doc_ids))
-                    .order(documents::id.asc())
-                    .load(&mut conn)
-                    .await
-            } else {
-                // No mime filter — require at least one version exists
-                let mut query = documents::table
-                    .filter(documents::status.eq_any(vec!["pending", "downloaded"]))
-                    .filter(diesel::dsl::exists(
-                        document_versions::table
-                            .filter(document_versions::document_id.eq(documents::id)),
-                    ))
-                    .into_boxed();
-
-                if let Some(sid) = source_id {
-                    query = query.filter(documents::source_id.eq(sid));
-                }
-                if let Some(cursor) = after_id {
-                    query = query.filter(documents::id.gt(cursor));
-                }
-
-                query
-                    .order(documents::id.asc())
-                    .limit(limit as i64)
-                    .load(&mut conn)
-                    .await
-            }
-        })?;
-
-        self.records_to_documents(records).await
+        self.get_needing_analysis("ocr", limit, source_id, mime_type, after_id, 12)
+            .await
     }
 
     /// Finalize document - mark as indexed.

@@ -23,11 +23,15 @@ pub use types::{AnalysisEvent, AnalysisResult};
 use foia::config::OcrConfig;
 
 /// Service for document analysis (MIME detection, text extraction, OCR).
+/// Default retry interval for failed analyses (hours).
+const DEFAULT_RETRY_INTERVAL_HOURS: u32 = 12;
+
 pub struct AnalysisService {
     doc_repo: DieselDocumentRepository,
     analysis_manager: AnalysisManager,
     ocr_config: OcrConfig,
     documents_dir: PathBuf,
+    retry_interval_hours: u32,
 }
 
 impl AnalysisService {
@@ -39,6 +43,7 @@ impl AnalysisService {
             analysis_manager: AnalysisManager::with_defaults(),
             ocr_config: OcrConfig::default(),
             documents_dir,
+            retry_interval_hours: DEFAULT_RETRY_INTERVAL_HOURS,
         }
     }
 
@@ -53,7 +58,14 @@ impl AnalysisService {
             analysis_manager: AnalysisManager::with_defaults(),
             ocr_config,
             documents_dir,
+            retry_interval_hours: DEFAULT_RETRY_INTERVAL_HOURS,
         }
+    }
+
+    /// Set the retry interval for failed analyses.
+    pub fn with_retry_interval(mut self, hours: u32) -> Self {
+        self.retry_interval_hours = hours;
+        self
     }
 
     /// Get count of documents needing analysis.
@@ -64,7 +76,7 @@ impl AnalysisService {
     ) -> anyhow::Result<(u64, u64)> {
         let docs = self
             .doc_repo
-            .count_needing_ocr_filtered(source_id, mime_type)
+            .count_needing_analysis("ocr", source_id, mime_type, self.retry_interval_hours)
             .await?;
         let pages = self.doc_repo.count_pages_needing_ocr().await?;
         Ok((docs, pages))
@@ -178,10 +190,10 @@ impl AnalysisService {
         event_tx: &mpsc::Sender<AnalysisEvent>,
         result: &mut AnalysisResult,
     ) -> anyhow::Result<()> {
-        // Get documents needing OCR (same as Phase 1) - we check MIME before processing
+        // Get documents needing analysis - we check MIME before processing
         let total_count = self
             .doc_repo
-            .count_needing_ocr_filtered(source_id, mime_type)
+            .count_needing_analysis("ocr", source_id, mime_type, self.retry_interval_hours)
             .await?;
 
         if total_count == 0 {
@@ -213,11 +225,13 @@ impl AnalysisService {
             let remaining = max_to_check - checked;
             let docs = self
                 .doc_repo
-                .get_needing_ocr_filtered(
+                .get_needing_analysis(
+                    "ocr",
                     remaining.min(batch_size),
                     source_id,
                     mime_type,
                     cursor.as_deref(),
+                    self.retry_interval_hours,
                 )
                 .await?;
 
@@ -337,7 +351,7 @@ impl AnalysisService {
     ) -> anyhow::Result<()> {
         let total_count = self
             .doc_repo
-            .count_needing_ocr_filtered(source_id, mime_type)
+            .count_needing_analysis("ocr", source_id, mime_type, self.retry_interval_hours)
             .await?;
 
         if total_count == 0 {
@@ -376,7 +390,14 @@ impl AnalysisService {
 
             let docs = self
                 .doc_repo
-                .get_needing_ocr_filtered(batch_limit, source_id, mime_type, cursor.as_deref())
+                .get_needing_analysis(
+                    "ocr",
+                    batch_limit,
+                    source_id,
+                    mime_type,
+                    cursor.as_deref(),
+                    self.retry_interval_hours,
+                )
                 .await?;
 
             if docs.is_empty() {
@@ -418,6 +439,14 @@ impl AnalysisService {
                         })
                         .await;
                     continue;
+                }
+
+                // Claim the document so other workers skip it
+                if let Some(v) = doc.current_version() {
+                    let _ = self
+                        .doc_repo
+                        .claim_analysis(&doc.id, v.id as i32, "ocr")
+                        .await;
                 }
 
                 let doc_repo = self.doc_repo.clone();

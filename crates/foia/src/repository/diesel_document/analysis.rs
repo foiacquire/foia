@@ -210,6 +210,24 @@ impl DieselDocumentRepository {
         use crate::repository::sea_tables::DocumentAnalysisResults as Dar;
         use sea_query::{Expr, OnConflict, Query};
 
+        // Clean up any pending claim rows for this document/version/analysis_type.
+        // Claims use backend='pending' which won't conflict with real backend names,
+        // so we must explicitly delete them.
+        with_conn!(self.pool, conn, {
+            diesel::delete(
+                document_analysis_results::table
+                    .filter(document_analysis_results::document_id.eq(document_id))
+                    .filter(document_analysis_results::version_id.eq(version_id))
+                    .filter(document_analysis_results::analysis_type.eq(analysis_type))
+                    .filter(document_analysis_results::backend.eq("pending"))
+                    .filter(document_analysis_results::status.eq("pending"))
+                    .filter(document_analysis_results::page_id.is_null()),
+            )
+            .execute(&mut conn)
+            .await?;
+            Ok::<(), DieselError>(())
+        })?;
+
         let now = Utc::now().to_rfc3339();
         let status = if error.is_some() {
             AnalysisResultStatus::Failed.as_str()
@@ -456,6 +474,38 @@ impl DieselDocumentRepository {
             )
             .execute(&mut conn)
             .await
+        })
+    }
+
+    /// Claim a document for analysis by inserting a `pending` result.
+    ///
+    /// Acts as a distributed lock: other workers will skip documents with a
+    /// recent pending result (within 90 minutes). The pending row is overwritten
+    /// by the completion/failure upsert when processing finishes.
+    pub async fn claim_analysis(
+        &self,
+        document_id: &str,
+        version_id: i32,
+        analysis_type: &str,
+    ) -> Result<(), DieselError> {
+        let now = Utc::now().to_rfc3339();
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(
+                r#"INSERT INTO document_analysis_results
+                   (document_id, version_id, analysis_type, backend, status, created_at)
+                   VALUES ($1, $2, $3, 'pending', 'pending', $4)
+                   ON CONFLICT (document_id, version_id, analysis_type, backend, COALESCE(model, ''))
+                   WHERE page_id IS NULL
+                   DO UPDATE SET status = 'pending', created_at = $4"#,
+            )
+            .bind::<diesel::sql_types::Text, _>(document_id)
+            .bind::<diesel::sql_types::Integer, _>(version_id)
+            .bind::<diesel::sql_types::Text, _>(analysis_type)
+            .bind::<diesel::sql_types::Text, _>(&now)
+            .execute(&mut conn)
+            .await?;
+            Ok(())
         })
     }
 

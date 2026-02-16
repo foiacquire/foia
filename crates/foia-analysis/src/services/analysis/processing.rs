@@ -41,6 +41,20 @@ pub fn extract_document_text_per_page(
         // Non-PDFs are complete immediately - finalize the document
         handle.block_on(doc_repo.finalize_document(&doc.id))?;
 
+        // Record completion so this document won't be picked up again
+        let _ = handle.block_on(doc_repo.store_analysis_result_for_document(
+            &doc.id,
+            version.id as i32,
+            "ocr",
+            "text_extraction",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
+
         return Ok(1);
     }
 
@@ -300,6 +314,22 @@ pub fn ocr_document_page_with_config(
         .block_on(doc_repo.are_all_pages_complete(&page.document_id, page.version_id as i32))?
     {
         handle.block_on(doc_repo.finalize_document(&page.document_id))?;
+
+        // Record completion in document_analysis_results so this document
+        // won't be picked up for OCR analysis again
+        let _ = handle.block_on(doc_repo.store_analysis_result_for_document(
+            &page.document_id,
+            page.version_id as i32,
+            "ocr",
+            "pipeline",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
+
         document_finalized = true;
         tracing::debug!(
             "Document {} finalized after page {} completed",

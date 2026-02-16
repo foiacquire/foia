@@ -229,6 +229,9 @@ enum Commands {
         /// Seconds to wait between checks in daemon mode (default: 60)
         #[arg(long, default_value = "60")]
         interval: u64,
+        /// Hours to wait before retrying failed analyses (default: 12)
+        #[arg(long, default_value = "12")]
+        retry_interval: u32,
         /// Config reload behavior in daemon mode [default: next-run, or inplace if flag used without value]
         #[arg(short = 'r', long, value_enum, num_args = 0..=1, default_value = "next-run", default_missing_value = "inplace", require_equals = true)]
         reload: ReloadMode,
@@ -993,6 +996,7 @@ pub async fn run() -> anyhow::Result<()> {
             mime_type,
             daemon,
             interval,
+            retry_interval,
             reload,
             ..
         } => {
@@ -1006,6 +1010,7 @@ pub async fn run() -> anyhow::Result<()> {
                 mime_type.as_deref(),
                 daemon,
                 interval,
+                retry_interval,
                 reload,
             )
             .await

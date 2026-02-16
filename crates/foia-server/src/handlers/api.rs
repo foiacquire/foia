@@ -101,7 +101,7 @@ pub async fn api_sources(State(state): State<AppState>) -> impl IntoResponse {
 )]
 pub async fn api_status(State(state): State<AppState>) -> impl IntoResponse {
     let doc_count = state.doc_repo.count().await.unwrap_or(0);
-    let needing_ocr = state.doc_repo.count_needing_ocr(None).await.unwrap_or(0);
+    let needing_ocr = state.doc_repo.count_needing_analysis("ocr", None, None, 12).await.unwrap_or(0);
     let needing_summary = state
         .doc_repo
         .count_needing_summarization(None)
@@ -206,7 +206,7 @@ pub async fn api_source_status(
         .unwrap_or(0);
     let needing_ocr = state
         .doc_repo
-        .count_needing_ocr(Some(&source_id))
+        .count_needing_analysis("ocr", Some(&source_id), None, 12)
         .await
         .unwrap_or(0);
     let needing_summary = state
