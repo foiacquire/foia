@@ -16,10 +16,11 @@ pub fn migration() -> Migration {
                 ),
         )
         // Entity type index for top_entities() GROUP BY queries
-        .operation(AddIndex::new(
-            "document_entities",
-            Index::new("idx_document_entities_entity_type").column("entity_type"),
-        ))
+        .operation(
+            RunSql::new(
+                "CREATE INDEX IF NOT EXISTS idx_document_entities_entity_type ON document_entities(entity_type)",
+            ),
+        )
         // Partial index for geocoded entity lookups
         .operation(
             RunSql::portable()
