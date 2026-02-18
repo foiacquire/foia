@@ -10,6 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use super::super::AppState;
 use super::helpers::{bad_request, internal_error, paginate, PaginatedResponse};
+use foia::models::DocumentVersion;
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchQuery {
@@ -32,6 +33,7 @@ pub struct SearchResult {
     pub source_id: String,
     pub page_number: i32,
     pub headline: String,
+    pub file_url: String,
 }
 
 /// Search document page content.
@@ -86,12 +88,23 @@ pub async fn search_content(
 
     let items: Vec<SearchResult> = rows
         .into_iter()
-        .map(|r| SearchResult {
-            document_id: r.document_id,
-            title: r.title,
-            source_id: r.source_id,
-            page_number: r.page_number,
-            headline: r.headline,
+        .map(|r| {
+            let file_url = DocumentVersion::build_file_url(
+                &r.content_hash,
+                &r.version_mime_type,
+                r.original_filename.as_deref(),
+                r.dedup_index.map(|i| i as u32),
+                &r.source_url,
+                &r.title,
+            );
+            SearchResult {
+                document_id: r.document_id,
+                title: r.title,
+                source_id: r.source_id,
+                page_number: r.page_number,
+                headline: r.headline,
+                file_url,
+            }
         })
         .collect();
 

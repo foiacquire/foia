@@ -29,6 +29,7 @@ pub fn bad_request(message: &str) -> impl IntoResponse + use<'_> {
 pub struct VersionSummary {
     pub id: i64,
     pub content_hash: String,
+    pub file_url: String,
     pub file_size: u64,
     pub mime_type: String,
     pub acquired_at: String,
@@ -36,11 +37,12 @@ pub struct VersionSummary {
     pub page_count: Option<u32>,
 }
 
-impl From<&DocumentVersion> for VersionSummary {
-    fn from(v: &DocumentVersion) -> Self {
+impl VersionSummary {
+    pub fn from_version(v: &DocumentVersion, source_url: &str, title: &str) -> Self {
         Self {
             id: v.id,
             content_hash: v.content_hash.clone(),
+            file_url: v.file_url(source_url, title),
             file_size: v.file_size,
             mime_type: v.mime_type.clone(),
             acquired_at: v.acquired_at.to_rfc3339(),
@@ -69,7 +71,9 @@ pub struct DocumentSummary {
 
 impl From<Document> for DocumentSummary {
     fn from(doc: Document) -> Self {
-        let current_version = doc.current_version().map(VersionSummary::from);
+        let current_version = doc
+            .current_version()
+            .map(|v| VersionSummary::from_version(v, &doc.source_url, &doc.title));
         Self {
             id: doc.id,
             source_id: doc.source_id,

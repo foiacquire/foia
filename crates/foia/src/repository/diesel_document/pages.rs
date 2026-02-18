@@ -26,6 +26,16 @@ pub struct PageSearchRow {
     pub page_number: i32,
     #[diesel(sql_type = diesel::sql_types::Text)]
     pub headline: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub content_hash: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub version_mime_type: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub original_filename: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+    pub dedup_index: Option<i32>,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub source_url: String,
 }
 
 impl From<DocumentPageRecord> for DocumentPage {
@@ -514,9 +524,12 @@ impl DieselDocumentRepository {
             sqlite: conn => {
                 diesel::sql_query(format!(
                     r#"SELECT dp.document_id, d.title, d.source_id, dp.page_number,
-                              '' AS headline
+                              '' AS headline,
+                              dv.content_hash, dv.mime_type AS version_mime_type,
+                              dv.original_filename, dv.dedup_index, d.source_url
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
+                       JOIN document_versions dv ON dv.id = dp.version_id
                        WHERE COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, '') LIKE ?
                          AND (? IS NULL OR d.source_id = ?)
                          AND (? IS NULL OR dp.document_id = ?)
@@ -537,9 +550,12 @@ impl DieselDocumentRepository {
                               ts_headline('english',
                                           COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, ''),
                                           plainto_tsquery('english', $1),
-                                          'MaxFragments=3, MaxWords=30, MinWords=10') AS headline
+                                          'MaxFragments=3, MaxWords=30, MinWords=10') AS headline,
+                              dv.content_hash, dv.mime_type AS version_mime_type,
+                              dv.original_filename, dv.dedup_index, d.source_url
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
+                       JOIN document_versions dv ON dv.id = dp.version_id
                        WHERE to_tsvector('english', COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, ''))
                              @@ plainto_tsquery('english', $1)
                          AND ($2::text IS NULL OR d.source_id = $2)

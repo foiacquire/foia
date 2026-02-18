@@ -1,16 +1,30 @@
 //! Static file serving handlers.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 
 use super::super::assets;
 use super::super::AppState;
 
+#[derive(Debug, Deserialize)]
+pub struct FileQuery {
+    pub filename: Option<String>,
+}
+
 /// Serve a document file.
-pub async fn serve_file(State(state): State<AppState>, Path(path): Path<String>) -> Response {
+///
+/// When a `filename` query parameter is provided, the response includes a
+/// `Content-Disposition` header so browsers use the original filename for
+/// downloads instead of the content-addressable storage name.
+pub async fn serve_file(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Query(params): Query<FileQuery>,
+) -> Response {
     let canonical_docs_dir = match state.documents_dir.canonicalize() {
         Ok(p) => p,
         Err(_) => {
@@ -50,7 +64,19 @@ pub async fn serve_file(State(state): State<AppState>, Path(path): Path<String>)
         .first_or_octet_stream()
         .to_string();
 
-    ([(header::CONTENT_TYPE, mime)], content).into_response()
+    let disposition = match params.filename {
+        Some(name) => format!("inline; filename=\"{}\"", name.replace('"', "_")),
+        None => "inline".to_string(),
+    };
+
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        content,
+    )
+        .into_response()
 }
 
 /// Serve CSS.

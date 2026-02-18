@@ -204,38 +204,100 @@ impl DocumentVersion {
         }
     }
 
+    /// Get the file download URL for this version.
+    ///
+    /// Includes a `filename` query parameter with the original filename
+    /// so the server can set a Content-Disposition header for downloads.
+    pub fn file_url(&self, source_url: &str, title: &str) -> String {
+        Self::build_file_url(
+            &self.content_hash,
+            &self.mime_type,
+            self.original_filename.as_deref(),
+            self.dedup_index,
+            source_url,
+            title,
+        )
+    }
+
+    /// Build a file URL from individual fields without a full DocumentVersion.
+    ///
+    /// Used by search results and other contexts where version data comes from
+    /// a SQL join rather than a loaded DocumentVersion struct.
+    pub fn build_file_url(
+        content_hash: &str,
+        mime_type: &str,
+        original_filename: Option<&str>,
+        dedup_index: Option<u32>,
+        source_url: &str,
+        title: &str,
+    ) -> String {
+        let relative = compute_storage_path_from_parts(
+            content_hash,
+            mime_type,
+            original_filename,
+            dedup_index,
+            source_url,
+            title,
+        );
+        let base = format!("/files/{}", relative.to_string_lossy());
+        if let Some(name) = original_filename {
+            let encoded = urlencoding::encode(name);
+            format!("{}?filename={}", base, encoded)
+        } else {
+            base
+        }
+    }
+
     /// Compute the deterministic relative storage path.
     ///
     /// Format: `{hash[0..depth]}/{sanitized_basename}-{hash[0..8]}.{ext}`
     /// where depth = 2 + dedup_index.unwrap_or(0)
     pub fn compute_storage_path(&self, url: &str, title: &str) -> PathBuf {
-        use crate::repository::{extract_filename_parts, sanitize_filename};
-        use crate::storage::mime_to_extension;
+        compute_storage_path_from_parts(
+            &self.content_hash,
+            &self.mime_type,
+            self.original_filename.as_deref(),
+            self.dedup_index,
+            url,
+            title,
+        )
+    }
+}
 
-        let (basename, extension) = if let Some(ref orig) = self.original_filename {
-            // Use original_filename for basename + extension
-            if let Some(dot_pos) = orig.rfind('.') {
-                let base = &orig[..dot_pos];
-                let ext = &orig[dot_pos + 1..];
-                if !base.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_alphanumeric()) {
-                    (base.to_string(), ext.to_lowercase())
-                } else {
-                    extract_filename_parts(url, title, &self.mime_type)
-                }
+/// Compute the deterministic relative storage path from individual fields.
+fn compute_storage_path_from_parts(
+    content_hash: &str,
+    mime_type: &str,
+    original_filename: Option<&str>,
+    dedup_index: Option<u32>,
+    url: &str,
+    title: &str,
+) -> PathBuf {
+    use crate::repository::{extract_filename_parts, sanitize_filename};
+    use crate::storage::mime_to_extension;
+
+    let (basename, extension) = if let Some(orig) = original_filename {
+        if let Some(dot_pos) = orig.rfind('.') {
+            let base = &orig[..dot_pos];
+            let ext = &orig[dot_pos + 1..];
+            if !base.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_alphanumeric()) {
+                (base.to_string(), ext.to_lowercase())
             } else {
-                (orig.clone(), mime_to_extension(&self.mime_type).to_string())
+                extract_filename_parts(url, title, mime_type)
             }
         } else {
-            extract_filename_parts(url, title, &self.mime_type)
-        };
+            (orig.to_string(), mime_to_extension(mime_type).to_string())
+        }
+    } else {
+        extract_filename_parts(url, title, mime_type)
+    };
 
-        let sanitized = sanitize_filename(&basename);
-        let depth = 2 + self.dedup_index.unwrap_or(0) as usize;
-        let prefix = &self.content_hash[..depth.min(self.content_hash.len())];
-        let filename = format!("{}-{}.{}", sanitized, &self.content_hash[..8], extension);
+    let sanitized = sanitize_filename(&basename);
+    let depth = 2 + dedup_index.unwrap_or(0) as usize;
+    let prefix = &content_hash[..depth.min(content_hash.len())];
+    let filename = format!("{}-{}.{}", sanitized, &content_hash[..8], extension);
 
-        PathBuf::from(prefix).join(filename)
-    }
+    PathBuf::from(prefix).join(filename)
 }
 
 /// A FOIA document with version history.

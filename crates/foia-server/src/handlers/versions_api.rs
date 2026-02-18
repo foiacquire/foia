@@ -17,7 +17,7 @@ pub struct VersionResponse {
     pub id: i64,
     pub content_hash: String,
     pub content_hash_blake3: Option<String>,
-    pub file_path: String,
+    pub file_url: String,
     pub file_size: u64,
     pub mime_type: String,
     pub acquired_at: String,
@@ -29,17 +29,14 @@ pub struct VersionResponse {
     pub earliest_archived_at: Option<String>,
 }
 
-impl From<foia::models::DocumentVersion> for VersionResponse {
-    fn from(v: foia::models::DocumentVersion) -> Self {
+impl VersionResponse {
+    fn from_version(v: foia::models::DocumentVersion, doc_source_url: &str, doc_title: &str) -> Self {
+        let file_url = v.file_url(doc_source_url, doc_title);
         Self {
             id: v.id,
-            content_hash: v.content_hash.clone(),
+            content_hash: v.content_hash,
             content_hash_blake3: v.content_hash_blake3,
-            file_path: v
-                .file_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            file_url,
             file_size: v.file_size,
             mime_type: v.mime_type,
             acquired_at: v.acquired_at.to_rfc3339(),
@@ -70,10 +67,12 @@ pub async fn list_versions(
 ) -> impl IntoResponse {
     match state.doc_repo.get(&doc_id).await {
         Ok(Some(doc)) => {
+            let source_url = &doc.source_url;
+            let title = &doc.title;
             let versions: Vec<VersionResponse> = doc
                 .versions
                 .into_iter()
-                .map(VersionResponse::from)
+                .map(|v| VersionResponse::from_version(v, source_url, title))
                 .collect();
 
             ApiResponse::ok(VersionsListResponse {
@@ -109,7 +108,7 @@ pub async fn get_version(
     match state.doc_repo.get(&doc_id).await {
         Ok(Some(doc)) => {
             if let Some(version) = doc.versions.into_iter().find(|v| v.id == version_id) {
-                ApiResponse::ok(VersionResponse::from(version)).into_response()
+                ApiResponse::ok(VersionResponse::from_version(version, &doc.source_url, &doc.title)).into_response()
             } else {
                 not_found("Version not found").into_response()
             }
