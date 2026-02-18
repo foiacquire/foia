@@ -133,49 +133,38 @@ pub fn extract_document_text_per_page(
         return Ok(0);
     }
 
-    let mut pages_created = 0;
+    // Extract all pages in a single pdftotext call, split on form-feed
+    let page_texts = extractor
+        .extract_all_pdf_page_texts(&file_path, page_count)
+        .unwrap_or_default();
 
-    for page_num in 1..=page_count {
-        tracing::debug!(
-            "Processing page {}/{} of document {}",
-            page_num,
-            page_count,
-            doc.id
-        );
-        // Extract text using pdftotext
-        let pdf_text = extractor
-            .extract_pdf_page_text(&file_path, page_num)
-            .unwrap_or_default();
+    let actual_pages = if page_texts.is_empty() {
+        page_count as usize
+    } else {
+        page_texts.len()
+    };
 
+    // Build all page records in memory
+    let mut pages = Vec::with_capacity(actual_pages);
+    for (i, pdf_text) in page_texts.iter().enumerate() {
+        let page_num = (i + 1) as u32;
         let mut page = DocumentPage::new(doc.id.clone(), version.id, page_num);
         page.pdf_text = Some(pdf_text.clone());
         page.ocr_status = PageOcrStatus::TextExtracted;
-
-        tracing::debug!(
-            "Saving page {}/{} to database for document {}",
-            page_num,
-            page_count,
-            doc.id
-        );
-        let page_id = handle.block_on(doc_repo.save_page(&page))?;
-
-        // Store pdftotext result in page_ocr_results for comparison
-        if !pdf_text.is_empty() {
-            handle.block_on(doc_repo.store_page_ocr_result(
-                page_id,
-                "pdftotext",
-                None, // no model for pdftotext
-                Some(&pdf_text),
-                None, // no confidence score for pdftotext
-                None, // no processing time tracked
-                None, // no image hash for pdftotext (text extraction)
-            ))?;
-        }
-
-        pages_created += 1;
+        pages.push(page);
     }
 
-    Ok(pages_created)
+    // Bulk insert all pages at once
+    if !pages.is_empty() {
+        tracing::debug!(
+            "Saving {} pages to database for document {}",
+            pages.len(),
+            doc.id
+        );
+        handle.block_on(doc_repo.save_pages_batch(&pages))?;
+    }
+
+    Ok(pages.len())
 }
 
 /// Run OCR on a page and compare with existing text.

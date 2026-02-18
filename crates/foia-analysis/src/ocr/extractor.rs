@@ -296,6 +296,56 @@ impl TextExtractor {
         )
     }
 
+    /// Extract text from all pages of a PDF in a single pdftotext call.
+    /// Splits output on form-feed characters to get per-page text.
+    /// Returns a Vec where index 0 = page 1, index 1 = page 2, etc.
+    ///
+    /// Falls back to per-page extraction if the PDF doesn't produce
+    /// form-feed delimiters (malformed PDFs).
+    pub fn extract_all_pdf_page_texts(
+        &self,
+        file_path: &Path,
+        expected_pages: u32,
+    ) -> Result<Vec<String>, ExtractionError> {
+        let output = Command::new("pdftotext")
+            .args(["-layout", "-enc", "UTF-8"])
+            .arg(file_path)
+            .arg("-")
+            .output();
+
+        let full_text = handle_cmd_output(
+            output,
+            "pdftotext (install poppler-utils)",
+            "pdftotext failed",
+        )?;
+
+        let mut pages: Vec<String> = full_text.split('\x0C').map(|s| s.to_string()).collect();
+
+        // pdftotext appends a trailing form-feed, producing an empty final element
+        if pages.last().is_some_and(|s| s.trim().is_empty()) {
+            pages.pop();
+        }
+
+        // Fallback: if split produced fewer pages than expected, extract per-page
+        if pages.len() < expected_pages as usize && expected_pages > 1 {
+            tracing::debug!(
+                "Bulk pdftotext produced {} pages but expected {}, falling back to per-page",
+                pages.len(),
+                expected_pages
+            );
+            let mut fallback_pages = Vec::with_capacity(expected_pages as usize);
+            for page_num in 1..=expected_pages {
+                let text = self
+                    .extract_pdf_page_text(file_path, page_num)
+                    .unwrap_or_default();
+                fallback_pages.push(text);
+            }
+            return Ok(fallback_pages);
+        }
+
+        Ok(pages)
+    }
+
     /// Run pdftotext on a single page of a PDF file.
     pub fn extract_pdf_page_text(
         &self,
@@ -547,5 +597,109 @@ mod tests {
             );
             return;
         }
+    }
+
+    /// Create a multi-page PDF with known text content for testing.
+    /// Returns the path to the temporary PDF file.
+    fn create_test_pdf(dir: &Path, pages: &[&str]) -> std::path::PathBuf {
+        let tex_path = dir.join("test.tex");
+        let mut tex = String::from("\\documentclass{article}\n\\begin{document}\n");
+        for (i, text) in pages.iter().enumerate() {
+            if i > 0 {
+                tex.push_str("\\newpage\n");
+            }
+            tex.push_str(text);
+            tex.push('\n');
+        }
+        tex.push_str("\\end{document}\n");
+        std::fs::write(&tex_path, &tex).unwrap();
+
+        let status = Command::new("pdflatex")
+            .args(["-interaction=nonstopmode", "-output-directory"])
+            .arg(dir)
+            .arg(&tex_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        match status {
+            Ok(s) if s.success() => dir.join("test.pdf"),
+            _ => panic!("pdflatex not available or failed"),
+        }
+    }
+
+    #[test]
+    fn test_extract_all_pdf_page_texts_splits_correctly() {
+        if !check_binary("pdflatex") || !check_binary("pdftotext") {
+            eprintln!("Skipping: pdflatex or pdftotext not available");
+            return;
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let page_contents = ["Page one content here", "Page two content here", "Page three final"];
+        let pdf_path = create_test_pdf(dir.path(), &page_contents);
+
+        let extractor = TextExtractor::new();
+        let pages = extractor
+            .extract_all_pdf_page_texts(&pdf_path, 3)
+            .expect("extraction should succeed");
+
+        assert_eq!(pages.len(), 3, "should produce exactly 3 pages");
+
+        for (i, expected) in page_contents.iter().enumerate() {
+            assert!(
+                pages[i].contains(expected),
+                "page {} should contain {:?}, got {:?}",
+                i + 1,
+                expected,
+                &pages[i][..pages[i].len().min(100)]
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_all_matches_per_page() {
+        if !check_binary("pdflatex") || !check_binary("pdftotext") {
+            eprintln!("Skipping: pdflatex or pdftotext not available");
+            return;
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let page_contents = ["Alpha text", "Beta text"];
+        let pdf_path = create_test_pdf(dir.path(), &page_contents);
+
+        let extractor = TextExtractor::new();
+
+        // Bulk extraction
+        let bulk_pages = extractor
+            .extract_all_pdf_page_texts(&pdf_path, 2)
+            .expect("bulk extraction should succeed");
+
+        // Per-page extraction
+        let page1 = extractor.extract_pdf_page_text(&pdf_path, 1).unwrap();
+        let page2 = extractor.extract_pdf_page_text(&pdf_path, 2).unwrap();
+
+        assert_eq!(bulk_pages.len(), 2);
+        assert_eq!(bulk_pages[0].trim(), page1.trim(), "page 1 should match");
+        assert_eq!(bulk_pages[1].trim(), page2.trim(), "page 2 should match");
+    }
+
+    #[test]
+    fn test_extract_all_single_page() {
+        if !check_binary("pdflatex") || !check_binary("pdftotext") {
+            eprintln!("Skipping: pdflatex or pdftotext not available");
+            return;
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let pdf_path = create_test_pdf(dir.path(), &["Only one page"]);
+
+        let extractor = TextExtractor::new();
+        let pages = extractor
+            .extract_all_pdf_page_texts(&pdf_path, 1)
+            .expect("extraction should succeed");
+
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].contains("Only one page"));
     }
 }

@@ -142,6 +142,93 @@ impl DieselDocumentRepository {
         })
     }
 
+    /// Save multiple document pages in a single bulk insert.
+    /// Much faster than calling save_page() in a loop.
+    pub async fn save_pages_batch(&self, pages: &[DocumentPage]) -> Result<(), DieselError> {
+        if pages.is_empty() {
+            return Ok(());
+        }
+
+        let now = Utc::now().to_rfc3339();
+
+        with_conn_split!(self.pool,
+            sqlite: conn => {
+                for page in pages {
+                    let version_id = page.version_id as i32;
+                    let page_number = page.page_number as i32;
+                    let ocr_status = page.ocr_status.as_str().to_string();
+
+                    diesel::sql_query(
+                        "INSERT INTO document_pages (document_id, version_id, page_number, pdf_text, ocr_text, final_text, ocr_status, created_at, updated_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                         ON CONFLICT (document_id, version_id, page_number) \
+                         DO UPDATE SET pdf_text = excluded.pdf_text, ocr_text = excluded.ocr_text, \
+                         final_text = excluded.final_text, ocr_status = excluded.ocr_status, updated_at = excluded.updated_at"
+                    )
+                    .bind::<diesel::sql_types::Text, _>(&page.document_id)
+                    .bind::<diesel::sql_types::Integer, _>(version_id)
+                    .bind::<diesel::sql_types::Integer, _>(page_number)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.pdf_text)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.ocr_text)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.final_text)
+                    .bind::<diesel::sql_types::Text, _>(&ocr_status)
+                    .bind::<diesel::sql_types::Text, _>(&now)
+                    .bind::<diesel::sql_types::Text, _>(&now)
+                    .execute(&mut conn)
+                    .await?;
+                }
+                Ok::<_, DieselError>(())
+            },
+            postgres: conn => {
+                // Build multi-row INSERT with numbered parameters
+                for chunk in pages.chunks(50) {
+                    let params_per_row = 9;
+                    let mut placeholders = Vec::with_capacity(chunk.len());
+                    for i in 0..chunk.len() {
+                        let base = i * params_per_row + 1;
+                        placeholders.push(format!(
+                            "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                            base, base + 1, base + 2, base + 3, base + 4,
+                            base + 5, base + 6, base + 7, base + 8
+                        ));
+                    }
+
+                    let sql = format!(
+                        "INSERT INTO document_pages (document_id, version_id, page_number, pdf_text, ocr_text, final_text, ocr_status, created_at, updated_at) \
+                         VALUES {} \
+                         ON CONFLICT (document_id, version_id, page_number) \
+                         DO UPDATE SET pdf_text = EXCLUDED.pdf_text, ocr_text = EXCLUDED.ocr_text, \
+                         final_text = EXCLUDED.final_text, ocr_status = EXCLUDED.ocr_status, updated_at = EXCLUDED.updated_at",
+                        placeholders.join(", ")
+                    );
+
+                    let mut query = diesel::sql_query(sql).into_boxed::<diesel::pg::Pg>();
+                    for page in chunk {
+                        let version_id = page.version_id as i32;
+                        let page_number = page.page_number as i32;
+                        let ocr_status = page.ocr_status.as_str().to_string();
+
+                        query = query
+                            .bind::<diesel::sql_types::Text, _>(page.document_id.clone())
+                            .bind::<diesel::sql_types::Integer, _>(version_id)
+                            .bind::<diesel::sql_types::Integer, _>(page_number)
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.pdf_text.clone())
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.ocr_text.clone())
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.final_text.clone())
+                            .bind::<diesel::sql_types::Text, _>(ocr_status)
+                            .bind::<diesel::sql_types::Text, _>(now.clone())
+                            .bind::<diesel::sql_types::Text, _>(now.clone());
+                    }
+
+                    query.execute(&mut conn).await?;
+                }
+                Ok::<_, DieselError>(())
+            }
+        )?;
+
+        Ok(())
+    }
+
     /// Get document pages.
     pub async fn get_pages(
         &self,
