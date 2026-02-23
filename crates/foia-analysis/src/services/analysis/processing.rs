@@ -367,7 +367,6 @@ pub fn ocr_document_page_with_backends(
                     any_succeeded = true;
                     if ocr_chars > best_char_count {
                         best_char_count = ocr_chars;
-                        best_text = Some(ocr_text);
                     }
                 }
                 Err(e) => {

@@ -175,7 +175,7 @@ pub async fn get_document_content(
         .into_iter()
         .map(|p| PageContent {
             page_number: p.page_number,
-            text: p.final_text.or(p.ocr_text).or(p.pdf_text),
+            text: p.search_text,
         })
         .collect();
 

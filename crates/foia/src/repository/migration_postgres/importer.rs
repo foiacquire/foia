@@ -228,17 +228,15 @@ impl DatabaseImporter for PostgresMigrator {
 
         for p in pages {
             diesel::sql_query(
-                "INSERT INTO document_pages (id, document_id, version_id, page_number, pdf_text,
-                    ocr_text, final_text, ocr_status, created_at, updated_at)
+                "INSERT INTO document_pages (id, document_id, version_id, page_number, search_text,
+                    ocr_status, created_at, updated_at)
                  OVERRIDING SYSTEM VALUE
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT (id) DO UPDATE SET
                     document_id = EXCLUDED.document_id,
                     version_id = EXCLUDED.version_id,
                     page_number = EXCLUDED.page_number,
-                    pdf_text = EXCLUDED.pdf_text,
-                    ocr_text = EXCLUDED.ocr_text,
-                    final_text = EXCLUDED.final_text,
+                    search_text = EXCLUDED.search_text,
                     ocr_status = EXCLUDED.ocr_status,
                     created_at = EXCLUDED.created_at,
                     updated_at = EXCLUDED.updated_at",
@@ -247,9 +245,7 @@ impl DatabaseImporter for PostgresMigrator {
             .bind::<diesel::sql_types::Text, _>(&p.document_id)
             .bind::<diesel::sql_types::Integer, _>(p.version_id)
             .bind::<diesel::sql_types::Integer, _>(p.page_number)
-            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&p.pdf_text)
-            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&p.ocr_text)
-            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&p.final_text)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&p.search_text)
             .bind::<diesel::sql_types::Text, _>(&p.ocr_status)
             .bind::<diesel::sql_types::Text, _>(&p.created_at)
             .bind::<diesel::sql_types::Text, _>(&p.updated_at)

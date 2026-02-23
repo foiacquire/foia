@@ -349,7 +349,7 @@ impl DieselDocumentRepository {
                 .execute(&mut conn)
                 .await?;
 
-            Ok(())
+            Ok::<_, DieselError>(())
         })?;
 
         self.update_search_text(page_id).await

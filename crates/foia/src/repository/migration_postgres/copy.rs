@@ -182,22 +182,20 @@ impl PostgresMigrator {
         progress: Option<ProgressCallback>,
     ) -> Result<usize, DieselError> {
         self.copy_batched(
-            "COPY document_pages (id, document_id, version_id, page_number, pdf_text,
-                ocr_text, final_text, ocr_status, created_at, updated_at)
+            "COPY document_pages (id, document_id, version_id, page_number, search_text,
+                ocr_status, created_at, updated_at)
              FROM STDIN WITH (FORMAT text)",
             pages,
             1000,
             500,
             |p| {
                 format!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     p.id,
                     Self::escape_copy_value(Some(&p.document_id)),
                     p.version_id,
                     p.page_number,
-                    Self::escape_copy_value(p.pdf_text.as_deref()),
-                    Self::escape_copy_value(p.ocr_text.as_deref()),
-                    Self::escape_copy_value(p.final_text.as_deref()),
+                    Self::escape_copy_value(p.search_text.as_deref()),
                     Self::escape_copy_value(Some(&p.ocr_status)),
                     Self::escape_copy_value(Some(&p.created_at)),
                     Self::escape_copy_value(Some(&p.updated_at)),
