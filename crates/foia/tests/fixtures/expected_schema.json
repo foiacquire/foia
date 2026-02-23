@@ -1810,14 +1810,15 @@
       "unique": false,
       "partial": null
     },
-    "idx_dar_doc_version_type_status": {
-      "name": "idx_dar_doc_version_type_status",
+    "idx_dar_analysis_lookup": {
+      "name": "idx_dar_analysis_lookup",
       "table": "document_analysis_results",
       "columns": [
         "document_id",
         "version_id",
         "analysis_type",
-        "status"
+        "status",
+        "created_at"
       ],
       "unique": false,
       "partial": null
