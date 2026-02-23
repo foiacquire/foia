@@ -79,10 +79,20 @@ pub fn extract_document_text_per_page(
 
         // Create a single "page" for non-PDF documents
         let mut page = DocumentPage::new(doc.id.clone(), version.id, 1);
-        page.pdf_text = Some(result.text.clone());
-        page.final_text = Some(result.text);
+        page.search_text = Some(result.text.clone());
         page.ocr_status = PageOcrStatus::OcrComplete;
-        handle.block_on(doc_repo.save_page(&page))?;
+        let page_id = handle.block_on(doc_repo.save_page(&page))?;
+
+        // Store extraction result in normalized table
+        let _ = handle.block_on(doc_repo.store_page_ocr_result(
+            page_id,
+            "pdftotext",
+            None,
+            Some(&result.text),
+            None,
+            None,
+            None,
+        ));
 
         // Cache page count (1 for non-PDFs)
         handle.block_on(doc_repo.set_version_page_count(version.id, 1))?;
@@ -149,7 +159,7 @@ pub fn extract_document_text_per_page(
     for (i, pdf_text) in page_texts.iter().enumerate() {
         let page_num = (i + 1) as u32;
         let mut page = DocumentPage::new(doc.id.clone(), version.id, page_num);
-        page.pdf_text = Some(pdf_text.clone());
+        page.search_text = Some(pdf_text.clone());
         page.ocr_status = PageOcrStatus::TextExtracted;
         pages.push(page);
     }
@@ -162,6 +172,12 @@ pub fn extract_document_text_per_page(
             doc.id
         );
         handle.block_on(doc_repo.save_pages_batch(&pages))?;
+
+        // Store pdftotext results in normalized page_ocr_results table
+        handle.block_on(doc_repo.store_pdftotext_results_batch(
+            &doc.id,
+            version.id as i32,
+        ))?;
     }
 
     Ok(pages.len())
@@ -265,11 +281,10 @@ pub fn ocr_document_page_with_backends(
     let mut updated_page = page.clone();
     let mut improved = false;
     let mut any_succeeded = false;
-    let mut best_text: Option<String> = None;
     let mut best_char_count = 0usize;
 
-    let pdf_chars = page
-        .pdf_text
+    let existing_chars = page
+        .search_text
         .as_ref()
         .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
         .unwrap_or(0);
@@ -316,7 +331,6 @@ pub fn ocr_document_page_with_backends(
             any_succeeded = true;
             if ocr_chars > best_char_count {
                 best_char_count = ocr_chars;
-                best_text = Some(ocr_text);
             }
         } else {
             // Run OCR using pre-rendered image (or fall back to pdf_page for robustness)
@@ -368,27 +382,20 @@ pub fn ocr_document_page_with_backends(
         }
     }
 
-    // Update page with best result
-    if let Some(text) = best_text {
-        improved = best_char_count > pdf_chars + (pdf_chars / 5);
-        updated_page.ocr_text = Some(text.clone());
+    // Update page status — search_text is recomputed by update_search_text()
+    if any_succeeded {
         updated_page.ocr_status = PageOcrStatus::OcrComplete;
-        updated_page.final_text = if best_char_count > 0 {
-            Some(text)
-        } else {
-            page.pdf_text.clone()
-        };
-    } else if any_succeeded {
-        // All results were empty
-        updated_page.ocr_status = PageOcrStatus::OcrComplete;
-        updated_page.final_text = page.pdf_text.clone();
+        improved = best_char_count > existing_chars + (existing_chars / 5);
     } else {
-        // All backends failed
         updated_page.ocr_status = PageOcrStatus::Failed;
-        updated_page.final_text = page.pdf_text.clone();
     }
 
     handle.block_on(doc_repo.save_page(&updated_page))?;
+
+    // Recompute search_text from all page_ocr_results (picks highest char_count).
+    // store_page_ocr_result already does this per-insert, but save_page may have
+    // overwritten the value, so we recompute once here to ensure correctness.
+    handle.block_on(doc_repo.update_search_text(page.id))?;
 
     // Check if all pages for this document are now complete
     let mut document_finalized = false;

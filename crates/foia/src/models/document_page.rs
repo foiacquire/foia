@@ -45,6 +45,11 @@ impl PageOcrStatus {
 }
 
 /// A single page of a document with its extracted text.
+///
+/// Individual extraction results (pdftotext, groq, tesseract, etc.) are stored
+/// in `page_ocr_results`. The `search_text` field is a materialized "best text"
+/// column used for full-text search indexing — it holds the extraction result
+/// with the highest character count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentPage {
     /// Database row ID.
@@ -55,12 +60,8 @@ pub struct DocumentPage {
     pub version_id: i64,
     /// Page number (1-indexed).
     pub page_number: u32,
-    /// Text extracted via pdftotext.
-    pub pdf_text: Option<String>,
-    /// Text extracted via OCR (Tesseract).
-    pub ocr_text: Option<String>,
-    /// Final merged/chosen text for this page.
-    pub final_text: Option<String>,
+    /// Materialized best text for search indexing.
+    pub search_text: Option<String>,
     /// OCR processing status.
     pub ocr_status: PageOcrStatus,
     /// When this page record was created.
@@ -78,40 +79,10 @@ impl DocumentPage {
             document_id,
             version_id,
             page_number,
-            pdf_text: None,
-            ocr_text: None,
-            final_text: None,
+            search_text: None,
             ocr_status: PageOcrStatus::Pending,
             created_at: now,
             updated_at: now,
         }
-    }
-
-    /// Check if this page needs OCR based on pdf_text content.
-    pub fn needs_ocr(&self, min_chars: usize) -> bool {
-        match &self.pdf_text {
-            None => true,
-            Some(text) => {
-                let char_count = text.chars().filter(|c| !c.is_whitespace()).count();
-                char_count < min_chars
-            }
-        }
-    }
-
-    /// Compute final text by choosing the best result.
-    /// Prefers OCR over extracted PDF text (unless OCR is empty).
-    pub fn compute_final_text(&mut self) {
-        let ocr_chars = self
-            .ocr_text
-            .as_ref()
-            .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
-            .unwrap_or(0);
-
-        // Prefer OCR over extracted text (unless OCR is empty)
-        self.final_text = if ocr_chars > 0 {
-            self.ocr_text.clone()
-        } else {
-            self.pdf_text.clone()
-        };
     }
 }

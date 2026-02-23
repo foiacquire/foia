@@ -45,9 +45,7 @@ impl From<DocumentPageRecord> for DocumentPage {
             document_id: r.document_id,
             version_id: r.version_id as i64,
             page_number: r.page_number as u32,
-            pdf_text: r.pdf_text,
-            ocr_text: r.ocr_text,
-            final_text: r.final_text,
+            search_text: r.search_text,
             ocr_status: PageOcrStatus::from_str(&r.ocr_status).unwrap_or(PageOcrStatus::Pending),
             created_at: parse_datetime(&r.created_at),
             updated_at: parse_datetime(&r.updated_at),
@@ -87,9 +85,7 @@ impl DieselDocumentRepository {
                 DocumentPages::DocumentId,
                 DocumentPages::VersionId,
                 DocumentPages::PageNumber,
-                DocumentPages::PdfText,
-                DocumentPages::OcrText,
-                DocumentPages::FinalText,
+                DocumentPages::SearchText,
                 DocumentPages::OcrStatus,
                 DocumentPages::CreatedAt,
                 DocumentPages::UpdatedAt,
@@ -98,9 +94,7 @@ impl DieselDocumentRepository {
                 page.document_id.clone().into(),
                 version_id.into(),
                 page_number.into(),
-                page.pdf_text.clone().into(),
-                page.ocr_text.clone().into(),
-                page.final_text.clone().into(),
+                page.search_text.clone().into(),
                 ocr_status.clone().into(),
                 now.clone().into(),
                 now.clone().into(),
@@ -112,9 +106,7 @@ impl DieselDocumentRepository {
                     DocumentPages::PageNumber,
                 ])
                 .update_columns([
-                    DocumentPages::PdfText,
-                    DocumentPages::OcrText,
-                    DocumentPages::FinalText,
+                    DocumentPages::SearchText,
                     DocumentPages::OcrStatus,
                     DocumentPages::UpdatedAt,
                 ])
@@ -130,9 +122,7 @@ impl DieselDocumentRepository {
                 .bind::<diesel::sql_types::Text, _>(&page.document_id)
                 .bind::<diesel::sql_types::Integer, _>(version_id)
                 .bind::<diesel::sql_types::Integer, _>(page_number)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.pdf_text)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.ocr_text)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.final_text)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.search_text)
                 .bind::<diesel::sql_types::Text, _>(&ocr_status)
                 .bind::<diesel::sql_types::Text, _>(&now)
                 .bind::<diesel::sql_types::Text, _>(&now)
@@ -159,18 +149,16 @@ impl DieselDocumentRepository {
                     let ocr_status = page.ocr_status.as_str().to_string();
 
                     diesel::sql_query(
-                        "INSERT INTO document_pages (document_id, version_id, page_number, pdf_text, ocr_text, final_text, ocr_status, created_at, updated_at) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                        "INSERT INTO document_pages (document_id, version_id, page_number, search_text, ocr_status, created_at, updated_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?) \
                          ON CONFLICT (document_id, version_id, page_number) \
-                         DO UPDATE SET pdf_text = excluded.pdf_text, ocr_text = excluded.ocr_text, \
-                         final_text = excluded.final_text, ocr_status = excluded.ocr_status, updated_at = excluded.updated_at"
+                         DO UPDATE SET search_text = excluded.search_text, \
+                         ocr_status = excluded.ocr_status, updated_at = excluded.updated_at"
                     )
                     .bind::<diesel::sql_types::Text, _>(&page.document_id)
                     .bind::<diesel::sql_types::Integer, _>(version_id)
                     .bind::<diesel::sql_types::Integer, _>(page_number)
-                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.pdf_text)
-                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.ocr_text)
-                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.final_text)
+                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.search_text)
                     .bind::<diesel::sql_types::Text, _>(&ocr_status)
                     .bind::<diesel::sql_types::Text, _>(&now)
                     .bind::<diesel::sql_types::Text, _>(&now)
@@ -180,25 +168,24 @@ impl DieselDocumentRepository {
                 Ok::<_, DieselError>(())
             },
             postgres: conn => {
-                // Build multi-row INSERT with numbered parameters
                 for chunk in pages.chunks(50) {
-                    let params_per_row = 9;
+                    let params_per_row = 7;
                     let mut placeholders = Vec::with_capacity(chunk.len());
                     for i in 0..chunk.len() {
                         let base = i * params_per_row + 1;
                         placeholders.push(format!(
-                            "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                            "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
                             base, base + 1, base + 2, base + 3, base + 4,
-                            base + 5, base + 6, base + 7, base + 8
+                            base + 5, base + 6
                         ));
                     }
 
                     let sql = format!(
-                        "INSERT INTO document_pages (document_id, version_id, page_number, pdf_text, ocr_text, final_text, ocr_status, created_at, updated_at) \
+                        "INSERT INTO document_pages (document_id, version_id, page_number, search_text, ocr_status, created_at, updated_at) \
                          VALUES {} \
                          ON CONFLICT (document_id, version_id, page_number) \
-                         DO UPDATE SET pdf_text = EXCLUDED.pdf_text, ocr_text = EXCLUDED.ocr_text, \
-                         final_text = EXCLUDED.final_text, ocr_status = EXCLUDED.ocr_status, updated_at = EXCLUDED.updated_at",
+                         DO UPDATE SET search_text = EXCLUDED.search_text, \
+                         ocr_status = EXCLUDED.ocr_status, updated_at = EXCLUDED.updated_at",
                         placeholders.join(", ")
                     );
 
@@ -212,9 +199,7 @@ impl DieselDocumentRepository {
                             .bind::<diesel::sql_types::Text, _>(page.document_id.clone())
                             .bind::<diesel::sql_types::Integer, _>(version_id)
                             .bind::<diesel::sql_types::Integer, _>(page_number)
-                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.pdf_text.clone())
-                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.ocr_text.clone())
-                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.final_text.clone())
+                            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(page.search_text.clone())
                             .bind::<diesel::sql_types::Text, _>(ocr_status)
                             .bind::<diesel::sql_types::Text, _>(now.clone())
                             .bind::<diesel::sql_types::Text, _>(now.clone());
@@ -274,7 +259,7 @@ impl DieselDocumentRepository {
     }
 
     /// Store OCR result for a page from a specific backend.
-    /// Stores in page_ocr_results table and updates page's ocr_text/status.
+    /// Stores in page_ocr_results table and recomputes search_text.
     #[allow(clippy::too_many_arguments)]
     pub async fn store_page_ocr_result(
         &self,
@@ -364,15 +349,100 @@ impl DieselDocumentRepository {
                 .execute(&mut conn)
                 .await?;
 
+            Ok(())
+        })?;
+
+        self.update_search_text(page_id).await
+    }
+
+    /// Recompute search_text from the best page_ocr_results entry (highest char_count).
+    pub async fn update_search_text(&self, page_id: i64) -> Result<(), DieselError> {
+        let page_id_i32 = page_id as i32;
+
+        // Get the text with the highest char_count for this page
+        let best_text: Option<Option<String>> = with_conn!(self.pool, conn, {
+            page_ocr_results::table
+                .filter(page_ocr_results::page_id.eq(page_id_i32))
+                .filter(page_ocr_results::text.is_not_null())
+                .order(page_ocr_results::char_count.desc())
+                .select(page_ocr_results::text)
+                .first(&mut conn)
+                .await
+                .optional()
+        })?;
+
+        let search_text = best_text.flatten();
+
+        with_conn!(self.pool, conn, {
             diesel::update(document_pages::table.find(page_id_i32))
                 .set((
-                    document_pages::ocr_text.eq(text),
-                    document_pages::ocr_status.eq("ocr_complete"),
+                    document_pages::search_text.eq(&search_text),
+                    document_pages::updated_at.eq(Utc::now().to_rfc3339()),
                 ))
                 .execute(&mut conn)
                 .await?;
             Ok(())
         })
+    }
+
+    /// Bulk-insert pdftotext results into page_ocr_results for all pages
+    /// of a document/version that have search_text but no pdftotext row yet.
+    pub async fn store_pdftotext_results_batch(
+        &self,
+        document_id: &str,
+        version_id: i32,
+    ) -> Result<(), DieselError> {
+        let now = Utc::now().to_rfc3339();
+
+        with_conn_split!(self.pool,
+            sqlite: conn => {
+                diesel::sql_query(
+                    "INSERT OR IGNORE INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at) \
+                     SELECT dp.id, 'pdftotext', dp.search_text, \
+                            LENGTH(dp.search_text), \
+                            LENGTH(dp.search_text) - LENGTH(REPLACE(dp.search_text, ' ', '')) + 1, \
+                            ? \
+                     FROM document_pages dp \
+                     WHERE dp.document_id = ? AND dp.version_id = ? \
+                       AND dp.search_text IS NOT NULL AND dp.search_text != '' \
+                       AND NOT EXISTS ( \
+                         SELECT 1 FROM page_ocr_results por \
+                         WHERE por.page_id = dp.id AND por.backend = 'pdftotext' \
+                       )"
+                )
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>(document_id)
+                .bind::<diesel::sql_types::Integer, _>(version_id)
+                .execute(&mut conn)
+                .await?;
+                Ok::<_, DieselError>(())
+            },
+            postgres: conn => {
+                diesel::sql_query(
+                    "INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at) \
+                     SELECT dp.id, 'pdftotext', dp.search_text, \
+                            LENGTH(dp.search_text), \
+                            array_length(regexp_split_to_array(dp.search_text, '\\s+'), 1), \
+                            $1 \
+                     FROM document_pages dp \
+                     WHERE dp.document_id = $2 AND dp.version_id = $3 \
+                       AND dp.search_text IS NOT NULL AND dp.search_text != '' \
+                       AND NOT EXISTS ( \
+                         SELECT 1 FROM page_ocr_results por \
+                         WHERE por.page_id = dp.id AND por.backend = 'pdftotext' \
+                       ) \
+                     ON CONFLICT DO NOTHING"
+                )
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>(document_id)
+                .bind::<diesel::sql_types::Integer, _>(version_id)
+                .execute(&mut conn)
+                .await?;
+                Ok::<_, DieselError>(())
+            }
+        )?;
+
+        Ok(())
     }
 
     /// Store OCR error for a page from a specific backend.
@@ -579,7 +649,7 @@ impl DieselDocumentRepository {
                 .filter(document_pages::document_id.eq(document_id))
                 .filter(document_pages::version_id.eq(version))
                 .order(document_pages::page_number.asc())
-                .select(document_pages::ocr_text)
+                .select(document_pages::search_text)
                 .load(&mut conn)
                 .await
         })?;
@@ -617,7 +687,7 @@ impl DieselDocumentRepository {
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
                        JOIN document_versions dv ON dv.id = dp.version_id
-                       WHERE COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, '') LIKE ?
+                       WHERE COALESCE(dp.search_text, '') LIKE ?
                          AND (? IS NULL OR d.source_id = ?)
                          AND (? IS NULL OR dp.document_id = ?)
                        ORDER BY dp.document_id, dp.page_number
@@ -635,7 +705,7 @@ impl DieselDocumentRepository {
                 diesel::sql_query(format!(
                     r#"SELECT dp.document_id, d.title, d.source_id, dp.page_number,
                               ts_headline('english',
-                                          COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, ''),
+                                          COALESCE(dp.search_text, ''),
                                           plainto_tsquery('english', $1),
                                           'MaxFragments=3, MaxWords=30, MinWords=10') AS headline,
                               dv.content_hash, dv.mime_type AS version_mime_type,
@@ -643,12 +713,12 @@ impl DieselDocumentRepository {
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
                        JOIN document_versions dv ON dv.id = dp.version_id
-                       WHERE to_tsvector('english', COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, ''))
+                       WHERE to_tsvector('english', COALESCE(dp.search_text, ''))
                              @@ plainto_tsquery('english', $1)
                          AND ($2::text IS NULL OR d.source_id = $2)
                          AND ($3::text IS NULL OR dp.document_id = $3)
                        ORDER BY ts_rank(
-                                  to_tsvector('english', COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, '')),
+                                  to_tsvector('english', COALESCE(dp.search_text, '')),
                                   plainto_tsquery('english', $1)) DESC,
                                 dp.document_id, dp.page_number
                        LIMIT {limit} OFFSET {offset}"#
@@ -677,7 +747,7 @@ impl DieselDocumentRepository {
                     r#"SELECT COUNT(*) AS count
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
-                       WHERE COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, '') LIKE ?
+                       WHERE COALESCE(dp.search_text, '') LIKE ?
                          AND (? IS NULL OR d.source_id = ?)
                          AND (? IS NULL OR dp.document_id = ?)"#,
                 )
@@ -696,7 +766,7 @@ impl DieselDocumentRepository {
                     r#"SELECT COUNT(*) AS count
                        FROM document_pages dp
                        JOIN documents d ON d.id = dp.document_id
-                       WHERE to_tsvector('english', COALESCE(dp.final_text, dp.ocr_text, dp.pdf_text, ''))
+                       WHERE to_tsvector('english', COALESCE(dp.search_text, ''))
                              @@ plainto_tsquery('english', $1)
                          AND ($2::text IS NULL OR d.source_id = $2)
                          AND ($3::text IS NULL OR dp.document_id = $3)"#,

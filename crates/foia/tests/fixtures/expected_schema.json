@@ -690,13 +690,6 @@
           "default_value": null,
           "primary_key": false
         },
-        "final_text": {
-          "name": "final_text",
-          "col_type": "TEXT",
-          "not_null": false,
-          "default_value": null,
-          "primary_key": false
-        },
         "id": {
           "name": "id",
           "col_type": "INTEGER",
@@ -711,13 +704,6 @@
           "default_value": "'pending'",
           "primary_key": false
         },
-        "ocr_text": {
-          "name": "ocr_text",
-          "col_type": "TEXT",
-          "not_null": false,
-          "default_value": null,
-          "primary_key": false
-        },
         "page_number": {
           "name": "page_number",
           "col_type": "INTEGER",
@@ -725,8 +711,8 @@
           "default_value": null,
           "primary_key": false
         },
-        "pdf_text": {
-          "name": "pdf_text",
+        "search_text": {
+          "name": "search_text",
           "col_type": "TEXT",
           "not_null": false,
           "default_value": null,
@@ -2124,7 +2110,7 @@
         "document_id"
       ],
       "unique": false,
-      "partial": "final_text IS NOT NULL"
+      "partial": "search_text IS NOT NULL"
     },
     "idx_service_status_heartbeat": {
       "name": "idx_service_status_heartbeat",

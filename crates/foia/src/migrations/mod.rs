@@ -13,6 +13,7 @@ mod m0012_scraper_configs;
 mod m0013_analysis_lookup_index;
 mod m0014_search_indexes;
 mod m0015_analysis_covering_index;
+mod m0016_normalize_page_text;
 
 use cetane::prelude::MigrationRegistry;
 
@@ -33,5 +34,6 @@ pub fn registry() -> MigrationRegistry {
     reg.register(m0013_analysis_lookup_index::migration());
     reg.register(m0014_search_indexes::migration());
     reg.register(m0015_analysis_covering_index::migration());
+    reg.register(m0016_normalize_page_text::migration());
     reg
 }
