@@ -25,21 +25,17 @@ WHERE dp.pdf_text IS NOT NULL AND dp.pdf_text != ''
                 )
                 .for_backend(
                     "postgres",
-                    r#"INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
-SELECT
-    dp.id,
-    'pdftotext',
-    dp.pdf_text,
-    LENGTH(dp.pdf_text),
-    array_length(regexp_split_to_array(dp.pdf_text, '\s+'), 1),
-    dp.created_at
-FROM document_pages dp
-WHERE dp.pdf_text IS NOT NULL AND dp.pdf_text != ''
-  AND NOT EXISTS (
-    SELECT 1 FROM page_ocr_results por
-    WHERE por.page_id = dp.id AND por.backend = 'pdftotext'
-  )
-ON CONFLICT DO NOTHING"#,
+                    r#"DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'document_pages' AND column_name = 'pdf_text') THEN
+    INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
+    SELECT dp.id, 'pdftotext', dp.pdf_text, LENGTH(dp.pdf_text),
+           array_length(regexp_split_to_array(dp.pdf_text, '\s+'), 1), dp.created_at
+    FROM document_pages dp
+    WHERE dp.pdf_text IS NOT NULL AND dp.pdf_text != ''
+      AND NOT EXISTS (SELECT 1 FROM page_ocr_results por WHERE por.page_id = dp.id AND por.backend = 'pdftotext')
+    ON CONFLICT DO NOTHING;
+  END IF;
+END $$"#,
                 ),
         )
         // Step 1b: Copy ocr_text to page_ocr_results (pre-m0006 OCR data)
@@ -64,21 +60,17 @@ WHERE dp.ocr_text IS NOT NULL AND dp.ocr_text != ''
                 )
                 .for_backend(
                     "postgres",
-                    r#"INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
-SELECT
-    dp.id,
-    'legacy_ocr',
-    dp.ocr_text,
-    LENGTH(dp.ocr_text),
-    array_length(regexp_split_to_array(dp.ocr_text, '\s+'), 1),
-    dp.created_at
-FROM document_pages dp
-WHERE dp.ocr_text IS NOT NULL AND dp.ocr_text != ''
-  AND NOT EXISTS (
-    SELECT 1 FROM page_ocr_results por
-    WHERE por.page_id = dp.id AND por.backend = 'legacy_ocr'
-  )
-ON CONFLICT DO NOTHING"#,
+                    r#"DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'document_pages' AND column_name = 'ocr_text') THEN
+    INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
+    SELECT dp.id, 'legacy_ocr', dp.ocr_text, LENGTH(dp.ocr_text),
+           array_length(regexp_split_to_array(dp.ocr_text, '\s+'), 1), dp.created_at
+    FROM document_pages dp
+    WHERE dp.ocr_text IS NOT NULL AND dp.ocr_text != ''
+      AND NOT EXISTS (SELECT 1 FROM page_ocr_results por WHERE por.page_id = dp.id AND por.backend = 'legacy_ocr')
+    ON CONFLICT DO NOTHING;
+  END IF;
+END $$"#,
                 ),
         )
         // Step 2: SQLite backfill (needed before table rebuild). Postgres does this after rename.
@@ -123,7 +115,11 @@ CREATE INDEX idx_pages_with_text ON document_pages(document_id) WHERE search_tex
                 )
                 .for_backend(
                     "postgres",
-                    "ALTER TABLE document_pages RENAME COLUMN final_text TO search_text",
+                    r#"DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'document_pages' AND column_name = 'final_text') THEN
+    ALTER TABLE document_pages RENAME COLUMN final_text TO search_text;
+  END IF;
+END $$"#,
                 ),
         )
         // Step 4: Postgres: backfill search_text from page_ocr_results (reads small indexed
@@ -151,8 +147,8 @@ WHERE dp.id = por.page_id AND dp.search_text IS NULL"#,
                 .for_backend("sqlite", "SELECT 1")
                 .for_backend(
                     "postgres",
-                    r#"ALTER TABLE document_pages DROP COLUMN pdf_text;
-ALTER TABLE document_pages DROP COLUMN ocr_text"#,
+                    r#"ALTER TABLE document_pages DROP COLUMN IF EXISTS pdf_text;
+ALTER TABLE document_pages DROP COLUMN IF EXISTS ocr_text"#,
                 ),
         )
         // Step 6: Rebuild FTS index on search_text (Postgres only)
