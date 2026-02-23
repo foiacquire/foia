@@ -12,15 +12,20 @@ use foia::repository::DieselDocumentRepository;
 use foia::work_queue::db_analysis::DbAnalysisQueue;
 use foia::work_queue::{
     ChunkResult, PipelineError, PipelineEvent, PipelineStage, WorkFilter, WorkQueue,
-    WorkQueueError,
 };
+use foia::work_queue::WorkQueueError;
 
-use crate::ocr::OcrBackendType;
+use crate::ocr::{BackendConfig, FallbackOcrBackend, OcrBackendType};
 use super::processing::{
-    detect_mime_mismatch, extract_document_text_per_page, ocr_document_page_with_config,
+    detect_mime_mismatch, extract_document_text_per_page, ocr_document_page_with_backends,
 };
 
 /// Text extraction stage (Phase 0 MIME check + Phase 1 extraction merged).
+///
+/// Pre-fetches all candidate document IDs in a single query at stage start,
+/// then processes them in chunks using cheap `get_batch` lookups. This avoids
+/// the progressive slowdown caused by running the expensive NOT EXISTS query
+/// per chunk as the ratio of processed-to-unprocessed documents increases.
 ///
 /// For each document:
 /// 1. Inline MIME check (< 1ms) — fixes mismatches before extraction
@@ -32,7 +37,8 @@ pub struct TextExtractionStage {
     documents_dir: PathBuf,
     filter: WorkFilter,
     workers: usize,
-    cursor: Mutex<Option<String>>,
+    /// Pre-fetched document IDs needing analysis. `None` = not yet fetched.
+    work_ids: Mutex<Option<Vec<String>>>,
 }
 
 impl TextExtractionStage {
@@ -58,7 +64,7 @@ impl TextExtractionStage {
             documents_dir,
             filter,
             workers,
-            cursor: Mutex::new(None),
+            work_ids: Mutex::new(None),
         }
     }
 }
@@ -74,6 +80,10 @@ impl PipelineStage for TextExtractionStage {
     }
 
     async fn count(&self) -> Result<u64, PipelineError> {
+        let work_ids = self.work_ids.lock().await;
+        if let Some(ref ids) = *work_ids {
+            return Ok(ids.len() as u64);
+        }
         Ok(self.queue.count(&self.filter).await?)
     }
 
@@ -89,25 +99,57 @@ impl PipelineStage for TextExtractionStage {
             chunk_size
         };
 
-        let cursor = self.cursor.lock().await.clone();
-        let docs = self
-            .queue
-            .fetch_batch(&self.filter, batch_limit, cursor.as_deref())
-            .await?;
+        // Pre-fetch all candidate IDs on first call. The expensive NOT EXISTS
+        // query runs once instead of per-chunk, avoiding progressive slowdown
+        // as the ratio of processed-to-unprocessed documents increases.
+        let batch_ids = {
+            let mut work_ids = self.work_ids.lock().await;
+            if work_ids.is_none() {
+                let retry_hours = self
+                    .filter
+                    .retry_interval_hours
+                    .unwrap_or(12);
+                let all_ids = self
+                    .doc_repo
+                    .get_needing_analysis_ids(
+                        &self.filter.work_type,
+                        self.filter.source_id.as_deref(),
+                        self.filter.mime_type.as_deref(),
+                        retry_hours,
+                    )
+                    .await
+                    .map_err(|e| PipelineError::Other(e.into()))?;
+                tracing::debug!(
+                    "Pre-fetched {} document IDs needing analysis",
+                    all_ids.len()
+                );
+                *work_ids = Some(all_ids);
+            }
 
-        if docs.is_empty() {
+            let cached = work_ids.as_mut().unwrap();
+            let take_count = batch_limit.min(cached.len());
+            cached.drain(..take_count).collect::<Vec<String>>()
+        };
+
+        if batch_ids.is_empty() {
             return Ok(ChunkResult::default());
         }
 
-        // Advance cursor
-        if let Some(last) = docs.last() {
-            *self.cursor.lock().await = Some(last.id.clone());
-        }
+        // Hydrate documents from the pre-fetched IDs
+        let docs = self
+            .doc_repo
+            .get_batch(&batch_ids)
+            .await
+            .map_err(|e| PipelineError::Other(e.into()))?;
+
+        let has_more = {
+            let work_ids = self.work_ids.lock().await;
+            work_ids.as_ref().map_or(false, |ids| !ids.is_empty())
+        };
 
         let succeeded = Arc::new(AtomicUsize::new(0));
         let failed = Arc::new(AtomicUsize::new(0));
         let skipped = Arc::new(AtomicUsize::new(0));
-        let has_more = docs.len() >= batch_limit;
 
         let mut handles = Vec::with_capacity(docs.len().min(self.workers));
         let stage_name = self.name().to_string();
@@ -311,6 +353,20 @@ impl PipelineStage for OcrStage {
 
         let has_more = pages.len() >= chunk_size;
 
+        // Build OCR backends once, shared across all page workers.
+        // Each backend reuses its HTTP client (reqwest::Client connection pool)
+        // instead of creating a new one per page.
+        let backends: Arc<Vec<FallbackOcrBackend>> = Arc::new(
+            self.ocr_config
+                .backends
+                .iter()
+                .map(|entry| {
+                    let names: Vec<&str> = entry.backends();
+                    FallbackOcrBackend::from_names(&names, BackendConfig::default())
+                })
+                .collect(),
+        );
+
         let succeeded = Arc::new(AtomicUsize::new(0));
         let failed = Arc::new(AtomicUsize::new(0));
         let skipped = Arc::new(AtomicUsize::new(0));
@@ -321,6 +377,7 @@ impl PipelineStage for OcrStage {
         for page in pages {
             let doc_repo = self.doc_repo.clone();
             let ocr_config = self.ocr_config.clone();
+            let backends = backends.clone();
             let documents_dir = self.documents_dir.clone();
             let succeeded = succeeded.clone();
             let failed = failed.clone();
@@ -339,11 +396,12 @@ impl PipelineStage for OcrStage {
 
                 let rt_handle = tokio::runtime::Handle::current();
 
-                match ocr_document_page_with_config(
+                match ocr_document_page_with_backends(
                     &page,
                     &doc_repo,
                     &rt_handle,
                     &ocr_config,
+                    &backends,
                     &documents_dir,
                 ) {
                     Ok(ocr_result) => {

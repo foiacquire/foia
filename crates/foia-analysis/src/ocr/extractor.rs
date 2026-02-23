@@ -702,4 +702,35 @@ mod tests {
         assert_eq!(pages.len(), 1);
         assert!(pages[0].contains("Only one page"));
     }
+
+    #[test]
+    fn test_extract_all_nonexistent_file_returns_error() {
+        let extractor = TextExtractor::new();
+        let result = extractor.extract_all_pdf_page_texts(Path::new("/nonexistent/file.pdf"), 3);
+        assert!(result.is_err(), "should fail on nonexistent file");
+    }
+
+    #[test]
+    fn test_extract_all_corrupt_file_returns_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bad_pdf = dir.path().join("corrupt.pdf");
+        std::fs::write(&bad_pdf, b"this is not a pdf").unwrap();
+
+        let extractor = TextExtractor::new();
+        let result = extractor.extract_all_pdf_page_texts(&bad_pdf, 5);
+
+        // pdftotext may return an error or empty output for corrupt files.
+        // Either way, the caller (extract_document_text_per_page) handles
+        // the error by creating empty-text pages so OCR can still process them.
+        match result {
+            Err(_) => {} // expected
+            Ok(pages) => {
+                // Some pdftotext versions output nothing instead of erroring
+                assert!(
+                    pages.is_empty() || pages.iter().all(|p| p.trim().is_empty()),
+                    "corrupt PDF should produce no useful text"
+                );
+            }
+        }
+    }
 }

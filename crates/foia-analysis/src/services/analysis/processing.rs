@@ -3,6 +3,8 @@
 use std::fs::File;
 use std::io::Read;
 
+use tempfile::TempDir;
+
 use crate::ocr::{BackendConfig, FallbackOcrBackend, OcrBackend, TextExtractor};
 use foia::config::OcrConfig;
 use foia::models::{Document, DocumentPage, PageOcrStatus};
@@ -134,18 +136,16 @@ pub fn extract_document_text_per_page(
     }
 
     // Extract all pages in a single pdftotext call, split on form-feed
-    let page_texts = extractor
-        .extract_all_pdf_page_texts(&file_path, page_count)
-        .unwrap_or_default();
-
-    let actual_pages = if page_texts.is_empty() {
-        page_count as usize
-    } else {
-        page_texts.len()
+    let page_texts = match extractor.extract_all_pdf_page_texts(&file_path, page_count) {
+        Ok(texts) => texts,
+        Err(e) => {
+            tracing::debug!("pdftotext failed for {}: {}, creating empty pages", doc.id, e);
+            vec![String::new(); page_count as usize]
+        }
     };
 
     // Build all page records in memory
-    let mut pages = Vec::with_capacity(actual_pages);
+    let mut pages = Vec::with_capacity(page_texts.len());
     for (i, pdf_text) in page_texts.iter().enumerate() {
         let page_num = (i + 1) as u32;
         let mut page = DocumentPage::new(doc.id.clone(), version.id, page_num);
@@ -193,6 +193,7 @@ pub fn ocr_document_page(
 /// Example config: `["tesseract", ["groq", "gemini"]]`
 /// - Runs tesseract, stores as "tesseract"
 /// - Runs groq (falls back to gemini if rate limited), stores as "groq" or "gemini"
+#[allow(dead_code)]
 pub fn ocr_document_page_with_config(
     page: &DocumentPage,
     doc_repo: &DieselDocumentRepository,
@@ -200,8 +201,34 @@ pub fn ocr_document_page_with_config(
     ocr_config: &OcrConfig,
     documents_dir: &std::path::Path,
 ) -> anyhow::Result<PageOcrResult> {
-    let extractor = TextExtractor::new();
+    let backends: Vec<FallbackOcrBackend> = ocr_config
+        .backends
+        .iter()
+        .map(|entry| {
+            let names: Vec<&str> = entry.backends();
+            FallbackOcrBackend::from_names(&names, BackendConfig::default())
+        })
+        .collect();
 
+    ocr_document_page_with_backends(page, doc_repo, handle, ocr_config, &backends, documents_dir)
+}
+
+/// Run OCR on a page using pre-built backends.
+///
+/// This is the primary entry point for batch OCR. Backends are constructed once
+/// and reused across all pages, avoiding per-page HTTP client creation and
+/// redundant backend initialization.
+///
+/// The page image is rendered once via pdftoppm and reused for both hash
+/// computation (deduplication) and OCR, eliminating the double-render overhead.
+pub fn ocr_document_page_with_backends(
+    page: &DocumentPage,
+    doc_repo: &DieselDocumentRepository,
+    handle: &tokio::runtime::Handle,
+    ocr_config: &OcrConfig,
+    backends: &[FallbackOcrBackend],
+    documents_dir: &std::path::Path,
+) -> anyhow::Result<PageOcrResult> {
     // Get the document to find the file path
     let doc = handle
         .block_on(doc_repo.get(&page.document_id))?
@@ -215,10 +242,25 @@ pub fn ocr_document_page_with_config(
 
     let file_path = version.resolve_path(documents_dir, &doc.source_url, &doc.title);
 
-    // Compute image hash once for deduplication across all backends
-    let image_hash = extractor
-        .get_pdf_page_hash(&file_path, page.page_number)
-        .ok();
+    // Render page image once — used for both hashing and OCR
+    let temp_dir = TempDir::new()?;
+    let image_result =
+        crate::ocr::pdf_utils::pdf_page_to_image(&file_path, page.page_number, temp_dir.path());
+
+    let (image_path, image_hash) = match image_result {
+        Ok(path) => {
+            let hash = crate::ocr::pdf_utils::compute_file_hash(&path).ok();
+            (Some(path), hash)
+        }
+        Err(e) => {
+            tracing::debug!(
+                "Failed to render page {} image: {}",
+                page.page_number,
+                e
+            );
+            (None, None)
+        }
+    };
 
     let mut updated_page = page.clone();
     let mut improved = false;
@@ -232,8 +274,8 @@ pub fn ocr_document_page_with_config(
         .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
         .unwrap_or(0);
 
-    // Process each backend entry
-    for entry in &ocr_config.backends {
+    // Process each backend entry (paired with pre-built backends)
+    for (entry, fallback) in ocr_config.backends.iter().zip(backends.iter()) {
         let backend_names: Vec<&str> = entry.backends();
 
         // Check for existing result from any backend in this entry
@@ -277,10 +319,14 @@ pub fn ocr_document_page_with_config(
                 best_text = Some(ocr_text);
             }
         } else {
-            // Run OCR with this entry (single backend or fallback chain)
-            let fallback = FallbackOcrBackend::from_names(&backend_names, BackendConfig::default());
+            // Run OCR using pre-rendered image (or fall back to pdf_page for robustness)
+            let ocr_result = if let Some(ref img) = image_path {
+                fallback.ocr_image(img)
+            } else {
+                fallback.ocr_pdf_page(&file_path, page.page_number)
+            };
 
-            match fallback.ocr_pdf_page(&file_path, page.page_number) {
+            match ocr_result {
                 Ok(result) => {
                     let ocr_text = result.text;
                     let backend_name = result.backend.as_str();

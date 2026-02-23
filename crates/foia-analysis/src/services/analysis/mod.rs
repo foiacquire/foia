@@ -15,7 +15,9 @@ use crate::analysis::AnalysisManager;
 use foia::repository::DieselDocumentRepository;
 use foia::work_queue::{ExecutionStrategy, PipelineEvent, PipelineRunner};
 
-pub use processing::{extract_document_text_per_page, ocr_document_page_with_config};
+pub use processing::{
+    extract_document_text_per_page, ocr_document_page_with_backends, ocr_document_page_with_config,
+};
 pub use stages::{OcrStage, TextExtractionStage};
 pub use types::{AnalysisEvent, AnalysisResult};
 
