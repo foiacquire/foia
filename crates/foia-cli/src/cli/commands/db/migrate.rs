@@ -8,7 +8,7 @@ use foia::repository::util::redact_url_password;
 use foia::repository::Repositories;
 
 /// Expected schema version (should match storage_meta.format_version).
-const EXPECTED_SCHEMA_VERSION: &str = "15";
+const EXPECTED_SCHEMA_VERSION: &str = "16";
 
 /// Run database migrations.
 pub async fn cmd_migrate(settings: &Settings, check: bool, force: bool) -> anyhow::Result<()> {
