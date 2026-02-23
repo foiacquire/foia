@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+use foia::http_client::HttpClient;
+
 use super::api_backend;
 use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 
@@ -33,6 +35,7 @@ pub struct GroqBackend {
     config: BackendConfig,
     api_key: Option<String>,
     model: String,
+    http_client: Option<HttpClient>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,28 +90,36 @@ struct GroqError {
 impl GroqBackend {
     /// Create a new Groq backend with default configuration.
     pub fn new() -> Self {
+        let config = BackendConfig::new();
+        let http_client = config.create_http_client("groq-ocr").ok();
         Self {
-            config: BackendConfig::new(),
+            config,
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: resolve_model(),
+            http_client,
         }
     }
 
     /// Create a new Groq backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
+        let config = BackendConfig::with_config(config);
+        let http_client = config.create_http_client("groq-ocr").ok();
         Self {
-            config: BackendConfig::with_config(config),
+            config,
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: resolve_model(),
+            http_client,
         }
     }
 
     /// Create a new Groq backend from a full backend configuration.
     pub fn from_backend_config(config: BackendConfig) -> Self {
+        let http_client = config.create_http_client("groq-ocr").ok();
         Self {
             config,
             api_key: std::env::var("GROQ_API_KEY").ok(),
             model: resolve_model(),
+            http_client,
         }
     }
 
@@ -152,7 +163,10 @@ impl GroqBackend {
             temperature: 0.1,
         };
 
-        let client = self.config.create_http_client("groq-ocr")?;
+        let client = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| OcrError::OcrFailed("HTTP client not initialized".to_string()))?;
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
 

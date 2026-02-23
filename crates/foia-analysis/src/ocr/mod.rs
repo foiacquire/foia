@@ -40,7 +40,7 @@ mod fallback;
 mod gemini;
 mod groq;
 mod model_utils;
-mod pdf_utils;
+pub(crate) mod pdf_utils;
 mod tesseract;
 
 #[cfg(feature = "ocr-ocrs")]

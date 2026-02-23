@@ -17,6 +17,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use foia::http_client::HttpClient;
+
 use super::api_backend;
 use super::backend::{BackendConfig, OcrBackend, OcrBackendType, OcrConfig, OcrError};
 
@@ -25,6 +27,7 @@ pub struct GeminiBackend {
     config: BackendConfig,
     api_key: Option<String>,
     model: String,
+    http_client: Option<HttpClient>,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,28 +91,36 @@ struct GeminiError {
 impl GeminiBackend {
     /// Create a new Gemini backend with default configuration.
     pub fn new() -> Self {
+        let config = BackendConfig::new();
+        let http_client = config.create_http_client("gemini-ocr").ok();
         Self {
-            config: BackendConfig::new(),
+            config,
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
+            http_client,
         }
     }
 
     /// Create a new Gemini backend with custom configuration.
     pub fn with_config(config: OcrConfig) -> Self {
+        let config = BackendConfig::with_config(config);
+        let http_client = config.create_http_client("gemini-ocr").ok();
         Self {
-            config: BackendConfig::with_config(config),
+            config,
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
+            http_client,
         }
     }
 
     /// Create a new Gemini backend from a full backend configuration.
     pub fn from_backend_config(config: BackendConfig) -> Self {
+        let http_client = config.create_http_client("gemini-ocr").ok();
         Self {
             config,
             api_key: std::env::var("GEMINI_API_KEY").ok(),
             model: "gemini-1.5-flash".to_string(),
+            http_client,
         }
     }
 
@@ -160,7 +171,10 @@ impl GeminiBackend {
             self.model, api_key
         );
 
-        let client = self.config.create_http_client("gemini-ocr")?;
+        let client = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| OcrError::OcrFailed("HTTP client not initialized".to_string()))?;
 
         api_backend::apply_rate_delay("GEMINI_DELAY_MS", 200, "Gemini").await;
 
