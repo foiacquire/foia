@@ -3,7 +3,7 @@ use cetane::prelude::*;
 pub fn migration() -> Migration {
     Migration::new("0016_normalize_page_text")
         .depends_on(&["0014_search_indexes"])
-        // Step 1: Insert any missing pdftotext results (pages created after m0006)
+        // Step 1a: Copy pdf_text to page_ocr_results where not already present
         .operation(
             RunSql::portable()
                 .for_backend(
@@ -42,10 +42,46 @@ WHERE dp.pdf_text IS NOT NULL AND dp.pdf_text != ''
 ON CONFLICT DO NOTHING"#,
                 ),
         )
-        // Step 2: Backfill final_text where NULL but other text columns have data.
-        // Use backend-specific SQL: SQLite needs this for the table rebuild in Step 3.
-        // Postgres skips this because the rename in Step 3 preserves final_text values,
-        // and the runtime update_search_text() recomputes from page_ocr_results as needed.
+        // Step 1b: Copy ocr_text to page_ocr_results (pre-m0006 OCR data)
+        .operation(
+            RunSql::portable()
+                .for_backend(
+                    "sqlite",
+                    r#"INSERT OR IGNORE INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
+SELECT
+    dp.id,
+    'legacy_ocr',
+    dp.ocr_text,
+    LENGTH(dp.ocr_text),
+    LENGTH(dp.ocr_text) - LENGTH(REPLACE(dp.ocr_text, ' ', '')) + 1,
+    dp.created_at
+FROM document_pages dp
+WHERE dp.ocr_text IS NOT NULL AND dp.ocr_text != ''
+  AND NOT EXISTS (
+    SELECT 1 FROM page_ocr_results por
+    WHERE por.page_id = dp.id AND por.backend = 'legacy_ocr'
+  )"#,
+                )
+                .for_backend(
+                    "postgres",
+                    r#"INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at)
+SELECT
+    dp.id,
+    'legacy_ocr',
+    dp.ocr_text,
+    LENGTH(dp.ocr_text),
+    array_length(regexp_split_to_array(dp.ocr_text, '\s+'), 1),
+    dp.created_at
+FROM document_pages dp
+WHERE dp.ocr_text IS NOT NULL AND dp.ocr_text != ''
+  AND NOT EXISTS (
+    SELECT 1 FROM page_ocr_results por
+    WHERE por.page_id = dp.id AND por.backend = 'legacy_ocr'
+  )
+ON CONFLICT DO NOTHING"#,
+                ),
+        )
+        // Step 2: SQLite backfill (needed before table rebuild). Postgres does this after rename.
         .operation(
             RunSql::portable()
                 .for_backend(
@@ -56,12 +92,11 @@ WHERE final_text IS NULL AND (ocr_text IS NOT NULL OR pdf_text IS NOT NULL)"#,
                 )
                 .for_backend("postgres", "SELECT 1"),
         )
-        // Step 3: Rename final_text -> search_text, drop pdf_text and ocr_text
+        // Step 3: Rename final_text -> search_text
         .operation(
             RunSql::portable()
                 .for_backend(
                     "sqlite",
-                    // SQLite: rebuild table without pdf_text/ocr_text, renaming final_text
                     r#"CREATE TABLE document_pages_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id TEXT NOT NULL,
@@ -88,12 +123,39 @@ CREATE INDEX idx_pages_with_text ON document_pages(document_id) WHERE search_tex
                 )
                 .for_backend(
                     "postgres",
-                    r#"ALTER TABLE document_pages RENAME COLUMN final_text TO search_text;
-ALTER TABLE document_pages DROP COLUMN pdf_text;
+                    "ALTER TABLE document_pages RENAME COLUMN final_text TO search_text",
+                ),
+        )
+        // Step 4: Postgres: backfill search_text from page_ocr_results (reads small indexed
+        // table instead of scanning huge text columns). Only updates rows where search_text
+        // is NULL but page_ocr_results has data.
+        .operation(
+            RunSql::portable()
+                .for_backend("sqlite", "SELECT 1")
+                .for_backend(
+                    "postgres",
+                    r#"UPDATE document_pages dp
+SET search_text = por.text
+FROM (
+    SELECT DISTINCT ON (page_id) page_id, text
+    FROM page_ocr_results
+    WHERE text IS NOT NULL
+    ORDER BY page_id, char_count DESC NULLS LAST
+) por
+WHERE dp.id = por.page_id AND dp.search_text IS NULL"#,
+                ),
+        )
+        // Step 5: Postgres: drop old columns
+        .operation(
+            RunSql::portable()
+                .for_backend("sqlite", "SELECT 1")
+                .for_backend(
+                    "postgres",
+                    r#"ALTER TABLE document_pages DROP COLUMN pdf_text;
 ALTER TABLE document_pages DROP COLUMN ocr_text"#,
                 ),
         )
-        // Step 4: Rebuild FTS index on search_text (Postgres only)
+        // Step 6: Rebuild FTS index on search_text (Postgres only)
         .operation(
             RunSql::portable()
                 .for_backend("sqlite", "SELECT 1")
@@ -104,7 +166,7 @@ CREATE INDEX idx_pages_fts ON document_pages
   USING GIN (to_tsvector('english', COALESCE(search_text, '')))"#,
                 ),
         )
-        // Step 5: Update partial index on pages with text (Postgres)
+        // Step 7: Update partial index on pages with text (Postgres)
         .operation(
             RunSql::portable()
                 .for_backend("sqlite", "SELECT 1")
