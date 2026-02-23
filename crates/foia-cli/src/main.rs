@@ -12,18 +12,22 @@ async fn main() -> anyhow::Result<()> {
     // Load .env file if present (before anything else)
     let _ = dotenvy::dotenv();
 
-    // Initialize logging based on verbosity
-    let default_filter = if cli::is_verbose() {
+    // Initialize logging based on verbosity.
+    // Always suppress noisy tokio_postgres NOTICE messages (promoted to INFO),
+    // even when RUST_LOG is set explicitly.
+    let base_filter = if cli::is_verbose() {
         "foia=info"
     } else {
         "foia=warn"
     };
 
+    let filter_str = match std::env::var("RUST_LOG") {
+        Ok(user_filter) => format!("{user_filter},tokio_postgres=warn"),
+        Err(_) => format!("{base_filter},tokio_postgres=warn"),
+    };
+
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| default_filter.into()),
-        )
+        .with(tracing_subscriber::EnvFilter::new(filter_str))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
