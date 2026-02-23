@@ -1519,6 +1519,70 @@ impl DieselDocumentRepository {
         self.records_to_documents(records).await
     }
 
+    /// Get all document IDs needing analysis (no LIMIT, no hydration).
+    ///
+    /// Same NOT EXISTS logic as `get_needing_analysis` but returns only IDs.
+    /// Intended for pre-fetching: run the expensive query once, then process
+    /// from the cached ID list with cheap `get_batch` lookups.
+    pub async fn get_needing_analysis_ids(
+        &self,
+        analysis_type: &str,
+        source_id: Option<&str>,
+        mime_type: Option<&str>,
+        retry_interval_hours: u32,
+    ) -> Result<Vec<String>, DieselError> {
+        use crate::schema::{document_analysis_results as dar, document_versions};
+        use diesel::dsl::{exists, not};
+
+        let retry_cutoff =
+            (Utc::now() - chrono::Duration::hours(i64::from(retry_interval_hours))).to_rfc3339();
+        let lock_cutoff = (Utc::now() - chrono::Duration::minutes(90)).to_rfc3339();
+
+        with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .inner_join(document_versions::table)
+                .filter(documents::status.ne("failed"))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("complete")),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("failed"))
+                        .filter(dar::created_at.gt(&retry_cutoff)),
+                )))
+                .filter(not(exists(
+                    dar::table
+                        .filter(dar::document_id.eq(documents::id))
+                        .filter(dar::version_id.eq(document_versions::id))
+                        .filter(dar::analysis_type.eq(analysis_type))
+                        .filter(dar::status.eq("pending"))
+                        .filter(dar::created_at.gt(&lock_cutoff)),
+                )))
+                .into_boxed();
+
+            if let Some(sid) = source_id {
+                query = query.filter(documents::source_id.eq(sid));
+            }
+            if let Some(mime) = mime_type {
+                query = query.filter(document_versions::mime_type.eq(mime));
+            }
+
+            query
+                .select(documents::id)
+                .distinct()
+                .order(documents::id.asc())
+                .load::<String>(&mut conn)
+                .await
+        })
+    }
+
     /// Get documents needing OCR with optional source/mime/cursor filters.
     #[deprecated(note = "Use get_needing_analysis(\"ocr\", ...) instead")]
     pub async fn get_needing_ocr_filtered(
