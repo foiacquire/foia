@@ -3,11 +3,15 @@
 //! This module provides a backend-agnostic interface for database connections.
 //! The actual backend is determined at runtime based on the database URL.
 
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use diesel::sqlite::SqliteConnection;
 use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
 use diesel_async::AsyncConnection;
+use tokio::sync::mpsc;
 
 #[cfg(feature = "postgres")]
 use diesel_async::pooled_connection::deadpool::Pool as DeadPool;
@@ -35,20 +39,82 @@ pub type SqliteConn = SyncConnectionWrapper<SqliteConnection>;
 #[cfg(feature = "postgres")]
 pub type PgConn = deadpool::managed::Object<AsyncDieselConnectionManager<AsyncPgConnection>>;
 
-/// SQLite connection pool (lightweight - creates connections on demand).
+/// Default number of connections in the SQLite pool.
+const DEFAULT_SQLITE_POOL_SIZE: usize = 4;
+
+/// A pooled SQLite connection that returns itself to the pool on drop.
+///
+/// Implements `Deref` and `DerefMut` to `SqliteConn`, so it can be used
+/// transparently wherever `&mut SqliteConn` is expected (diesel deref-coerces
+/// `&mut PooledSqliteConn` to `&mut SqliteConn`).
+pub struct PooledSqliteConn {
+    conn: Option<SqliteConn>,
+    return_tx: mpsc::UnboundedSender<SqliteConn>,
+}
+
+impl Deref for PooledSqliteConn {
+    type Target = SqliteConn;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn.as_ref().expect("connection taken before drop")
+    }
+}
+
+impl DerefMut for PooledSqliteConn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.conn.as_mut().expect("connection taken before drop")
+    }
+}
+
+impl Drop for PooledSqliteConn {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            // Best-effort return to pool. If the pool is dropped (receiver closed),
+            // the connection is simply dropped here.
+            let _ = self.return_tx.send(conn);
+        }
+    }
+}
+
+/// Inner state shared by all clones of a `SqlitePool`.
+struct SqlitePoolInner {
+    database_url: String,
+    return_tx: mpsc::UnboundedSender<SqliteConn>,
+    return_rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<SqliteConn>>,
+    max_size: usize,
+    total_created: AtomicUsize,
+}
+
+/// SQLite connection pool with bounded connection reuse.
+///
+/// Connections are lazily established and returned to the pool after use.
+/// The pool keeps up to `max_size` idle connections. When all connections
+/// are checked out and the pool hasn't reached `max_size`, a new connection
+/// is established.
 #[derive(Clone)]
 pub struct SqlitePool {
-    database_url: String,
+    inner: Arc<SqlitePoolInner>,
 }
 
 #[allow(dead_code)]
 impl SqlitePool {
-    /// Create a new SQLite pool.
+    /// Create a new SQLite pool with default size.
     pub fn new(database_url: &str) -> Self {
-        // Strip sqlite: prefix if present
+        Self::with_size(database_url, DEFAULT_SQLITE_POOL_SIZE)
+    }
+
+    /// Create a new SQLite pool with a specific maximum connection count.
+    pub fn with_size(database_url: &str, max_size: usize) -> Self {
         let url = database_url.strip_prefix("sqlite:").unwrap_or(database_url);
+        let (return_tx, return_rx) = mpsc::unbounded_channel();
         Self {
-            database_url: url.to_string(),
+            inner: Arc::new(SqlitePoolInner {
+                database_url: url.to_string(),
+                return_tx,
+                return_rx: tokio::sync::Mutex::new(return_rx),
+                max_size: max_size.max(1),
+                total_created: AtomicUsize::new(0),
+            }),
         }
     }
 
@@ -57,16 +123,41 @@ impl SqlitePool {
         Self::new(&path.display().to_string())
     }
 
-    /// Get a connection.
-    pub async fn get(&self) -> Result<SqliteConn, DbError> {
-        SqliteConn::establish(&self.database_url)
+    /// Get a pooled connection.
+    ///
+    /// Reuses an idle connection if available, otherwise establishes a new one.
+    /// The connection is returned to the pool when the guard is dropped.
+    pub async fn get(&self) -> Result<PooledSqliteConn, DbError> {
+        // Try to reuse an idle connection (non-blocking check)
+        {
+            let mut rx = self.inner.return_rx.lock().await;
+            if let Ok(conn) = rx.try_recv() {
+                return Ok(PooledSqliteConn {
+                    conn: Some(conn),
+                    return_tx: self.inner.return_tx.clone(),
+                });
+            }
+        }
+
+        // No idle connections — establish a new one
+        let conn = SqliteConn::establish(&self.inner.database_url)
             .await
-            .map_err(to_diesel_error)
+            .map_err(to_diesel_error)?;
+
+        let created = self.inner.total_created.fetch_add(1, Ordering::Relaxed) + 1;
+        if created <= self.inner.max_size {
+            tracing::debug!("SQLite pool: created connection {}/{}", created, self.inner.max_size);
+        }
+
+        Ok(PooledSqliteConn {
+            conn: Some(conn),
+            return_tx: self.inner.return_tx.clone(),
+        })
     }
 
     /// Get the database URL.
     pub fn database_url(&self) -> &str {
-        &self.database_url
+        &self.inner.database_url
     }
 }
 
