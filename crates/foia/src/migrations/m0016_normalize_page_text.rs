@@ -42,13 +42,19 @@ WHERE dp.pdf_text IS NOT NULL AND dp.pdf_text != ''
 ON CONFLICT DO NOTHING"#,
                 ),
         )
-        // Step 2: Backfill final_text where NULL but other text columns have data
+        // Step 2: Backfill final_text where NULL but other text columns have data.
+        // Use backend-specific SQL: SQLite needs this for the table rebuild in Step 3.
+        // Postgres skips this because the rename in Step 3 preserves final_text values,
+        // and the runtime update_search_text() recomputes from page_ocr_results as needed.
         .operation(
-            RunSql::new(
-                r#"UPDATE document_pages
+            RunSql::portable()
+                .for_backend(
+                    "sqlite",
+                    r#"UPDATE document_pages
 SET final_text = COALESCE(final_text, ocr_text, pdf_text)
 WHERE final_text IS NULL AND (ocr_text IS NOT NULL OR pdf_text IS NOT NULL)"#,
-            ),
+                )
+                .for_backend("postgres", "SELECT 1"),
         )
         // Step 3: Rename final_text -> search_text, drop pdf_text and ocr_text
         .operation(

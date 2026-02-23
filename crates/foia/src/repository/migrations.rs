@@ -120,7 +120,19 @@ async fn run_postgres_migrations_async(
             std::thread::scope(|s| {
                 s.spawn(|| {
                     rt.block_on(async {
-                        client.execute(sql, &[]).await.map_err(|e| e.to_string())?;
+                        client.execute(sql, &[]).await.map_err(|e| {
+                            if let Some(db_err) = e.as_db_error() {
+                                format!(
+                                    "{}: {} (detail: {}, hint: {})",
+                                    db_err.severity(),
+                                    db_err.message(),
+                                    db_err.detail().unwrap_or("none"),
+                                    db_err.hint().unwrap_or("none"),
+                                )
+                            } else {
+                                format!("{}: {:?}", e, e)
+                            }
+                        })?;
                         Ok::<(), String>(())
                     })
                 })
