@@ -61,6 +61,7 @@ async fn run_sqlite_migrations_async(database_url: &str) -> Result<(), DieselErr
             }
         }
 
+        let migration_count = registry.len();
         let mut migrator = Migrator::new(&registry, &backend, state);
         let applied = migrator
             .migrate_forward(|sql| conn.execute_batch(sql).map_err(|e| e.to_string()))
@@ -72,6 +73,8 @@ async fn run_sqlite_migrations_async(database_url: &str) -> Result<(), DieselErr
 
         if applied.is_empty() {
             info!("No pending migrations");
+        } else {
+            update_format_version_sqlite(&conn, migration_count)?;
         }
 
         Ok(())
@@ -108,6 +111,7 @@ async fn run_postgres_migrations_async(
         }
     }
 
+    let migration_count = registry.len();
     let mut migrator = Migrator::new(&registry, &backend, state);
     let applied = migrator
         .migrate_forward(|sql| {
@@ -132,6 +136,8 @@ async fn run_postgres_migrations_async(
 
     if applied.is_empty() {
         info!("No pending migrations");
+    } else {
+        update_format_version_postgres(&client, migration_count).await?;
     }
 
     Ok(())
@@ -347,4 +353,37 @@ impl cetane::migrator::MigrationStateStore for PostgresState<'_> {
         self.applied.retain(|n| n != name);
         Ok(())
     }
+}
+
+/// Update storage_meta.format_version to match the migration count (SQLite).
+fn update_format_version_sqlite(
+    conn: &rusqlite::Connection,
+    migration_count: usize,
+) -> Result<(), DieselError> {
+    let version = migration_count.to_string();
+    conn.execute(
+        "UPDATE storage_meta SET value = ?1 WHERE key = 'format_version'",
+        [&version],
+    )
+    .map_err(migration_error)?;
+    info!("Updated format_version to {}", version);
+    Ok(())
+}
+
+/// Update storage_meta.format_version to match the migration count (PostgreSQL).
+#[cfg(feature = "postgres")]
+async fn update_format_version_postgres(
+    client: &tokio_postgres::Client,
+    migration_count: usize,
+) -> Result<(), DieselError> {
+    let version = migration_count.to_string();
+    client
+        .execute(
+            "UPDATE storage_meta SET value = $1 WHERE key = 'format_version'",
+            &[&version],
+        )
+        .await
+        .map_err(migration_error)?;
+    info!("Updated format_version to {}", version);
+    Ok(())
 }

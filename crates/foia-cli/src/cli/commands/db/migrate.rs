@@ -7,11 +7,10 @@ use foia::repository::migrations;
 use foia::repository::util::redact_url_password;
 use foia::repository::Repositories;
 
-/// Expected schema version (should match storage_meta.format_version).
-const EXPECTED_SCHEMA_VERSION: &str = "16";
-
 /// Run database migrations.
 pub async fn cmd_migrate(settings: &Settings, check: bool, force: bool) -> anyhow::Result<()> {
+    let expected_version = foia::migrations::registry().len().to_string();
+
     println!("{} Database migration", style("→").cyan());
     println!(
         "  Database: {}",
@@ -30,9 +29,9 @@ pub async fn cmd_migrate(settings: &Settings, check: bool, force: bool) -> anyho
             style("none").yellow()
         ),
     }
-    println!("  Expected schema version: {}", EXPECTED_SCHEMA_VERSION);
+    println!("  Expected schema version: {}", expected_version);
 
-    let needs_migration = current_version.as_deref() != Some(EXPECTED_SCHEMA_VERSION);
+    let needs_migration = current_version.as_deref() != Some(expected_version.as_str());
     let schema_exists = current_version.is_some();
 
     if check {
