@@ -141,35 +141,53 @@ FROM (
 WHERE dp.id = por.page_id AND dp.search_text IS NULL"#,
                 ),
         )
-        // Step 5: Postgres: drop old columns
+        // Step 5a: Drop pdf_text column
         .operation(
             RunSql::portable()
                 .for_backend("sqlite", "SELECT 1")
                 .for_backend(
                     "postgres",
-                    r#"ALTER TABLE document_pages DROP COLUMN IF EXISTS pdf_text;
-ALTER TABLE document_pages DROP COLUMN IF EXISTS ocr_text"#,
+                    "ALTER TABLE document_pages DROP COLUMN IF EXISTS pdf_text",
                 ),
         )
-        // Step 6: Rebuild FTS index on search_text (Postgres only)
+        // Step 5b: Drop ocr_text column
         .operation(
             RunSql::portable()
                 .for_backend("sqlite", "SELECT 1")
                 .for_backend(
                     "postgres",
-                    r#"DROP INDEX IF EXISTS idx_pages_fts;
-CREATE INDEX idx_pages_fts ON document_pages
+                    "ALTER TABLE document_pages DROP COLUMN IF EXISTS ocr_text",
+                ),
+        )
+        // Step 6a: Drop old FTS index
+        .operation(
+            RunSql::portable()
+                .for_backend("sqlite", "SELECT 1")
+                .for_backend("postgres", "DROP INDEX IF EXISTS idx_pages_fts"),
+        )
+        // Step 6b: Rebuild FTS index on search_text
+        .operation(
+            RunSql::portable()
+                .for_backend("sqlite", "SELECT 1")
+                .for_backend(
+                    "postgres",
+                    r#"CREATE INDEX IF NOT EXISTS idx_pages_fts ON document_pages
   USING GIN (to_tsvector('english', COALESCE(search_text, '')))"#,
                 ),
         )
-        // Step 7: Update partial index on pages with text (Postgres)
+        // Step 7a: Drop old partial index
+        .operation(
+            RunSql::portable()
+                .for_backend("sqlite", "SELECT 1")
+                .for_backend("postgres", "DROP INDEX IF EXISTS idx_pages_with_text"),
+        )
+        // Step 7b: Rebuild partial index on search_text
         .operation(
             RunSql::portable()
                 .for_backend("sqlite", "SELECT 1")
                 .for_backend(
                     "postgres",
-                    r#"DROP INDEX IF EXISTS idx_pages_with_text;
-CREATE INDEX idx_pages_with_text ON document_pages(document_id) WHERE search_text IS NOT NULL"#,
+                    "CREATE INDEX IF NOT EXISTS idx_pages_with_text ON document_pages(document_id) WHERE search_text IS NOT NULL",
                 ),
         )
 }
