@@ -2944,6 +2944,7 @@ dependencies = [
  "chrono",
  "foia",
  "foia-analysis",
+ "ipnet",
  "mime_guess",
  "serde",
  "serde_json",

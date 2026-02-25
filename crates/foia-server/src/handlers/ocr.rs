@@ -1,7 +1,9 @@
 //! Re-OCR API handlers.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -47,10 +49,26 @@ pub struct ReOcrResponse {
 )]
 pub async fn api_reocr_document(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(document_id): Path<String>,
     axum::Json(request): axum::Json<ReOcrRequest>,
 ) -> impl IntoResponse {
     use foia_analysis::ocr::{DeepSeekBackend, OcrBackend, OcrConfig};
+
+    if !state.is_ip_allowed_for_deepseek(addr.ip()) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(ReOcrResponse {
+                document_id,
+                backend: request.backend,
+                pages_processed: 0,
+                pages_total: 0,
+                status: "error".to_string(),
+                message: Some("Access denied".to_string()),
+            }),
+        )
+            .into_response();
+    }
 
     if request.backend != "deepseek" {
         return axum::Json(ReOcrResponse {
@@ -315,7 +333,25 @@ pub async fn api_reocr_document(
     ),
     tag = "OCR"
 )]
-pub async fn api_reocr_status(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn api_reocr_status(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
+    if !state.is_ip_allowed_for_deepseek(addr.ip()) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(ReOcrResponse {
+                document_id: String::new(),
+                backend: "deepseek".to_string(),
+                pages_processed: 0,
+                pages_total: 0,
+                status: "error".to_string(),
+                message: Some("Access denied".to_string()),
+            }),
+        )
+            .into_response();
+    }
+
     let job_status = state.deepseek_job.read().await;
 
     let (status, document_id) = if job_status.document_id.is_none() {
@@ -340,4 +376,5 @@ pub async fn api_reocr_status(State(state): State<AppState>) -> impl IntoRespons
         status,
         message: job_status.error.clone(),
     })
+    .into_response()
 }
