@@ -176,45 +176,31 @@ impl DieselSourceRepository {
     /// Rename a source ID, updating all related tables.
     /// Returns the number of documents and crawl URLs updated.
     pub async fn rename(&self, old_id: &str, new_id: &str) -> Result<(usize, usize), DieselError> {
-        use crate::repository::pool::build_sql;
-        use crate::repository::sea_tables::{CrawlConfig, CrawlUrls, Documents, Sources};
-        use sea_query::{Expr, Query};
-
-        let update_docs = Query::update()
-            .table(Documents::Table)
-            .value(Documents::SourceId, new_id)
-            .and_where(Expr::col(Documents::SourceId).eq(old_id))
-            .to_owned();
-        let update_crawl_urls = Query::update()
-            .table(CrawlUrls::Table)
-            .value(CrawlUrls::SourceId, new_id)
-            .and_where(Expr::col(CrawlUrls::SourceId).eq(old_id))
-            .to_owned();
-        let update_crawl_config = Query::update()
-            .table(CrawlConfig::Table)
-            .value(CrawlConfig::SourceId, new_id)
-            .and_where(Expr::col(CrawlConfig::SourceId).eq(old_id))
-            .to_owned();
-        let update_sources = Query::update()
-            .table(Sources::Table)
-            .value(Sources::Id, new_id)
-            .and_where(Expr::col(Sources::Id).eq(old_id))
-            .to_owned();
-
-        let sql_docs = build_sql(&self.pool, &update_docs);
-        let sql_crawl_urls = build_sql(&self.pool, &update_crawl_urls);
-        let sql_crawl_config = build_sql(&self.pool, &update_crawl_config);
-        let sql_sources = build_sql(&self.pool, &update_sources);
+        use crate::schema::{crawl_config, crawl_urls, documents};
 
         with_conn!(self.pool, conn, {
-            let docs_updated = diesel::sql_query(&sql_docs).execute(&mut conn).await?;
-            let crawls_updated = diesel::sql_query(&sql_crawl_urls)
+            let docs_updated =
+                diesel::update(documents::table.filter(documents::source_id.eq(old_id)))
+                    .set(documents::source_id.eq(new_id))
+                    .execute(&mut conn)
+                    .await?;
+
+            let crawls_updated =
+                diesel::update(crawl_urls::table.filter(crawl_urls::source_id.eq(old_id)))
+                    .set(crawl_urls::source_id.eq(new_id))
+                    .execute(&mut conn)
+                    .await?;
+
+            diesel::update(crawl_config::table.filter(crawl_config::source_id.eq(old_id)))
+                .set(crawl_config::source_id.eq(new_id))
                 .execute(&mut conn)
                 .await?;
-            diesel::sql_query(&sql_crawl_config)
+
+            diesel::update(sources::table.filter(sources::id.eq(old_id)))
+                .set(sources::id.eq(new_id))
                 .execute(&mut conn)
                 .await?;
-            diesel::sql_query(&sql_sources).execute(&mut conn).await?;
+
             Ok((docs_updated, crawls_updated))
         })
     }
