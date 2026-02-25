@@ -324,6 +324,10 @@ impl DieselDocumentRepository {
 
     /// Get all content hashes for duplicate detection.
     /// Returns (doc_id, source_id, content_hash, title) tuples
+    ///
+    /// NOTE: Uses raw SQL because Diesel DSL cannot express same-table subqueries
+    /// (correlated `MAX(id) WHERE document_id = dv.document_id`) without aliases,
+    /// and the alias! macro doesn't compose with eq_any subselects.
     pub async fn get_content_hashes(
         &self,
     ) -> Result<Vec<(String, String, String, String)>, DieselError> {
@@ -369,50 +373,21 @@ impl DieselDocumentRepository {
         content_hash: &str,
         exclude_source: Option<&str>,
     ) -> Result<Vec<(String, String, String)>, DieselError> {
-        #[derive(diesel::QueryableByName)]
-        struct SourceRow {
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            source_id: String,
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            document_id: String,
-            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-            title: Option<String>,
-        }
+        use crate::schema::documents;
 
-        let results: Vec<SourceRow> = with_conn!(self.pool, conn, {
+        with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .inner_join(document_versions::table)
+                .filter(document_versions::content_hash.eq(content_hash))
+                .select((documents::source_id, documents::id, documents::title))
+                .into_boxed();
+
             if let Some(exclude) = exclude_source {
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT d.source_id, d.id as document_id, d.title
-                           FROM documents d
-                           JOIN document_versions dv ON d.id = dv.document_id
-                           WHERE dv.content_hash = $1
-                           AND d.source_id != $2"#,
-                    )
-                    .bind::<diesel::sql_types::Text, _>(content_hash)
-                    .bind::<diesel::sql_types::Text, _>(exclude),
-                    &mut conn,
-                )
-                .await
-            } else {
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT d.source_id, d.id as document_id, d.title
-                           FROM documents d
-                           JOIN document_versions dv ON d.id = dv.document_id
-                           WHERE dv.content_hash = $1"#,
-                    )
-                    .bind::<diesel::sql_types::Text, _>(content_hash),
-                    &mut conn,
-                )
-                .await
+                query = query.filter(documents::source_id.ne(exclude));
             }
-        })?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| (r.source_id, r.document_id, r.title.unwrap_or_default()))
-            .collect())
+            query.load::<(String, String, String)>(&mut conn).await
+        })
     }
 }
 

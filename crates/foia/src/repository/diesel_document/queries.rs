@@ -224,29 +224,21 @@ impl DieselDocumentRepository {
     pub async fn get_source_status_counts(
         &self,
     ) -> Result<HashMap<String, HashMap<String, u64>>, DieselError> {
-        #[derive(diesel::QueryableByName)]
-        struct SourceStatusCount {
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            source_id: String,
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            status: String,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            count: i64,
-        }
+        use diesel::dsl::count_star;
 
         with_conn!(self.pool, conn, {
-            let rows: Vec<SourceStatusCount> = diesel::sql_query(
-                "SELECT source_id, status, COUNT(*) as count FROM documents GROUP BY source_id, status",
-            )
-            .load(&mut conn)
-            .await?;
+            let rows: Vec<(String, String, i64)> = documents::table
+                .group_by((documents::source_id, documents::status))
+                .select((documents::source_id, documents::status, count_star()))
+                .load(&mut conn)
+                .await?;
 
             let mut result: HashMap<String, HashMap<String, u64>> = HashMap::new();
-            for row in rows {
+            for (source_id, status, count) in rows {
                 result
-                    .entry(row.source_id)
+                    .entry(source_id)
                     .or_default()
-                    .insert(row.status, row.count as u64);
+                    .insert(status, count as u64);
             }
             Ok(result)
         })
@@ -554,46 +546,54 @@ impl DieselDocumentRepository {
     }
 
     /// Get category statistics - count documents by category_id.
-    /// Get category stats. Uses the trigger-maintained file_categories.doc_count
+    /// Uses the trigger-maintained file_categories.doc_count
     /// when no source filter is applied; falls back to GROUP BY for per-source stats.
     pub async fn get_category_stats(
         &self,
         source_id: Option<&str>,
     ) -> Result<HashMap<String, u64>, DieselError> {
-        #[derive(diesel::QueryableByName)]
-        struct CategoryCount {
-            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
-            category_id: Option<String>,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            count: i64,
-        }
+        use diesel::dsl::count_star;
 
         with_conn!(self.pool, conn, {
-            let results: Vec<CategoryCount> = if let Some(sid) = source_id {
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        "SELECT category_id, COUNT(*) as count FROM documents WHERE source_id = $1 GROUP BY category_id",
-                    )
-                    .bind::<diesel::sql_types::Text, _>(sid),
-                    &mut conn,
-                )
-                .await?
+            if let Some(sid) = source_id {
+                let rows: Vec<(Option<String>, i64)> = documents::table
+                    .filter(documents::source_id.eq(sid))
+                    .group_by(documents::category_id)
+                    .select((documents::category_id, count_star()))
+                    .load(&mut conn)
+                    .await?;
+
+                let mut stats = HashMap::new();
+                for (category_id, count) in rows {
+                    let category = category_id.unwrap_or_else(|| "unknown".to_string());
+                    stats.insert(category, count as u64);
+                }
+                Ok(stats)
             } else {
-                diesel_async::RunQueryDsl::load(
+                // file_categories is a trigger-maintained table not in the Diesel schema;
+                // raw SQL is required here.
+                #[derive(diesel::QueryableByName)]
+                struct CategoryCount {
+                    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+                    category_id: Option<String>,
+                    #[diesel(sql_type = diesel::sql_types::BigInt)]
+                    count: i64,
+                }
+                let results: Vec<CategoryCount> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(
                         "SELECT id as category_id, doc_count as count FROM file_categories WHERE doc_count > 0",
                     ),
                     &mut conn,
                 )
-                .await?
-            };
+                .await?;
 
-            let mut stats = HashMap::new();
-            for row in results {
-                let category = row.category_id.unwrap_or_else(|| "unknown".to_string());
-                stats.insert(category, row.count as u64);
+                let mut stats = HashMap::new();
+                for row in results {
+                    let category = row.category_id.unwrap_or_else(|| "unknown".to_string());
+                    stats.insert(category, row.count as u64);
+                }
+                Ok(stats)
             }
-            Ok(stats)
         })
     }
 
@@ -1078,47 +1078,23 @@ impl DieselDocumentRepository {
             return Ok(vec![]);
         }
 
-        // mime_patterns come from category_to_mime_patterns (internal, safe values)
-        let mime_conditions: Vec<String> = mime_patterns
-            .iter()
-            .map(|p| format!("dv.mime_type LIKE '{}'", p))
-            .collect();
+        // category_id is pre-computed on document save from the version MIME type,
+        // so we can filter directly on it instead of joining versions.
+        let doc_ids: Vec<String> = with_conn!(self.pool, conn, {
+            let mut query = documents::table
+                .filter(documents::category_id.eq(category))
+                .select(documents::id)
+                .order(documents::updated_at.desc())
+                .limit(limit as i64)
+                .into_boxed();
 
-        let source_filter = if source_id.is_some() {
-            "AND d.source_id = $1"
-        } else {
-            ""
-        };
-
-        let query = format!(
-            r#"SELECT DISTINCT d.id
-               FROM documents d
-               JOIN document_versions dv ON d.id = dv.document_id
-               WHERE ({})
-               {}
-               ORDER BY d.updated_at DESC
-               LIMIT {}"#,
-            mime_conditions.join(" OR "),
-            source_filter,
-            limit
-        );
-
-        let ids: Vec<DocIdRow> = with_conn!(self.pool, conn, {
             if let Some(sid) = source_id {
-                diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(&query).bind::<diesel::sql_types::Text, _>(sid),
-                    &mut conn,
-                )
-                .await
-                .unwrap_or_default()
-            } else {
-                diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
-                    .await
-                    .unwrap_or_default()
+                query = query.filter(documents::source_id.eq(sid));
             }
-        });
 
-        let doc_ids: Vec<String> = ids.into_iter().map(|r| r.id).collect();
+            query.load(&mut conn).await
+        })?;
+
         self.get_batch(&doc_ids).await
     }
 
