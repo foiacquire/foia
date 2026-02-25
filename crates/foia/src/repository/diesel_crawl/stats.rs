@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::{CrawlState, CrawlStats, DieselCrawlRepository, RequestStats, StatusCount};
+use super::{CrawlState, CrawlStats, DieselCrawlRepository, RequestStats};
 use crate::models::CrawlUrl;
 use crate::repository::models::CrawlUrlRecord;
 use crate::repository::pool::DieselError;
@@ -18,17 +18,19 @@ impl DieselCrawlRepository {
         &self,
         source_id: &str,
     ) -> Result<HashMap<String, u64>, DieselError> {
-        with_conn!(self.pool, conn, {
-            let counts: Vec<StatusCount> = diesel::sql_query(
-                "SELECT status, COUNT(*) as count FROM crawl_urls WHERE source_id = $1 GROUP BY status"
-            )
-            .bind::<diesel::sql_types::Text, _>(source_id)
-            .load(&mut conn)
-            .await?;
+        use diesel::dsl::count_star;
 
-            Ok(counts
+        with_conn!(self.pool, conn, {
+            let rows: Vec<(String, i64)> = crawl_urls::table
+                .filter(crawl_urls::source_id.eq(source_id))
+                .group_by(crawl_urls::status)
+                .select((crawl_urls::status, count_star()))
+                .load(&mut conn)
+                .await?;
+
+            Ok(rows
                 .into_iter()
-                .map(|sc| (sc.status, sc.count as u64))
+                .map(|(status, count)| (status, count as u64))
                 .collect())
         })
     }
@@ -158,25 +160,18 @@ impl DieselCrawlRepository {
 
     /// Get combined stats for all sources.
     pub async fn get_all_stats(&self) -> Result<HashMap<String, CrawlStats>, DieselError> {
-        // Get all distinct source IDs
-        #[derive(QueryableByName)]
-        struct SourceIdRow {
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            source_id: String,
-        }
-
-        let source_ids: Vec<SourceIdRow> = with_conn!(self.pool, conn, {
-            diesel_async::RunQueryDsl::load(
-                diesel::sql_query("SELECT DISTINCT source_id FROM crawl_urls"),
-                &mut conn,
-            )
-            .await
+        let source_ids: Vec<String> = with_conn!(self.pool, conn, {
+            crawl_urls::table
+                .select(crawl_urls::source_id)
+                .distinct()
+                .load(&mut conn)
+                .await
         })?;
 
         let mut stats = HashMap::new();
-        for row in source_ids {
-            if let Ok(source_stats) = self.get_all_stats_for_source(&row.source_id).await {
-                stats.insert(row.source_id, source_stats);
+        for source_id in source_ids {
+            if let Ok(source_stats) = self.get_all_stats_for_source(&source_id).await {
+                stats.insert(source_id, source_stats);
             }
         }
 
@@ -213,24 +208,20 @@ impl DieselCrawlRepository {
     pub async fn get_all_request_stats(
         &self,
     ) -> Result<HashMap<String, RequestStats>, DieselError> {
-        #[derive(QueryableByName)]
-        struct SourceIdRow {
-            #[diesel(sql_type = diesel::sql_types::Text)]
-            source_id: String,
-        }
+        use crate::schema::crawl_requests;
 
-        let source_ids: Vec<SourceIdRow> = with_conn!(self.pool, conn, {
-            diesel_async::RunQueryDsl::load(
-                diesel::sql_query("SELECT DISTINCT source_id FROM crawl_requests"),
-                &mut conn,
-            )
-            .await
+        let source_ids: Vec<String> = with_conn!(self.pool, conn, {
+            crawl_requests::table
+                .select(crawl_requests::source_id)
+                .distinct()
+                .load(&mut conn)
+                .await
         })?;
 
         let mut stats = HashMap::new();
-        for row in source_ids {
-            if let Ok(request_stats) = self.get_request_stats(&row.source_id).await {
-                stats.insert(row.source_id, request_stats);
+        for source_id in source_ids {
+            if let Ok(request_stats) = self.get_request_stats(&source_id).await {
+                stats.insert(source_id, request_stats);
             }
         }
 

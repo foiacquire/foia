@@ -372,14 +372,18 @@ impl DieselDocumentRepository {
 
     /// Get entity type breakdown with counts.
     pub async fn get_entity_type_counts(&self) -> Result<Vec<(String, u64)>, DieselError> {
-        let query = "SELECT entity_type, COUNT(*) as count FROM document_entities GROUP BY entity_type ORDER BY count DESC";
+        use diesel::dsl::count_star;
 
         with_conn!(self.pool, conn, {
-            let rows: Vec<EntityTypeCount> =
-                diesel_async::RunQueryDsl::load(diesel::sql_query(query), &mut conn).await?;
+            let rows: Vec<(String, i64)> = document_entities::table
+                .group_by(document_entities::entity_type)
+                .select((document_entities::entity_type, count_star()))
+                .order(count_star().desc())
+                .load(&mut conn)
+                .await?;
             Ok(rows
                 .into_iter()
-                .map(|r| (r.entity_type, r.count as u64))
+                .map(|(entity_type, count)| (entity_type, count as u64))
                 .collect())
         })
     }
@@ -390,22 +394,23 @@ impl DieselDocumentRepository {
         entity_type: &str,
         limit: usize,
     ) -> Result<Vec<(String, u64)>, DieselError> {
-        let query = format!(
-            "SELECT entity_text, COUNT(DISTINCT document_id) as count \
-             FROM document_entities WHERE entity_type = $1 \
-             GROUP BY entity_text ORDER BY count DESC LIMIT {}",
-            limit
-        );
+        use diesel::dsl::count_distinct;
 
         with_conn!(self.pool, conn, {
-            let rows: Vec<EntityTextCount> = diesel_async::RunQueryDsl::load(
-                diesel::sql_query(&query).bind::<diesel::sql_types::Text, _>(entity_type),
-                &mut conn,
-            )
-            .await?;
+            let rows: Vec<(String, i64)> = document_entities::table
+                .filter(document_entities::entity_type.eq(entity_type))
+                .group_by(document_entities::entity_text)
+                .select((
+                    document_entities::entity_text,
+                    count_distinct(document_entities::document_id),
+                ))
+                .order(count_distinct(document_entities::document_id).desc())
+                .limit(limit as i64)
+                .load(&mut conn)
+                .await?;
             Ok(rows
                 .into_iter()
-                .map(|r| (r.entity_text, r.count as u64))
+                .map(|(entity_text, count)| (entity_text, count as u64))
                 .collect())
         })
     }
