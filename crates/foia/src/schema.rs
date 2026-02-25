@@ -192,6 +192,7 @@ diesel::table! {
         manual_date -> Nullable<Text>,
         discovery_method -> Text,
         category_id -> Nullable<Text>,
+        analysis_priority -> Integer,
     }
 }
 

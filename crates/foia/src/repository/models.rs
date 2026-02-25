@@ -167,6 +167,7 @@ pub struct DocumentRecord {
     pub manual_date: Option<String>,
     pub discovery_method: String,
     pub category_id: Option<String>,
+    pub analysis_priority: i32,
 }
 
 /// New document for insertion.
@@ -190,6 +191,7 @@ pub struct NewDocument<'a> {
     pub manual_date: Option<&'a str>,
     pub discovery_method: &'a str,
     pub category_id: Option<&'a str>,
+    pub analysis_priority: i32,
 }
 
 // =============================================================================

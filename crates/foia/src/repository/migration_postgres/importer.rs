@@ -103,8 +103,8 @@ impl DatabaseImporter for PostgresMigrator {
             diesel::sql_query(
                 "INSERT INTO documents (id, source_id, title, source_url, extracted_text, status, metadata,
                     created_at, updated_at, synopsis, tags, estimated_date, date_confidence, date_source,
-                    manual_date, discovery_method, category_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                    manual_date, discovery_method, category_id, analysis_priority)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                  ON CONFLICT (id) DO UPDATE SET
                     source_id = EXCLUDED.source_id,
                     title = EXCLUDED.title,
@@ -121,7 +121,8 @@ impl DatabaseImporter for PostgresMigrator {
                     date_source = EXCLUDED.date_source,
                     manual_date = EXCLUDED.manual_date,
                     discovery_method = EXCLUDED.discovery_method,
-                    category_id = EXCLUDED.category_id"
+                    category_id = EXCLUDED.category_id,
+                    analysis_priority = EXCLUDED.analysis_priority"
             )
             .bind::<diesel::sql_types::Text, _>(&d.id)
             .bind::<diesel::sql_types::Text, _>(&d.source_id)
@@ -140,6 +141,7 @@ impl DatabaseImporter for PostgresMigrator {
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&d.manual_date)
             .bind::<diesel::sql_types::Text, _>(&d.discovery_method)
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&d.category_id)
+            .bind::<diesel::sql_types::Integer, _>(&d.analysis_priority)
             .execute(&mut conn)
             .await?;
             count += 1;

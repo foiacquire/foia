@@ -49,6 +49,8 @@ pub struct PortableDocument {
     pub manual_date: Option<String>,
     pub discovery_method: String,
     pub category_id: Option<String>,
+    #[serde(default)]
+    pub analysis_priority: i32,
 }
 
 /// Portable document version record for migration.
@@ -321,6 +323,7 @@ impl From<super::models::DocumentRecord> for PortableDocument {
             manual_date: r.manual_date,
             discovery_method: r.discovery_method,
             category_id: r.category_id,
+            analysis_priority: r.analysis_priority,
         }
     }
 }

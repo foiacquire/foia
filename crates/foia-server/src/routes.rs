@@ -1,7 +1,7 @@
 //! Router configuration for the web server.
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use tower_http::cors::CorsLayer;
@@ -46,6 +46,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/documents/:doc_id/pages",
             get(handlers::api_document_pages),
+        )
+        .route(
+            "/api/documents/:doc_id/priority",
+            put(handlers::set_document_priority),
         )
         .route(
             "/api/documents/:doc_id/reocr",

@@ -29,7 +29,7 @@ pub use api::{
 };
 pub use browse::browse_documents;
 pub use documents::{document_detail, document_versions};
-pub use documents_api::{get_document, get_document_content, list_documents};
+pub use documents_api::{get_document, get_document_content, list_documents, set_document_priority};
 pub use duplicates::list_duplicates;
 pub use entities_api::{
     document_entities, entity_locations, entity_types, search_entities, top_entities,

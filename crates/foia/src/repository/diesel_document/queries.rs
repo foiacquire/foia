@@ -1496,13 +1496,24 @@ impl DieselDocumentRepository {
                 query = query.filter(documents::id.gt(cursor));
             }
 
+            let extract_text_null = diesel::dsl::sql::<diesel::sql_types::Integer>(
+                "CASE WHEN documents.extracted_text IS NULL THEN 0 ELSE 1 END",
+            );
             query
-                .select(documents::id)
+                .select((documents::id, documents::analysis_priority, extract_text_null))
                 .distinct()
-                .order(documents::id.asc())
+                .order((
+                    documents::analysis_priority.desc(),
+                    diesel::dsl::sql::<diesel::sql_types::Integer>(
+                        "CASE WHEN documents.extracted_text IS NULL THEN 0 ELSE 1 END",
+                    )
+                    .asc(),
+                    documents::id.asc(),
+                ))
                 .limit(limit as i64)
-                .load::<String>(&mut conn)
+                .load::<(String, i32, i32)>(&mut conn)
                 .await
+                .map(|rows| rows.into_iter().map(|(id, _, _)| id).collect())
         })?;
         if ids.is_empty() {
             return Ok(vec![]);
@@ -1511,7 +1522,7 @@ impl DieselDocumentRepository {
         let records: Vec<DocumentRecord> = with_conn!(self.pool, conn, {
             documents::table
                 .filter(documents::id.eq_any(&ids))
-                .order(documents::id.asc())
+                .order(documents::analysis_priority.desc())
                 .load(&mut conn)
                 .await
         })?;
@@ -1574,12 +1585,23 @@ impl DieselDocumentRepository {
                 query = query.filter(document_versions::mime_type.eq(mime));
             }
 
+            let extract_text_null = diesel::dsl::sql::<diesel::sql_types::Integer>(
+                "CASE WHEN documents.extracted_text IS NULL THEN 0 ELSE 1 END",
+            );
             query
-                .select(documents::id)
+                .select((documents::id, documents::analysis_priority, extract_text_null))
                 .distinct()
-                .order(documents::id.asc())
-                .load::<String>(&mut conn)
+                .order((
+                    documents::analysis_priority.desc(),
+                    diesel::dsl::sql::<diesel::sql_types::Integer>(
+                        "CASE WHEN documents.extracted_text IS NULL THEN 0 ELSE 1 END",
+                    )
+                    .asc(),
+                    documents::id.asc(),
+                ))
+                .load::<(String, i32, i32)>(&mut conn)
                 .await
+                .map(|rows| rows.into_iter().map(|(id, _, _)| id).collect())
         })
     }
 
@@ -1594,6 +1616,27 @@ impl DieselDocumentRepository {
     ) -> Result<Vec<Document>, DieselError> {
         self.get_needing_analysis("ocr", limit, source_id, mime_type, after_id, 12)
             .await
+    }
+
+    /// Set the analysis priority for a document.
+    ///
+    /// Higher values = processed first. Default is 0.
+    pub async fn set_analysis_priority(
+        &self,
+        id: &str,
+        priority: i32,
+    ) -> Result<(), DieselError> {
+        let now = Utc::now().to_rfc3339();
+        with_conn!(self.pool, conn, {
+            diesel::update(documents::table.find(id))
+                .set((
+                    documents::analysis_priority.eq(priority),
+                    documents::updated_at.eq(&now),
+                ))
+                .execute(&mut conn)
+                .await?;
+            Ok::<_, DieselError>(())
+        })
     }
 
     /// Finalize document - mark as indexed.

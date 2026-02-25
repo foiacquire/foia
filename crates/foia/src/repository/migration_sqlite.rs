@@ -197,6 +197,7 @@ impl DatabaseImporter for SqliteMigrator {
                     documents::manual_date.eq(&d.manual_date),
                     documents::discovery_method.eq(&d.discovery_method),
                     documents::category_id.eq(&d.category_id),
+                    documents::analysis_priority.eq(d.analysis_priority),
                 ))
                 .execute(&mut conn)
                 .await?;

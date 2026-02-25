@@ -619,17 +619,35 @@ impl DieselDocumentRepository {
     }
 
     /// Get pages needing OCR across all documents.
+    ///
+    /// Returns pages ordered by: manually prioritized documents first,
+    /// then pages with no text, then everything else.
     pub async fn get_all_pages_needing_ocr(
         &self,
         limit: usize,
     ) -> Result<Vec<DocumentPage>, DieselError> {
+        use crate::schema::documents;
+
         let records: Vec<DocumentPageRecord> = with_conn!(self.pool, conn, {
             document_pages::table
+                .inner_join(
+                    documents::table.on(documents::id.eq(document_pages::document_id)),
+                )
                 .filter(
                     document_pages::ocr_status
                         .eq("pending")
                         .or(document_pages::ocr_status.eq("text_extracted")),
                 )
+                .order((
+                    documents::analysis_priority.desc(),
+                    diesel::dsl::sql::<diesel::sql_types::Integer>(
+                        "CASE WHEN document_pages.search_text IS NULL THEN 0 ELSE 1 END",
+                    )
+                    .asc(),
+                    document_pages::document_id.asc(),
+                    document_pages::page_number.asc(),
+                ))
+                .select(DocumentPageRecord::as_select())
                 .limit(limit as i64)
                 .load(&mut conn)
                 .await

@@ -189,3 +189,47 @@ pub async fn get_document_content(
     })
     .into_response()
 }
+
+/// Request body for setting analysis priority.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetPriorityRequest {
+    /// Priority value. Higher = processed first. Default is 0.
+    pub priority: i32,
+}
+
+/// Set the analysis priority for a document.
+#[utoipa::path(
+    put,
+    path = "/api/documents/{doc_id}/priority",
+    params(("doc_id" = String, Path, description = "Document ID")),
+    request_body = SetPriorityRequest,
+    responses(
+        (status = 200, description = "Priority updated"),
+        (status = 404, description = "Document not found")
+    ),
+    tag = "Documents"
+)]
+pub async fn set_document_priority(
+    State(state): State<AppState>,
+    Path(doc_id): Path<String>,
+    Json(body): Json<SetPriorityRequest>,
+) -> impl IntoResponse {
+    match state.doc_repo.get(&doc_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found("Document not found").into_response(),
+        Err(e) => return internal_error(e).into_response(),
+    }
+
+    match state
+        .doc_repo
+        .set_analysis_priority(&doc_id, body.priority)
+        .await
+    {
+        Ok(()) => ApiResponse::ok(serde_json::json!({
+            "document_id": doc_id,
+            "analysis_priority": body.priority,
+        }))
+        .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}

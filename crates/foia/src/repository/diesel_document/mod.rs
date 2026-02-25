@@ -789,7 +789,8 @@ mod tests {
                 date_source TEXT,
                 manual_date TEXT,
                 discovery_method TEXT NOT NULL DEFAULT 'import',
-                category_id TEXT
+                category_id TEXT,
+                analysis_priority INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS document_versions (

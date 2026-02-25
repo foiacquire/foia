@@ -76,14 +76,14 @@ impl PostgresMigrator {
         self.copy_batched(
             "COPY documents (id, source_id, title, source_url, extracted_text, status, metadata,
                 created_at, updated_at, synopsis, tags, estimated_date, date_confidence, date_source,
-                manual_date, discovery_method, category_id)
+                manual_date, discovery_method, category_id, analysis_priority)
              FROM STDIN WITH (FORMAT text)",
             documents,
             1000,
             500,
             |d| {
                 format!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     Self::escape_copy_value(Some(&d.id)),
                     Self::escape_copy_value(Some(&d.source_id)),
                     Self::escape_copy_value(Some(&d.title)),
@@ -101,6 +101,7 @@ impl PostgresMigrator {
                     Self::escape_copy_value(d.manual_date.as_deref()),
                     Self::escape_copy_value(Some(&d.discovery_method)),
                     Self::escape_copy_value(d.category_id.as_deref()),
+                    d.analysis_priority,
                 )
             },
             progress,

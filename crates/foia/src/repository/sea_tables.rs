@@ -18,6 +18,7 @@ pub enum Documents {
     CreatedAt,
     UpdatedAt,
     CategoryId,
+    AnalysisPriority,
 }
 
 #[derive(Iden)]

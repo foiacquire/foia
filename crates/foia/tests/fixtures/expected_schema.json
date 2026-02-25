@@ -847,6 +847,13 @@
     "documents": {
       "name": "documents",
       "columns": {
+        "analysis_priority": {
+          "name": "analysis_priority",
+          "col_type": "INTEGER",
+          "not_null": true,
+          "default_value": "0",
+          "primary_key": false
+        },
         "category_id": {
           "name": "category_id",
           "col_type": "TEXT",
@@ -1866,17 +1873,6 @@
       "unique": false,
       "partial": null
     },
-    "idx_document_pages_unique": {
-      "name": "idx_document_pages_unique",
-      "table": "document_pages",
-      "columns": [
-        "document_id",
-        "version_id",
-        "page_number"
-      ],
-      "unique": true,
-      "partial": null
-    },
     "idx_document_pages_version": {
       "name": "idx_document_pages_version",
       "table": "document_pages",
@@ -1903,6 +1899,16 @@
       ],
       "unique": false,
       "partial": "earliest_archived_at IS NOT NULL"
+    },
+    "idx_documents_analysis_priority": {
+      "name": "idx_documents_analysis_priority",
+      "table": "documents",
+      "columns": [
+        "analysis_priority",
+        "id"
+      ],
+      "unique": false,
+      "partial": null
     },
     "idx_documents_category": {
       "name": "idx_documents_category",
