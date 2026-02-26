@@ -6,7 +6,7 @@ use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
-use super::{CountRow, DieselDocumentRepository, OcrResult, ReturningId};
+use super::{DieselDocumentRepository, OcrResult, ReturningId};
 use crate::models::{DocumentPage, PageOcrStatus};
 use crate::repository::models::{DocumentPageRecord, PageOcrResultRecord};
 use crate::repository::parse_datetime;
@@ -757,45 +757,59 @@ impl DieselDocumentRepository {
         source_id: Option<&str>,
         document_id: Option<&str>,
     ) -> Result<u64, DieselError> {
-        let like_pattern = format!("%{query}%");
+        use crate::schema::documents;
+        use diesel::dsl::count_star;
 
         with_conn_split!(self.pool,
             sqlite: conn => {
-                let result: Vec<CountRow> = diesel::sql_query(
-                    r#"SELECT COUNT(*) AS count
-                       FROM document_pages dp
-                       JOIN documents d ON d.id = dp.document_id
-                       WHERE COALESCE(dp.search_text, '') LIKE ?
-                         AND (? IS NULL OR d.source_id = ?)
-                         AND (? IS NULL OR dp.document_id = ?)"#,
+                let like_pattern = format!("%{query}%");
+                let search_filter = diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "COALESCE(document_pages.search_text, '') LIKE ",
                 )
-                .bind::<diesel::sql_types::Text, _>(&like_pattern)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .load(&mut conn)
-                .await?;
-                #[allow(clippy::get_first)]
-                Ok(result.get(0).map(|r| r.count as u64).unwrap_or(0))
+                .bind::<diesel::sql_types::Text, _>(&like_pattern);
+
+                let mut query = document_pages::table
+                    .inner_join(
+                        documents::table.on(documents::id.eq(document_pages::document_id)),
+                    )
+                    .filter(search_filter)
+                    .select(count_star())
+                    .into_boxed();
+
+                if let Some(sid) = source_id {
+                    query = query.filter(documents::source_id.eq(sid));
+                }
+                if let Some(did) = document_id {
+                    query = query.filter(document_pages::document_id.eq(did));
+                }
+
+                let count: i64 = query.first(&mut conn).await?;
+                Ok(count as u64)
             },
             postgres: conn => {
-                let result: Vec<CountRow> = diesel::sql_query(
-                    r#"SELECT COUNT(*) AS count
-                       FROM document_pages dp
-                       JOIN documents d ON d.id = dp.document_id
-                       WHERE to_tsvector('english', COALESCE(dp.search_text, ''))
-                             @@ plainto_tsquery('english', $1)
-                         AND ($2::text IS NULL OR d.source_id = $2)
-                         AND ($3::text IS NULL OR dp.document_id = $3)"#,
+                let fts_filter = diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "to_tsvector('english', COALESCE(document_pages.search_text, '')) @@ plainto_tsquery('english', ",
                 )
                 .bind::<diesel::sql_types::Text, _>(query)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .load(&mut conn)
-                .await?;
-                #[allow(clippy::get_first)]
-                Ok(result.get(0).map(|r| r.count as u64).unwrap_or(0))
+                .sql(")");
+
+                let mut pg_query = document_pages::table
+                    .inner_join(
+                        documents::table.on(documents::id.eq(document_pages::document_id)),
+                    )
+                    .filter(fts_filter)
+                    .select(count_star())
+                    .into_boxed();
+
+                if let Some(sid) = source_id {
+                    pg_query = pg_query.filter(documents::source_id.eq(sid));
+                }
+                if let Some(did) = document_id {
+                    pg_query = pg_query.filter(document_pages::document_id.eq(did));
+                }
+
+                let count: i64 = pg_query.first(&mut conn).await?;
+                Ok(count as u64)
             }
         )
     }

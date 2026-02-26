@@ -665,6 +665,7 @@ pub struct DocIdRow {
 }
 
 #[derive(diesel::QueryableByName)]
+#[allow(dead_code)]
 pub(crate) struct CountRow {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub count: i64,

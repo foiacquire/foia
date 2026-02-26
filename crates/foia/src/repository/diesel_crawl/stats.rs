@@ -95,47 +95,39 @@ impl DieselCrawlRepository {
 
     /// Get request statistics for a source.
     pub async fn get_request_stats(&self, source_id: &str) -> Result<RequestStats, DieselError> {
-        #[derive(QueryableByName)]
-        struct StatsRow {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            success_200: i64,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            not_modified_304: i64,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            errors: i64,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            avg_duration_ms: i64,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            total_bytes: i64,
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            total_requests: i64,
-        }
+        use crate::schema::crawl_requests;
+        use diesel::dsl::count_star;
+
+        type BigInt = diesel::sql_types::BigInt;
 
         with_conn!(self.pool, conn, {
-            let result: StatsRow = diesel::sql_query(
-                r#"
-                SELECT
-                    COALESCE(SUM(CASE WHEN response_status = 200 THEN 1 ELSE 0 END), 0) as success_200,
-                    COALESCE(SUM(CASE WHEN response_status = 304 THEN 1 ELSE 0 END), 0) as not_modified_304,
-                    COALESCE(SUM(CASE WHEN error IS NOT NULL OR response_status >= 400 THEN 1 ELSE 0 END), 0) as errors,
-                    COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
-                    COALESCE(SUM(response_size), 0) as total_bytes,
-                    COUNT(*) as total_requests
-                FROM crawl_requests
-                WHERE source_id = $1
-                "#,
-            )
-            .bind::<diesel::sql_types::Text, _>(source_id)
-            .get_result(&mut conn)
-            .await?;
+            let (success_200, not_modified_304, errors, avg_duration_ms, total_bytes, total_requests): (i64, i64, i64, i64, i64, i64) =
+                crawl_requests::table
+                    .filter(crawl_requests::source_id.eq(source_id))
+                    .select((
+                        diesel::dsl::sql::<BigInt>(
+                            "COALESCE(SUM(CASE WHEN response_status = 200 THEN 1 ELSE 0 END), 0)",
+                        ),
+                        diesel::dsl::sql::<BigInt>(
+                            "COALESCE(SUM(CASE WHEN response_status = 304 THEN 1 ELSE 0 END), 0)",
+                        ),
+                        diesel::dsl::sql::<BigInt>(
+                            "COALESCE(SUM(CASE WHEN error IS NOT NULL OR response_status >= 400 THEN 1 ELSE 0 END), 0)",
+                        ),
+                        diesel::dsl::sql::<BigInt>("COALESCE(AVG(duration_ms), 0)"),
+                        diesel::dsl::sql::<BigInt>("COALESCE(SUM(response_size), 0)"),
+                        count_star(),
+                    ))
+                    .first(&mut conn)
+                    .await?;
 
             Ok(RequestStats {
-                success_200: result.success_200 as u64,
-                not_modified_304: result.not_modified_304 as u64,
-                errors: result.errors as u64,
-                avg_duration_ms: result.avg_duration_ms as u64,
-                total_bytes: result.total_bytes as u64,
-                total_requests: result.total_requests as u64,
+                success_200: success_200 as u64,
+                not_modified_304: not_modified_304 as u64,
+                errors: errors as u64,
+                avg_duration_ms: avg_duration_ms as u64,
+                total_bytes: total_bytes as u64,
+                total_requests: total_requests as u64,
             })
         })
     }
