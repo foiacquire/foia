@@ -325,12 +325,15 @@ impl DieselDocumentRepository {
     /// Get all content hashes for duplicate detection.
     /// Returns (doc_id, source_id, content_hash, title) tuples
     ///
-    /// NOTE: Uses raw SQL because Diesel DSL cannot express same-table subqueries
-    /// (correlated `MAX(id) WHERE document_id = dv.document_id`) without aliases,
-    /// and the alias! macro doesn't compose with eq_any subselects.
+    /// Uses sea-query for the correlated subquery that Diesel DSL cannot express
+    /// (same-table `MAX(id) WHERE document_id = dv.document_id`).
     pub async fn get_content_hashes(
         &self,
     ) -> Result<Vec<(String, String, String, String)>, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::{DocumentVersions, Documents};
+        use sea_query::{Alias, Expr, Query};
+
         #[derive(diesel::QueryableByName)]
         struct HashRow {
             #[diesel(sql_type = diesel::sql_types::Text)]
@@ -343,14 +346,41 @@ impl DieselDocumentRepository {
             title: Option<String>,
         }
 
+        let dv2 = Alias::new("dv2");
+        let max_version = Query::select()
+            .expr(Expr::col((dv2.clone(), DocumentVersions::Id)).max())
+            .from_as(DocumentVersions::Table, dv2.clone())
+            .and_where(
+                Expr::col((dv2, DocumentVersions::DocumentId))
+                    .equals((DocumentVersions::Table, DocumentVersions::DocumentId)),
+            )
+            .to_owned();
+
+        let stmt = Query::select()
+            .column((DocumentVersions::Table, DocumentVersions::DocumentId))
+            .column((Documents::Table, Documents::SourceId))
+            .column((DocumentVersions::Table, DocumentVersions::ContentHash))
+            .column((Documents::Table, Documents::Title))
+            .from(DocumentVersions::Table)
+            .join(
+                sea_query::JoinType::Join,
+                Documents::Table,
+                Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId))
+                    .equals((Documents::Table, Documents::Id)),
+            )
+            .and_where(
+                Expr::col((DocumentVersions::Table, DocumentVersions::ContentHash)).is_not_null(),
+            )
+            .and_where(
+                Expr::col((DocumentVersions::Table, DocumentVersions::Id))
+                    .in_subquery(max_version),
+            )
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
         let results: Vec<HashRow> = with_conn!(self.pool, conn, {
-            diesel::sql_query(
-                r#"SELECT dv.document_id, d.source_id, dv.content_hash, d.title
-                   FROM document_versions dv
-                   JOIN documents d ON dv.document_id = d.id
-                   WHERE dv.content_hash IS NOT NULL
-                   AND dv.id = (SELECT MAX(id) FROM document_versions WHERE document_id = dv.document_id)"#
-            ).load(&mut conn).await
+            diesel::sql_query(&sql).load(&mut conn).await
         })?;
 
         Ok(results

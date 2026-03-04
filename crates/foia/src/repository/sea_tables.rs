@@ -19,6 +19,22 @@ pub enum Documents {
     UpdatedAt,
     CategoryId,
     AnalysisPriority,
+    ManualDate,
+    EstimatedDate,
+}
+
+#[derive(Iden)]
+pub enum FileCategories {
+    Table,
+    Id,
+    DocCount,
+}
+
+#[derive(Iden)]
+pub enum StorageMeta {
+    Table,
+    Key,
+    Value,
 }
 
 #[derive(Iden)]

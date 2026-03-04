@@ -488,23 +488,55 @@ impl DieselDocumentRepository {
         version_id: i32,
         analysis_type: &str,
     ) -> Result<(), DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentAnalysisResults as Dar;
+        use sea_query::{Expr, OnConflict, Query};
+
         let now = Utc::now().to_rfc3339();
 
-        with_conn!(self.pool, conn, {
-            diesel::sql_query(
-                r#"INSERT INTO document_analysis_results
-                   (document_id, version_id, analysis_type, backend, status, created_at)
-                   VALUES ($1, $2, $3, 'pending', 'pending', $4)
-                   ON CONFLICT (document_id, version_id, analysis_type, backend, COALESCE(model, ''))
-                   WHERE page_id IS NULL
-                   DO UPDATE SET status = 'pending', created_at = $4"#,
+        let stmt = Query::insert()
+            .into_table(Dar::Table)
+            .columns([
+                Dar::DocumentId,
+                Dar::VersionId,
+                Dar::AnalysisType,
+                Dar::Backend,
+                Dar::Status,
+                Dar::CreatedAt,
+            ])
+            .values_panic([
+                document_id.to_string().into(),
+                version_id.into(),
+                analysis_type.to_string().into(),
+                "pending".into(),
+                "pending".into(),
+                now.clone().into(),
+            ])
+            .on_conflict(
+                OnConflict::new()
+                    .expr(Expr::col(Dar::DocumentId))
+                    .expr(Expr::col(Dar::VersionId))
+                    .expr(Expr::col(Dar::AnalysisType))
+                    .expr(Expr::col(Dar::Backend))
+                    .expr(Expr::cust("COALESCE(\"model\", '')"))
+                    .target_and_where(Expr::cust("page_id IS NULL"))
+                    .update_columns([Dar::Status, Dar::CreatedAt])
+                    .to_owned(),
             )
-            .bind::<diesel::sql_types::Text, _>(document_id)
-            .bind::<diesel::sql_types::Integer, _>(version_id)
-            .bind::<diesel::sql_types::Text, _>(analysis_type)
-            .bind::<diesel::sql_types::Text, _>(&now)
-            .execute(&mut conn)
-            .await?;
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(document_id)
+                .bind::<diesel::sql_types::Integer, _>(version_id)
+                .bind::<diesel::sql_types::Text, _>(analysis_type)
+                .bind::<diesel::sql_types::Text, _>("pending")
+                .bind::<diesel::sql_types::Text, _>("pending")
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .execute(&mut conn)
+                .await?;
             Ok(())
         })
     }
@@ -519,30 +551,98 @@ impl DieselDocumentRepository {
         &self,
         analysis_type: &str,
     ) -> Result<u64, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::{
+            DocumentAnalysisResults as Dar, DocumentVersions, Documents,
+        };
+        use sea_query::{Alias, Expr, Query};
+
         let now = Utc::now().to_rfc3339();
 
-        with_conn!(self.pool, conn, {
-            let count = diesel::sql_query(
-                r#"INSERT INTO document_analysis_results
-                   (page_id, document_id, version_id, analysis_type, backend, status, created_at)
-                   SELECT NULL, d.id, dv.id, $1, 'backfill', 'complete', $2
-                   FROM documents d
-                   JOIN document_versions dv ON dv.document_id = d.id
-                   WHERE d.status IN ('indexed', 'ocr_complete')
-                   AND dv.id = (SELECT MAX(dv2.id) FROM document_versions dv2 WHERE dv2.document_id = d.id)
-                   AND NOT EXISTS (
-                       SELECT 1 FROM document_analysis_results dar
-                       WHERE dar.document_id = d.id
-                       AND dar.version_id = dv.id
-                       AND dar.analysis_type = $3
-                       AND dar.status = 'complete'
-                   )"#,
+        let dv2 = Alias::new("dv2");
+        let max_version = Query::select()
+            .expr(Expr::col((dv2.clone(), DocumentVersions::Id)).max())
+            .from_as(DocumentVersions::Table, dv2.clone())
+            .and_where(
+                Expr::col((dv2.clone(), DocumentVersions::DocumentId))
+                    .equals((Documents::Table, Documents::Id)),
             )
-            .bind::<diesel::sql_types::Text, _>(analysis_type)
-            .bind::<diesel::sql_types::Text, _>(&now)
-            .bind::<diesel::sql_types::Text, _>(analysis_type)
-            .execute(&mut conn)
-            .await?;
+            .to_owned();
+
+        let dar = Alias::new("dar");
+        let already_complete = Query::select()
+            .expr(Expr::cust("1"))
+            .from_as(Dar::Table, dar.clone())
+            .and_where(
+                Expr::col((dar.clone(), Dar::DocumentId))
+                    .equals((Documents::Table, Documents::Id)),
+            )
+            .and_where(
+                Expr::col((dar.clone(), Dar::VersionId))
+                    .equals((DocumentVersions::Table, DocumentVersions::Id)),
+            )
+            .and_where(Expr::col((dar.clone(), Dar::AnalysisType)).eq(analysis_type))
+            .and_where(Expr::col((dar.clone(), Dar::Status)).eq("complete"))
+            .to_owned();
+
+        let select = Query::select()
+            .expr(Expr::cust("NULL"))
+            .column((Documents::Table, Documents::Id))
+            .column((DocumentVersions::Table, DocumentVersions::Id))
+            .expr(Expr::val(analysis_type.to_string()))
+            .expr(Expr::val("backfill".to_string()))
+            .expr(Expr::val("complete".to_string()))
+            .expr(Expr::val(now.clone()))
+            .from(Documents::Table)
+            .join(
+                sea_query::JoinType::Join,
+                DocumentVersions::Table,
+                Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId))
+                    .equals((Documents::Table, Documents::Id)),
+            )
+            .and_where(
+                Expr::col((Documents::Table, Documents::Status)).is_in(["indexed", "ocr_complete"]),
+            )
+            .and_where(
+                Expr::col((DocumentVersions::Table, DocumentVersions::Id))
+                    .in_subquery(max_version),
+            )
+            .and_where(Expr::exists(already_complete).not())
+            .to_owned();
+
+        let stmt = Query::insert()
+            .into_table(Dar::Table)
+            .columns([
+                Dar::PageId,
+                Dar::DocumentId,
+                Dar::VersionId,
+                Dar::AnalysisType,
+                Dar::Backend,
+                Dar::Status,
+                Dar::CreatedAt,
+            ])
+            .select_from(select)
+            .expect("valid INSERT...SELECT")
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        // Bind order matches sea-query placeholder generation:
+        // SELECT vals: analysis_type, 'backfill', 'complete', now
+        // WHERE is_in: 'indexed', 'ocr_complete'
+        // NOT EXISTS subquery: analysis_type, 'complete'
+        with_conn!(self.pool, conn, {
+            let count = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>(analysis_type)
+                .bind::<diesel::sql_types::Text, _>("backfill")
+                .bind::<diesel::sql_types::Text, _>("complete")
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>("indexed")
+                .bind::<diesel::sql_types::Text, _>("ocr_complete")
+                .bind::<diesel::sql_types::Text, _>(analysis_type)
+                .bind::<diesel::sql_types::Text, _>("complete")
+                .execute(&mut conn)
+                .await?;
             Ok(count as u64)
         })
     }

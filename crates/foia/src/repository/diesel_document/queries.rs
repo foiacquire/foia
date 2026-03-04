@@ -411,20 +411,56 @@ impl DieselDocumentRepository {
 
     /// Get type statistics - count documents by MIME type.
     pub async fn get_type_stats(&self) -> Result<HashMap<String, u64>, DieselError> {
-        with_conn!(self.pool, conn, {
-            let results: Vec<MimeCount> = diesel_async::RunQueryDsl::load(
-                diesel::sql_query(
-                    r#"SELECT COALESCE(dv.mime_type, 'unknown') as mime_type, COUNT(DISTINCT dv.document_id) as count
-                       FROM document_versions dv
-                       INNER JOIN (
-                           SELECT document_id, MAX(id) as max_id
-                           FROM document_versions
-                           GROUP BY document_id
-                       ) latest ON dv.document_id = latest.document_id AND dv.id = latest.max_id
-                       GROUP BY dv.mime_type"#
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::DocumentVersions;
+        use sea_query::{Alias, Expr, Query};
+
+        let latest = Query::select()
+            .column(DocumentVersions::DocumentId)
+            .expr_as(
+                Expr::col(DocumentVersions::Id).max(),
+                Alias::new("max_id"),
+            )
+            .from(DocumentVersions::Table)
+            .group_by_col(DocumentVersions::DocumentId)
+            .to_owned();
+
+        let latest_alias = Alias::new("latest");
+        let stmt = Query::select()
+            .expr_as(
+                Expr::cust_with_expr(
+                    "COALESCE($1, 'unknown')",
+                    Expr::col((DocumentVersions::Table, DocumentVersions::MimeType)),
                 ),
-                &mut conn,
-            ).await?;
+                Alias::new("mime_type"),
+            )
+            .expr_as(
+                Expr::cust_with_expr(
+                    "COUNT(DISTINCT $1)",
+                    Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId)),
+                ),
+                Alias::new("count"),
+            )
+            .from(DocumentVersions::Table)
+            .join_subquery(
+                sea_query::JoinType::InnerJoin,
+                latest,
+                latest_alias.clone(),
+                Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId))
+                    .equals((latest_alias.clone(), Alias::new("document_id")))
+                    .and(
+                        Expr::col((DocumentVersions::Table, DocumentVersions::Id))
+                            .equals((latest_alias, Alias::new("max_id"))),
+                    ),
+            )
+            .group_by_col((DocumentVersions::Table, DocumentVersions::MimeType))
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        with_conn!(self.pool, conn, {
+            let results: Vec<MimeCount> =
+                diesel_async::RunQueryDsl::load(diesel::sql_query(&sql), &mut conn).await?;
             let mut stats = HashMap::new();
             for row in results {
                 stats.insert(row.mime_type, row.count as u64);
@@ -459,7 +495,11 @@ impl DieselDocumentRepository {
                 Ok(stats)
             } else {
                 // file_categories is a trigger-maintained table not in the Diesel schema;
-                // raw SQL is required here.
+                // use sea-query for portable SQL generation.
+                use crate::repository::pool::build_sql;
+                use crate::repository::sea_tables::FileCategories;
+                use sea_query::{Alias, Expr, Query};
+
                 #[derive(diesel::QueryableByName)]
                 struct CategoryCount {
                     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
@@ -467,13 +507,24 @@ impl DieselDocumentRepository {
                     #[diesel(sql_type = diesel::sql_types::BigInt)]
                     count: i64,
                 }
-                let results: Vec<CategoryCount> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        "SELECT id as category_id, doc_count as count FROM file_categories WHERE doc_count > 0",
-                    ),
-                    &mut conn,
-                )
-                .await?;
+
+                let stmt = Query::select()
+                    .expr_as(
+                        Expr::col(FileCategories::Id),
+                        Alias::new("category_id"),
+                    )
+                    .expr_as(
+                        Expr::col(FileCategories::DocCount),
+                        Alias::new("count"),
+                    )
+                    .from(FileCategories::Table)
+                    .and_where(Expr::col(FileCategories::DocCount).gt(0))
+                    .to_owned();
+
+                let sql = build_sql(&self.pool, &stmt);
+
+                let results: Vec<CategoryCount> =
+                    diesel_async::RunQueryDsl::load(diesel::sql_query(&sql), &mut conn).await?;
 
                 let mut stats = HashMap::new();
                 for row in results {
@@ -984,6 +1035,10 @@ impl DieselDocumentRepository {
         start_date: Option<&str>,
         end_date: Option<&str>,
     ) -> Result<Vec<(String, i64, u64)>, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::Documents;
+        use sea_query::{Alias, Expr, ExprTrait, Query};
+
         #[derive(diesel::QueryableByName)]
         struct TimelineBucket {
             #[diesel(sql_type = diesel::sql_types::Text)]
@@ -992,47 +1047,49 @@ impl DieselDocumentRepository {
             count: i64,
         }
 
-        // Use publication date: prefer manual_date, fall back to estimated_date
-        // Only include documents that have at least one of these dates
-        let date_expr = "COALESCE(manual_date, estimated_date)";
-        let base_query = format!(
-            "SELECT date({}) as date_bucket, COUNT(*) as count FROM documents",
-            date_expr
+        let coalesce = Expr::cust_with_exprs(
+            "COALESCE($1, $2)",
+            [
+                Expr::col(Documents::ManualDate).into(),
+                Expr::col(Documents::EstimatedDate).into(),
+            ],
         );
 
-        // Always filter to documents with a publication date
-        let mut conditions = vec![format!("{} IS NOT NULL", date_expr)];
+        let date_fn = Expr::cust_with_expr("date($1)", coalesce.clone());
 
-        if source_id.is_some() {
-            conditions.push("source_id = $1".to_string());
+        let mut stmt = Query::select()
+            .expr_as(date_fn.clone(), Alias::new("date_bucket"))
+            .expr_as(Expr::cust("COUNT(*)"), Alias::new("count"))
+            .from(Documents::Table)
+            .and_where(coalesce.is_not_null())
+            .to_owned();
+
+        if let Some(sid) = source_id {
+            stmt = stmt
+                .and_where(Expr::col(Documents::SourceId).eq(sid))
+                .to_owned();
         }
-        if start_date.is_some() {
-            let idx = if source_id.is_some() { "$2" } else { "$1" };
-            conditions.push(format!("date({}) >= {}", date_expr, idx));
+        if let Some(start) = start_date {
+            stmt = stmt.and_where(date_fn.clone().gte(start)).to_owned();
         }
-        if end_date.is_some() {
-            let idx = match (source_id.is_some(), start_date.is_some()) {
-                (true, true) => "$3",
-                (true, false) | (false, true) => "$2",
-                (false, false) => "$1",
-            };
-            conditions.push(format!("date({}) <= {}", date_expr, idx));
+        if let Some(end) = end_date {
+            stmt = stmt.and_where(date_fn.clone().lte(end)).to_owned();
         }
 
-        let where_clause = format!(" WHERE {}", conditions.join(" AND "));
+        stmt = stmt
+            .group_by_col(Alias::new("date_bucket"))
+            .order_by(Alias::new("date_bucket"), sea_query::Order::Asc)
+            .to_owned();
 
-        let query = format!(
-            "{}{} GROUP BY date_bucket ORDER BY date_bucket ASC",
-            base_query, where_clause
-        );
+        let sql = build_sql(&self.pool, &stmt);
 
         with_conn!(self.pool, conn, {
             use diesel_async::RunQueryDsl;
 
-            // Build and execute query with appropriate bindings
+            // Bind order: source_id (if present), start_date (if present), end_date (if present)
             let results: Vec<TimelineBucket> = match (source_id, start_date, end_date) {
                 (Some(sid), Some(start), Some(end)) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(sid)
                         .bind::<diesel::sql_types::Text, _>(start)
                         .bind::<diesel::sql_types::Text, _>(end)
@@ -1040,52 +1097,50 @@ impl DieselDocumentRepository {
                         .await?
                 }
                 (Some(sid), Some(start), None) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(sid)
                         .bind::<diesel::sql_types::Text, _>(start)
                         .load(&mut conn)
                         .await?
                 }
                 (Some(sid), None, Some(end)) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(sid)
                         .bind::<diesel::sql_types::Text, _>(end)
                         .load(&mut conn)
                         .await?
                 }
                 (Some(sid), None, None) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(sid)
                         .load(&mut conn)
                         .await?
                 }
                 (None, Some(start), Some(end)) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(start)
                         .bind::<diesel::sql_types::Text, _>(end)
                         .load(&mut conn)
                         .await?
                 }
                 (None, Some(start), None) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(start)
                         .load(&mut conn)
                         .await?
                 }
                 (None, None, Some(end)) => {
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(end)
                         .load(&mut conn)
                         .await?
                 }
-                (None, None, None) => diesel::sql_query(&query).load(&mut conn).await?,
+                (None, None, None) => diesel::sql_query(&sql).load(&mut conn).await?,
             };
 
-            // Convert to output format with timestamps
             let buckets: Vec<(String, i64, u64)> = results
                 .into_iter()
                 .map(|b| {
-                    // Parse date string to timestamp (midnight UTC)
                     let timestamp = chrono::NaiveDate::parse_from_str(&b.date_bucket, "%Y-%m-%d")
                         .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp())
                         .unwrap_or(0);

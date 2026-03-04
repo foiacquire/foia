@@ -117,32 +117,31 @@ impl DieselDbContext {
     ///
     /// Returns None if the storage_meta table doesn't exist or has no format_version entry.
     pub async fn get_schema_version(&self) -> Result<Option<String>, DieselError> {
+        use crate::repository::pool::build_sql;
+        use crate::repository::sea_tables::StorageMeta;
+        use sea_query::{Expr, Query};
+
         #[derive(diesel::QueryableByName)]
         struct MetaValue {
             #[diesel(sql_type = diesel::sql_types::Text)]
             value: String,
         }
 
-        let result = with_conn_split!(self.pool,
-            sqlite: conn => {
-                use diesel_async::RunQueryDsl;
-                let result: Result<MetaValue, _> = diesel::sql_query(
-                    "SELECT value FROM storage_meta WHERE key = 'format_version'"
-                )
-                .get_result(&mut conn)
-                .await;
-                result
-            },
-            postgres: conn => {
-                use diesel_async::RunQueryDsl;
-                let result: Result<MetaValue, _> = diesel::sql_query(
-                    "SELECT value FROM storage_meta WHERE key = 'format_version'"
-                )
-                .get_result(&mut conn)
-                .await;
-                result
-            }
-        );
+        let stmt = Query::select()
+            .column(StorageMeta::Value)
+            .from(StorageMeta::Table)
+            .and_where(Expr::col(StorageMeta::Key).eq("format_version"))
+            .to_owned();
+
+        let sql = build_sql(&self.pool, &stmt);
+
+        let result = crate::with_conn!(self.pool, conn, {
+            use diesel_async::RunQueryDsl;
+            diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::Text, _>("format_version")
+                .get_result::<MetaValue>(&mut conn)
+                .await
+        });
 
         match result {
             Ok(meta) => Ok(Some(meta.value)),
@@ -155,7 +154,6 @@ impl DieselDbContext {
                 Ok(None)
             }
             Err(e) => {
-                // Check if it's a "no such table" error for SQLite or similar
                 let err_str = e.to_string();
                 if err_str.contains("no such table")
                     || err_str.contains("does not exist")
@@ -172,12 +170,28 @@ impl DieselDbContext {
     /// Get list of all tables in the database.
     #[allow(dead_code)]
     pub async fn list_tables(&self) -> Result<Vec<String>, DieselError> {
+        use sea_query::{Alias, Expr, Query};
+
         with_conn_split!(self.pool,
             sqlite: conn => {
+                let sqlite_master = Alias::new("sqlite_master");
+                let name_col = Alias::new("name");
+                let type_col = Alias::new("type");
+
+                let stmt = Query::select()
+                    .column(name_col.clone())
+                    .from(sqlite_master)
+                    .and_where(Expr::col(type_col).eq("table"))
+                    .and_where(Expr::col(name_col.clone()).not_like("sqlite_%"))
+                    .order_by(name_col, sea_query::Order::Asc)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+
                 let rows: Vec<TableName> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-                    ),
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Text, _>("table")
+                        .bind::<diesel::sql_types::Text, _>("sqlite_%"),
                     &mut conn,
                 )
                 .await?;
@@ -185,11 +199,24 @@ impl DieselDbContext {
             },
             postgres: conn => {
                 use diesel_async::RunQueryDsl;
-                let rows: Vec<TableName> = diesel::sql_query(
-                    "SELECT tablename as name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
-                )
-                .load(&mut conn)
-                .await?;
+
+                let pg_tables = Alias::new("pg_tables");
+                let tablename = Alias::new("tablename");
+                let schemaname = Alias::new("schemaname");
+
+                let stmt = Query::select()
+                    .expr_as(Expr::col(tablename), Alias::new("name"))
+                    .from(pg_tables)
+                    .and_where(Expr::col(schemaname).eq("public"))
+                    .order_by(Alias::new("name"), sea_query::Order::Asc)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                let rows: Vec<TableName> = diesel::sql_query(&sql)
+                    .bind::<diesel::sql_types::Text, _>("public")
+                    .load(&mut conn)
+                    .await?;
                 Ok(rows.into_iter().map(|r| r.name).collect())
             }
         )
