@@ -49,16 +49,24 @@ impl DieselCrawlRepository {
             // Get the last inserted ID based on database type
             let id: i64 = match &self.pool {
                 DbPool::Sqlite(_) => {
-                    let result: LastInsertRowId = diesel::sql_query("SELECT last_insert_rowid()")
-                        .get_result(&mut conn)
-                        .await?;
+                    use sea_query::{Alias, Expr, Query};
+                    let stmt = Query::select()
+                        .expr_as(Expr::cust("last_insert_rowid()"), Alias::new("id"))
+                        .to_owned();
+                    let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+                    let result: LastInsertRowId =
+                        diesel::sql_query(&sql).get_result(&mut conn).await?;
                     result.id
                 }
                 #[cfg(feature = "postgres")]
                 DbPool::Postgres(_) => {
-                    let result: LastInsertId = diesel::sql_query("SELECT lastval()::integer as id")
-                        .get_result(&mut conn)
-                        .await?;
+                    use sea_query::{Alias, Expr, Query};
+                    let stmt = Query::select()
+                        .expr_as(Expr::cust("lastval()::integer"), Alias::new("id"))
+                        .to_owned();
+                    let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+                    let result: LastInsertId =
+                        diesel::sql_query(&sql).get_result(&mut conn).await?;
                     result.id as i64
                 }
             };

@@ -175,26 +175,50 @@ impl DieselDocumentRepository {
                 Ok::<_, DieselError>(())
             },
             postgres: conn => {
+                use crate::repository::sea_tables::DocumentPages;
+                use sea_query::{OnConflict, Query, PostgresQueryBuilder};
+
                 for chunk in pages.chunks(50) {
-                    let params_per_row = 7;
-                    let mut placeholders = Vec::with_capacity(chunk.len());
-                    for i in 0..chunk.len() {
-                        let base = i * params_per_row + 1;
-                        placeholders.push(format!(
-                            "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                            base, base + 1, base + 2, base + 3, base + 4,
-                            base + 5, base + 6
-                        ));
+                    let mut insert = Query::insert()
+                        .into_table(DocumentPages::Table)
+                        .columns([
+                            DocumentPages::DocumentId,
+                            DocumentPages::VersionId,
+                            DocumentPages::PageNumber,
+                            DocumentPages::SearchText,
+                            DocumentPages::OcrStatus,
+                            DocumentPages::CreatedAt,
+                            DocumentPages::UpdatedAt,
+                        ])
+                        .to_owned();
+
+                    for page in chunk {
+                        insert = insert.values_panic([
+                            page.document_id.clone().into(),
+                            (page.version_id as i32).into(),
+                            (page.page_number as i32).into(),
+                            page.search_text.clone().into(),
+                            page.ocr_status.as_str().to_string().into(),
+                            now.clone().into(),
+                            now.clone().into(),
+                        ]).to_owned();
                     }
 
-                    let sql = format!(
-                        "INSERT INTO document_pages (document_id, version_id, page_number, search_text, ocr_status, created_at, updated_at) \
-                         VALUES {} \
-                         ON CONFLICT (document_id, version_id, page_number) \
-                         DO UPDATE SET search_text = EXCLUDED.search_text, \
-                         ocr_status = EXCLUDED.ocr_status, updated_at = EXCLUDED.updated_at",
-                        placeholders.join(", ")
-                    );
+                    let stmt = insert.on_conflict(
+                        OnConflict::columns([
+                            DocumentPages::DocumentId,
+                            DocumentPages::VersionId,
+                            DocumentPages::PageNumber,
+                        ])
+                        .update_columns([
+                            DocumentPages::SearchText,
+                            DocumentPages::OcrStatus,
+                            DocumentPages::UpdatedAt,
+                        ])
+                        .to_owned(),
+                    ).to_owned();
+
+                    let (sql, _) = stmt.build(PostgresQueryBuilder);
 
                     let mut query = diesel::sql_query(sql).into_boxed::<diesel::pg::Pg>();
                     for page in chunk {
@@ -399,52 +423,136 @@ impl DieselDocumentRepository {
         document_id: &str,
         version_id: i32,
     ) -> Result<(), DieselError> {
+        use crate::repository::sea_tables::{DocumentPages, PageOcrResults};
+        use sea_query::{Alias, Expr, Query};
+
         let now = Utc::now().to_rfc3339();
+        let dp = Alias::new("dp");
+        let por = Alias::new("por");
+
+        let not_exists = Query::select()
+            .expr(Expr::cust("1"))
+            .from_as(PageOcrResults::Table, por.clone())
+            .and_where(
+                Expr::col((por.clone(), PageOcrResults::PageId))
+                    .equals((dp.clone(), DocumentPages::Id)),
+            )
+            .and_where(Expr::col((por, PageOcrResults::Backend)).eq("pdftotext"))
+            .to_owned();
 
         with_conn_split!(self.pool,
             sqlite: conn => {
-                diesel::sql_query(
-                    "INSERT OR IGNORE INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at) \
-                     SELECT dp.id, 'pdftotext', dp.search_text, \
-                            LENGTH(dp.search_text), \
-                            LENGTH(dp.search_text) - LENGTH(REPLACE(dp.search_text, ' ', '')) + 1, \
-                            ? \
-                     FROM document_pages dp \
-                     WHERE dp.document_id = ? AND dp.version_id = ? \
-                       AND dp.search_text IS NOT NULL AND dp.search_text != '' \
-                       AND NOT EXISTS ( \
-                         SELECT 1 FROM page_ocr_results por \
-                         WHERE por.page_id = dp.id AND por.backend = 'pdftotext' \
-                       )"
-                )
-                .bind::<diesel::sql_types::Text, _>(&now)
-                .bind::<diesel::sql_types::Text, _>(document_id)
-                .bind::<diesel::sql_types::Integer, _>(version_id)
-                .execute(&mut conn)
-                .await?;
+                // SQLite: word count via LENGTH trick, INSERT OR IGNORE
+                let select = Query::select()
+                    .column((dp.clone(), DocumentPages::Id))
+                    .expr(Expr::cust("'pdftotext'"))
+                    .column((dp.clone(), DocumentPages::SearchText))
+                    .expr(Expr::cust_with_expr(
+                        "LENGTH($1)",
+                        Expr::col((dp.clone(), DocumentPages::SearchText)),
+                    ))
+                    .expr(Expr::cust_with_expr(
+                        "LENGTH($1) - LENGTH(REPLACE($1, ' ', '')) + 1",
+                        Expr::col((dp.clone(), DocumentPages::SearchText)),
+                    ))
+                    .expr(Expr::val(&now as &str))
+                    .from_as(DocumentPages::Table, dp.clone())
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::DocumentId)).eq(document_id),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::VersionId)).eq(version_id),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::SearchText)).is_not_null(),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::SearchText)).ne(""),
+                    )
+                    .and_where(Expr::exists(not_exists.clone()).not())
+                    .to_owned();
+
+                let stmt = Query::insert()
+                    .into_table(PageOcrResults::Table)
+                    .columns([
+                        PageOcrResults::PageId,
+                        PageOcrResults::Backend,
+                        PageOcrResults::Text,
+                        PageOcrResults::CharCount,
+                        PageOcrResults::WordCount,
+                        PageOcrResults::CreatedAt,
+                    ])
+                    .select_from(select)
+                    .expect("valid INSERT...SELECT")
+                    .on_conflict(sea_query::OnConflict::new().do_nothing().to_owned())
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+
+                // Bind order: SELECT vals (now) → WHERE (document_id, version_id)
+                diesel::sql_query(&sql)
+                    .bind::<diesel::sql_types::Text, _>(&now)
+                    .bind::<diesel::sql_types::Text, _>(document_id)
+                    .bind::<diesel::sql_types::Integer, _>(version_id)
+                    .execute(&mut conn)
+                    .await?;
                 Ok::<_, DieselError>(())
             },
             postgres: conn => {
-                diesel::sql_query(
-                    "INSERT INTO page_ocr_results (page_id, backend, text, char_count, word_count, created_at) \
-                     SELECT dp.id, 'pdftotext', dp.search_text, \
-                            LENGTH(dp.search_text), \
-                            array_length(regexp_split_to_array(dp.search_text, '\\s+'), 1), \
-                            $1 \
-                     FROM document_pages dp \
-                     WHERE dp.document_id = $2 AND dp.version_id = $3 \
-                       AND dp.search_text IS NOT NULL AND dp.search_text != '' \
-                       AND NOT EXISTS ( \
-                         SELECT 1 FROM page_ocr_results por \
-                         WHERE por.page_id = dp.id AND por.backend = 'pdftotext' \
-                       ) \
-                     ON CONFLICT DO NOTHING"
-                )
-                .bind::<diesel::sql_types::Text, _>(&now)
-                .bind::<diesel::sql_types::Text, _>(document_id)
-                .bind::<diesel::sql_types::Integer, _>(version_id)
-                .execute(&mut conn)
-                .await?;
+                // Postgres: word count via regexp_split_to_array, ON CONFLICT DO NOTHING
+                let select = Query::select()
+                    .column((dp.clone(), DocumentPages::Id))
+                    .expr(Expr::cust("'pdftotext'"))
+                    .column((dp.clone(), DocumentPages::SearchText))
+                    .expr(Expr::cust_with_expr(
+                        "LENGTH($1)",
+                        Expr::col((dp.clone(), DocumentPages::SearchText)),
+                    ))
+                    .expr(Expr::cust_with_expr(
+                        "array_length(regexp_split_to_array($1, '\\s+'), 1)",
+                        Expr::col((dp.clone(), DocumentPages::SearchText)),
+                    ))
+                    .expr(Expr::val(&now as &str))
+                    .from_as(DocumentPages::Table, dp.clone())
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::DocumentId)).eq(document_id),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::VersionId)).eq(version_id),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::SearchText)).is_not_null(),
+                    )
+                    .and_where(
+                        Expr::col((dp.clone(), DocumentPages::SearchText)).ne(""),
+                    )
+                    .and_where(Expr::exists(not_exists).not())
+                    .to_owned();
+
+                let stmt = Query::insert()
+                    .into_table(PageOcrResults::Table)
+                    .columns([
+                        PageOcrResults::PageId,
+                        PageOcrResults::Backend,
+                        PageOcrResults::Text,
+                        PageOcrResults::CharCount,
+                        PageOcrResults::WordCount,
+                        PageOcrResults::CreatedAt,
+                    ])
+                    .select_from(select)
+                    .expect("valid INSERT...SELECT")
+                    .on_conflict(sea_query::OnConflict::new().do_nothing().to_owned())
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: SELECT vals (now) → WHERE (document_id, version_id)
+                diesel::sql_query(&sql)
+                    .bind::<diesel::sql_types::Text, _>(&now)
+                    .bind::<diesel::sql_types::Text, _>(document_id)
+                    .bind::<diesel::sql_types::Integer, _>(version_id)
+                    .execute(&mut conn)
+                    .await?;
                 Ok::<_, DieselError>(())
             }
         )?;
@@ -700,59 +808,178 @@ impl DieselDocumentRepository {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<PageSearchRow>, DieselError> {
-        let like_pattern = format!("%{query}%");
+        use crate::repository::sea_tables::{DocumentPages, Documents, DocumentVersions};
+        use sea_query::{Alias, Expr, Query};
+
+        let dp = Alias::new("dp");
+        let d = Alias::new("d");
+        let dv = Alias::new("dv");
 
         with_conn_split!(self.pool,
             sqlite: conn => {
-                diesel::sql_query(format!(
-                    r#"SELECT dp.document_id, d.title, d.source_id, dp.page_number,
-                              '' AS headline,
-                              dv.content_hash, dv.mime_type AS version_mime_type,
-                              dv.original_filename, dv.dedup_index, d.source_url
-                       FROM document_pages dp
-                       JOIN documents d ON d.id = dp.document_id
-                       JOIN document_versions dv ON dv.id = dp.version_id
-                       WHERE COALESCE(dp.search_text, '') LIKE ?
-                         AND (? IS NULL OR d.source_id = ?)
-                         AND (? IS NULL OR dp.document_id = ?)
-                       ORDER BY dp.document_id, dp.page_number
-                       LIMIT {limit} OFFSET {offset}"#
-                ))
-                .bind::<diesel::sql_types::Text, _>(&like_pattern)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .load::<PageSearchRow>(&mut conn)
-                .await
+                let like_pattern = format!("%{query}%");
+
+                let mut stmt = Query::select()
+                    .column((dp.clone(), DocumentPages::DocumentId))
+                    .column((d.clone(), Documents::Title))
+                    .column((d.clone(), Documents::SourceId))
+                    .column((dp.clone(), DocumentPages::PageNumber))
+                    .expr_as(Expr::cust("''"), Alias::new("headline"))
+                    .column((dv.clone(), DocumentVersions::ContentHash))
+                    .expr_as(
+                        Expr::col((dv.clone(), DocumentVersions::MimeType)),
+                        Alias::new("version_mime_type"),
+                    )
+                    .column((dv.clone(), DocumentVersions::OriginalFilename))
+                    .column((dv.clone(), DocumentVersions::DedupIndex))
+                    .column((d.clone(), Documents::SourceUrl))
+                    .from_as(DocumentPages::Table, dp.clone())
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        Documents::Table,
+                        d.clone(),
+                        Expr::col((d.clone(), Documents::Id))
+                            .equals((dp.clone(), DocumentPages::DocumentId)),
+                    )
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        DocumentVersions::Table,
+                        dv.clone(),
+                        Expr::col((dv.clone(), DocumentVersions::Id))
+                            .equals((dp.clone(), DocumentPages::VersionId)),
+                    )
+                    .and_where(Expr::cust_with_exprs(
+                        "COALESCE($1, '') LIKE $2",
+                        [
+                            Expr::col((dp.clone(), DocumentPages::SearchText)).into(),
+                            Expr::val(&like_pattern as &str).into(),
+                        ],
+                    ))
+                    .to_owned();
+
+                if let Some(sid) = source_id {
+                    stmt = stmt
+                        .and_where(Expr::col((d.clone(), Documents::SourceId)).eq(sid))
+                        .to_owned();
+                }
+                if let Some(did) = document_id {
+                    stmt = stmt
+                        .and_where(Expr::col((dp.clone(), DocumentPages::DocumentId)).eq(did))
+                        .to_owned();
+                }
+
+                stmt = stmt
+                    .order_by((dp.clone(), DocumentPages::DocumentId), sea_query::Order::Asc)
+                    .order_by((dp.clone(), DocumentPages::PageNumber), sea_query::Order::Asc)
+                    .limit(limit as u64)
+                    .offset(offset as u64)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+
+                // Bind order: like_pattern, [source_id], [document_id]
+                let mut q = diesel::sql_query(sql).into_boxed::<diesel::sqlite::Sqlite>();
+                q = q.bind::<diesel::sql_types::Text, _>(&like_pattern);
+                if let Some(sid) = source_id {
+                    q = q.bind::<diesel::sql_types::Text, _>(sid);
+                }
+                if let Some(did) = document_id {
+                    q = q.bind::<diesel::sql_types::Text, _>(did);
+                }
+                q.load::<PageSearchRow>(&mut conn).await
             },
             postgres: conn => {
-                diesel::sql_query(format!(
-                    r#"SELECT dp.document_id, d.title, d.source_id, dp.page_number,
-                              ts_headline('english',
-                                          COALESCE(dp.search_text, ''),
-                                          plainto_tsquery('english', $1),
-                                          'MaxFragments=3, MaxWords=30, MinWords=10') AS headline,
-                              dv.content_hash, dv.mime_type AS version_mime_type,
-                              dv.original_filename, dv.dedup_index, d.source_url
-                       FROM document_pages dp
-                       JOIN documents d ON d.id = dp.document_id
-                       JOIN document_versions dv ON dv.id = dp.version_id
-                       WHERE to_tsvector('english', COALESCE(dp.search_text, ''))
-                             @@ plainto_tsquery('english', $1)
-                         AND ($2::text IS NULL OR d.source_id = $2)
-                         AND ($3::text IS NULL OR dp.document_id = $3)
-                       ORDER BY ts_rank(
-                                  to_tsvector('english', COALESCE(dp.search_text, '')),
-                                  plainto_tsquery('english', $1)) DESC,
-                                dp.document_id, dp.page_number
-                       LIMIT {limit} OFFSET {offset}"#
-                ))
-                .bind::<diesel::sql_types::Text, _>(query)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(source_id)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(document_id)
-                .load::<PageSearchRow>(&mut conn)
-                .await
+                let tsquery = Expr::cust_with_expr(
+                    "plainto_tsquery('english', $1)",
+                    Expr::val(query),
+                );
+                let tsvec = Expr::cust_with_expr(
+                    "to_tsvector('english', COALESCE($1, ''))",
+                    Expr::col((dp.clone(), DocumentPages::SearchText)),
+                );
+                let headline = Expr::cust_with_exprs(
+                    "ts_headline('english', COALESCE($1, ''), $2, 'MaxFragments=3, MaxWords=30, MinWords=10')",
+                    [
+                        Expr::col((dp.clone(), DocumentPages::SearchText)).into(),
+                        tsquery.clone().into(),
+                    ],
+                );
+                let fts_match = Expr::cust_with_exprs(
+                    "$1 @@ $2",
+                    [tsvec.clone().into(), tsquery.clone().into()],
+                );
+                let rank = Expr::cust_with_exprs(
+                    "ts_rank($1, $2)",
+                    [tsvec.into(), tsquery.into()],
+                );
+
+                let mut stmt = Query::select()
+                    .column((dp.clone(), DocumentPages::DocumentId))
+                    .column((d.clone(), Documents::Title))
+                    .column((d.clone(), Documents::SourceId))
+                    .column((dp.clone(), DocumentPages::PageNumber))
+                    .expr_as(headline, Alias::new("headline"))
+                    .column((dv.clone(), DocumentVersions::ContentHash))
+                    .expr_as(
+                        Expr::col((dv.clone(), DocumentVersions::MimeType)),
+                        Alias::new("version_mime_type"),
+                    )
+                    .column((dv.clone(), DocumentVersions::OriginalFilename))
+                    .column((dv.clone(), DocumentVersions::DedupIndex))
+                    .column((d.clone(), Documents::SourceUrl))
+                    .from_as(DocumentPages::Table, dp.clone())
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        Documents::Table,
+                        d.clone(),
+                        Expr::col((d.clone(), Documents::Id))
+                            .equals((dp.clone(), DocumentPages::DocumentId)),
+                    )
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        DocumentVersions::Table,
+                        dv.clone(),
+                        Expr::col((dv.clone(), DocumentVersions::Id))
+                            .equals((dp.clone(), DocumentPages::VersionId)),
+                    )
+                    .and_where(fts_match)
+                    .to_owned();
+
+                if let Some(sid) = source_id {
+                    stmt = stmt
+                        .and_where(Expr::col((d.clone(), Documents::SourceId)).eq(sid))
+                        .to_owned();
+                }
+                if let Some(did) = document_id {
+                    stmt = stmt
+                        .and_where(Expr::col((dp.clone(), DocumentPages::DocumentId)).eq(did))
+                        .to_owned();
+                }
+
+                stmt = stmt
+                    .order_by_expr(rank, sea_query::Order::Desc)
+                    .order_by((dp.clone(), DocumentPages::DocumentId), sea_query::Order::Asc)
+                    .order_by((dp.clone(), DocumentPages::PageNumber), sea_query::Order::Asc)
+                    .limit(limit as u64)
+                    .offset(offset as u64)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: query (headline), query (WHERE fts), [source_id],
+                // [document_id], query (ORDER BY rank)
+                let mut q = diesel::sql_query(sql).into_boxed::<diesel::pg::Pg>();
+                q = q
+                    .bind::<diesel::sql_types::Text, _>(query)
+                    .bind::<diesel::sql_types::Text, _>(query);
+                if let Some(sid) = source_id {
+                    q = q.bind::<diesel::sql_types::Text, _>(sid);
+                }
+                if let Some(did) = document_id {
+                    q = q.bind::<diesel::sql_types::Text, _>(did);
+                }
+                q = q.bind::<diesel::sql_types::Text, _>(query);
+                q.load::<PageSearchRow>(&mut conn).await
             }
         )
     }

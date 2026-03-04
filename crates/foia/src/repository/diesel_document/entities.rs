@@ -238,21 +238,46 @@ impl DieselDocumentRepository {
                 ))
             },
             postgres: conn => {
-                let query = format!(
-                    r#"SELECT DISTINCT de.document_id as id
-                    FROM document_entities de
-                    WHERE de.latitude IS NOT NULL
-                    AND ST_DWithin(
-                        ST_MakePoint(de.longitude, de.latitude)::geography,
-                        ST_MakePoint({}, {})::geography,
-                        {}
-                    )
-                    ORDER BY de.document_id
-                    LIMIT {} OFFSET {}"#,
-                    lon, lat, radius_meters, limit, offset
+                use crate::repository::sea_tables::DocumentEntities;
+                use sea_query::{Alias, Expr, Query};
+
+                let de = Alias::new("de");
+                let st_dwithin = Expr::cust_with_exprs(
+                    "ST_DWithin(ST_MakePoint($1, $2)::geography, ST_MakePoint($3, $4)::geography, $5)",
+                    [
+                        Expr::col((de.clone(), DocumentEntities::Longitude)).into(),
+                        Expr::col((de.clone(), DocumentEntities::Latitude)).into(),
+                        Expr::val(lon).into(),
+                        Expr::val(lat).into(),
+                        Expr::val(radius_meters).into(),
+                    ],
                 );
-                let rows: Vec<DocIdRow> =
-                    diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await?;
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(
+                        Expr::col((de.clone(), DocumentEntities::DocumentId)),
+                        Alias::new("id"),
+                    )
+                    .from_as(DocumentEntities::Table, de.clone())
+                    .and_where(Expr::col((de.clone(), DocumentEntities::Latitude)).is_not_null())
+                    .and_where(st_dwithin)
+                    .order_by((de.clone(), DocumentEntities::DocumentId), sea_query::Order::Asc)
+                    .limit(limit as u64)
+                    .offset(offset as u64)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: lon, lat, radius_meters
+                let rows: Vec<DocIdRow> = diesel_async::RunQueryDsl::load(
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Double, _>(lon)
+                        .bind::<diesel::sql_types::Double, _>(lat)
+                        .bind::<diesel::sql_types::Double, _>(radius_meters),
+                    &mut conn,
+                )
+                .await?;
                 Ok(rows.into_iter().map(|r| r.id).collect())
             }
         )
@@ -276,19 +301,45 @@ impl DieselDocumentRepository {
                 ))
             },
             postgres: conn => {
-                let query = format!(
-                    r#"SELECT COUNT(DISTINCT de.document_id) as count
-                    FROM document_entities de
-                    WHERE de.latitude IS NOT NULL
-                    AND ST_DWithin(
-                        ST_MakePoint(de.longitude, de.latitude)::geography,
-                        ST_MakePoint({}, {})::geography,
-                        {}
-                    )"#,
-                    lon, lat, radius_meters
+                use crate::repository::sea_tables::DocumentEntities;
+                use sea_query::{Alias, Expr, Query};
+
+                let de = Alias::new("de");
+                let st_dwithin = Expr::cust_with_exprs(
+                    "ST_DWithin(ST_MakePoint($1, $2)::geography, ST_MakePoint($3, $4)::geography, $5)",
+                    [
+                        Expr::col((de.clone(), DocumentEntities::Longitude)).into(),
+                        Expr::col((de.clone(), DocumentEntities::Latitude)).into(),
+                        Expr::val(lon).into(),
+                        Expr::val(lat).into(),
+                        Expr::val(radius_meters).into(),
+                    ],
                 );
-                let rows: Vec<CountRow> =
-                    diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn).await?;
+
+                let stmt = Query::select()
+                    .expr_as(
+                        Expr::cust_with_expr(
+                            "COUNT(DISTINCT $1)",
+                            Expr::col((de.clone(), DocumentEntities::DocumentId)),
+                        ),
+                        Alias::new("count"),
+                    )
+                    .from_as(DocumentEntities::Table, de.clone())
+                    .and_where(Expr::col((de.clone(), DocumentEntities::Latitude)).is_not_null())
+                    .and_where(st_dwithin)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: lon, lat, radius_meters
+                let rows: Vec<CountRow> = diesel_async::RunQueryDsl::load(
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Double, _>(lon)
+                        .bind::<diesel::sql_types::Double, _>(lat)
+                        .bind::<diesel::sql_types::Double, _>(radius_meters),
+                    &mut conn,
+                )
+                .await?;
                 #[allow(clippy::get_first)]
                 Ok(rows.get(0).map(|r| r.count as u64).unwrap_or(0))
             }
@@ -311,17 +362,53 @@ impl DieselDocumentRepository {
                 ))
             },
             postgres: conn => {
-                let query = format!(
-                    r#"SELECT DISTINCT de.document_id as id
-                    FROM document_entities de
-                    JOIN regions r ON ST_Covers(r.geom, ST_MakePoint(de.longitude, de.latitude)::geography)
-                    WHERE de.latitude IS NOT NULL AND lower(r.name) = lower($1)
-                    ORDER BY de.document_id
-                    LIMIT {} OFFSET {}"#,
-                    limit, offset
-                );
+                use crate::repository::sea_tables::DocumentEntities;
+                use sea_query::{Alias, Expr, Query};
+
+                let de = Alias::new("de");
+                let r = Alias::new("r");
+                let regions = Alias::new("regions");
+                let geom = Alias::new("geom");
+                let name_col = Alias::new("name");
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(
+                        Expr::col((de.clone(), DocumentEntities::DocumentId)),
+                        Alias::new("id"),
+                    )
+                    .from_as(DocumentEntities::Table, de.clone())
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        regions,
+                        r.clone(),
+                        Expr::cust_with_exprs(
+                            "ST_Covers($1, ST_MakePoint($2, $3)::geography)",
+                            [
+                                Expr::col((r.clone(), geom)).into(),
+                                Expr::col((de.clone(), DocumentEntities::Longitude)).into(),
+                                Expr::col((de.clone(), DocumentEntities::Latitude)).into(),
+                            ],
+                        ),
+                    )
+                    .and_where(Expr::col((de.clone(), DocumentEntities::Latitude)).is_not_null())
+                    .and_where(Expr::cust_with_exprs(
+                        "lower($1) = lower($2)",
+                        [
+                            Expr::col((r.clone(), name_col)).into(),
+                            Expr::val(region_name).into(),
+                        ],
+                    ))
+                    .order_by((de.clone(), DocumentEntities::DocumentId), sea_query::Order::Asc)
+                    .limit(limit as u64)
+                    .offset(offset as u64)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: region_name (from WHERE)
                 let rows: Vec<DocIdRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(region_name),
                     &mut conn,
                 )
@@ -350,17 +437,55 @@ impl DieselDocumentRepository {
                 ))
             },
             postgres: conn => {
-                let query = format!(
-                    r#"SELECT DISTINCT de.document_id as id
-                    FROM document_entities de
-                    JOIN regions r ON ST_DWithin(r.geom, ST_MakePoint(de.longitude, de.latitude)::geography, {})
-                    WHERE de.latitude IS NOT NULL AND lower(r.name) = lower($1)
-                    ORDER BY de.document_id
-                    LIMIT {} OFFSET {}"#,
-                    radius_meters, limit, offset
-                );
+                use crate::repository::sea_tables::DocumentEntities;
+                use sea_query::{Alias, Expr, Query};
+
+                let de = Alias::new("de");
+                let r = Alias::new("r");
+                let regions = Alias::new("regions");
+                let geom = Alias::new("geom");
+                let name_col = Alias::new("name");
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(
+                        Expr::col((de.clone(), DocumentEntities::DocumentId)),
+                        Alias::new("id"),
+                    )
+                    .from_as(DocumentEntities::Table, de.clone())
+                    .join_as(
+                        sea_query::JoinType::Join,
+                        regions,
+                        r.clone(),
+                        Expr::cust_with_exprs(
+                            "ST_DWithin($1, ST_MakePoint($2, $3)::geography, $4)",
+                            [
+                                Expr::col((r.clone(), geom)).into(),
+                                Expr::col((de.clone(), DocumentEntities::Longitude)).into(),
+                                Expr::col((de.clone(), DocumentEntities::Latitude)).into(),
+                                Expr::val(radius_meters).into(),
+                            ],
+                        ),
+                    )
+                    .and_where(Expr::col((de.clone(), DocumentEntities::Latitude)).is_not_null())
+                    .and_where(Expr::cust_with_exprs(
+                        "lower($1) = lower($2)",
+                        [
+                            Expr::col((r.clone(), name_col)).into(),
+                            Expr::val(region_name).into(),
+                        ],
+                    ))
+                    .order_by((de.clone(), DocumentEntities::DocumentId), sea_query::Order::Asc)
+                    .limit(limit as u64)
+                    .offset(offset as u64)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+
+                // Bind order: radius_meters (from JOIN ON), region_name (from WHERE)
                 let rows: Vec<DocIdRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(&query)
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Double, _>(radius_meters)
                         .bind::<diesel::sql_types::Text, _>(region_name),
                     &mut conn,
                 )

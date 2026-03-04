@@ -855,18 +855,40 @@ impl DieselDocumentRepository {
     /// Search tags by prefix in document metadata.
     /// Tags are stored as JSON arrays in the metadata field.
     pub async fn search_tags(&self, query: &str) -> Result<Vec<String>, DieselError> {
+        use crate::repository::sea_tables::Documents;
+        use sea_query::{Alias, DynIden, Expr, Func, Query, TableRef};
+
         let pattern = format!("%{}%", query.to_lowercase());
+
         with_conn_split!(self.pool,
             sqlite: conn => {
+                let json_each = Func::cust(Alias::new("json_each")).arg(
+                    Expr::cust_with_expr(
+                        "json_extract($1, '$.tags')",
+                        Expr::col(Documents::Metadata),
+                    ),
+                );
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(Expr::cust("value"), Alias::new("tag"))
+                    .from(Documents::Table)
+                    .from(TableRef::FunctionCall(
+                        json_each,
+                        DynIden::new(Alias::new("_je")),
+                    ))
+                    .and_where(Expr::cust_with_expr(
+                        "LOWER(value) LIKE $1",
+                        Expr::val(&pattern as &str),
+                    ))
+                    .order_by(Alias::new("value"), sea_query::Order::Asc)
+                    .limit(100)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT DISTINCT value as tag
-                           FROM documents, json_each(json_extract(metadata, '$.tags'))
-                           WHERE LOWER(value) LIKE ?
-                           ORDER BY value
-                           LIMIT 100"#,
-                    )
-                    .bind::<diesel::sql_types::Text, _>(&pattern),
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Text, _>(&pattern),
                     &mut conn,
                 )
                 .await
@@ -874,16 +896,42 @@ impl DieselDocumentRepository {
                 Ok(results.into_iter().map(|r| r.tag).collect())
             },
             postgres: conn => {
-                let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT DISTINCT tag
-                           FROM documents, jsonb_array_elements_text(documents.tags::jsonb) as tag
-                           WHERE documents.tags IS NOT NULL AND documents.tags != '[]'
-                           AND LOWER(tag) LIKE $1
-                           ORDER BY tag
-                           LIMIT 100"#,
+                let tags_col = Alias::new("tags");
+                let jsonb_elements =
+                    Func::cust(Alias::new("jsonb_array_elements_text")).arg(
+                        Expr::cust_with_expr(
+                            "$1::jsonb",
+                            Expr::col((Documents::Table, tags_col.clone())),
+                        ),
+                    );
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(Expr::cust("tag"), Alias::new("tag"))
+                    .from(Documents::Table)
+                    .from(TableRef::FunctionCall(
+                        jsonb_elements,
+                        DynIden::new(Alias::new("tag")),
+                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
                     )
-                    .bind::<diesel::sql_types::Text, _>(&pattern),
+                    .and_where(Expr::cust_with_expr(
+                        "$1 != '[]'",
+                        Expr::col((Documents::Table, tags_col)),
+                    ))
+                    .and_where(Expr::cust_with_expr(
+                        "LOWER(tag) LIKE $1",
+                        Expr::val(&pattern as &str),
+                    ))
+                    .order_by(Alias::new("tag"), sea_query::Order::Asc)
+                    .limit(100)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+                let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
+                    diesel::sql_query(&sql)
+                        .bind::<diesel::sql_types::Text, _>(&pattern),
                     &mut conn,
                 )
                 .await
@@ -895,15 +943,38 @@ impl DieselDocumentRepository {
 
     /// Get all unique tags from document metadata.
     pub async fn get_all_tags(&self) -> Result<Vec<String>, DieselError> {
+        use crate::repository::sea_tables::Documents;
+        use sea_query::{Alias, DynIden, Expr, Func, Query, TableRef};
+
+        let tags_col = Alias::new("tags");
+
         with_conn_split!(self.pool,
             sqlite: conn => {
+                let json_each = Func::cust(Alias::new("json_each")).arg(
+                    Expr::col((Documents::Table, tags_col.clone())),
+                );
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(Expr::cust("value"), Alias::new("tag"))
+                    .from(Documents::Table)
+                    .from(TableRef::FunctionCall(
+                        json_each,
+                        DynIden::new(Alias::new("_je")),
+                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
+                    )
+                    .and_where(Expr::cust_with_expr(
+                        "$1 != '[]'",
+                        Expr::col((Documents::Table, tags_col.clone())),
+                    ))
+                    .order_by(Alias::new("value"), sea_query::Order::Asc)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT DISTINCT value as tag
-                           FROM documents, json_each(documents.tags)
-                           WHERE documents.tags IS NOT NULL AND documents.tags != '[]'
-                           ORDER BY value"#,
-                    ),
+                    diesel::sql_query(&sql),
                     &mut conn,
                 )
                 .await
@@ -911,13 +982,35 @@ impl DieselDocumentRepository {
                 Ok(results.into_iter().map(|r| r.tag).collect())
             },
             postgres: conn => {
+                let jsonb_elements =
+                    Func::cust(Alias::new("jsonb_array_elements_text")).arg(
+                        Expr::cust_with_expr(
+                            "$1::jsonb",
+                            Expr::col((Documents::Table, tags_col.clone())),
+                        ),
+                    );
+
+                let stmt = Query::select()
+                    .distinct()
+                    .expr_as(Expr::cust("tag"), Alias::new("tag"))
+                    .from(Documents::Table)
+                    .from(TableRef::FunctionCall(
+                        jsonb_elements,
+                        DynIden::new(Alias::new("tag")),
+                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
+                    )
+                    .and_where(Expr::cust_with_expr(
+                        "$1 != '[]'",
+                        Expr::col((Documents::Table, tags_col)),
+                    ))
+                    .order_by(Alias::new("tag"), sea_query::Order::Asc)
+                    .to_owned();
+
+                let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
-                    diesel::sql_query(
-                        r#"SELECT DISTINCT tag
-                           FROM documents, jsonb_array_elements_text(documents.tags::jsonb) as tag
-                           WHERE documents.tags IS NOT NULL AND documents.tags != '[]'
-                           ORDER BY tag"#,
-                    ),
+                    diesel::sql_query(&sql),
                     &mut conn,
                 )
                 .await
