@@ -70,62 +70,32 @@ impl DieselSourceRepository {
 
     /// Save a source (insert or update).
     pub async fn save(&self, source: &Source) -> Result<(), DieselError> {
-        use crate::repository::pool::build_sql;
-        use crate::repository::sea_tables::Sources;
-        use sea_query::{OnConflict, Query};
-
         let metadata_json =
             serde_json::to_string(&source.metadata).unwrap_or_else(|_| "{}".to_string());
         let created_at = source.created_at.to_rfc3339();
         let last_scraped = source.last_scraped.map(|dt| dt.to_rfc3339());
         let source_type = source.source_type.as_str().to_string();
 
-        let stmt = Query::insert()
-            .into_table(Sources::Table)
-            .columns([
-                Sources::Id,
-                Sources::SourceType,
-                Sources::Name,
-                Sources::BaseUrl,
-                Sources::Metadata,
-                Sources::CreatedAt,
-                Sources::LastScraped,
-            ])
-            .values_panic([
-                source.id.clone().into(),
-                source_type.clone().into(),
-                source.name.clone().into(),
-                source.base_url.clone().into(),
-                metadata_json.clone().into(),
-                created_at.clone().into(),
-                last_scraped.clone().into(),
-            ])
-            .on_conflict(
-                OnConflict::column(Sources::Id)
-                    .update_columns([
-                        Sources::SourceType,
-                        Sources::Name,
-                        Sources::BaseUrl,
-                        Sources::Metadata,
-                        Sources::LastScraped,
-                    ])
-                    .to_owned(),
-            )
-            .to_owned();
-
-        let sql = build_sql(&self.pool, &stmt);
-
         with_conn!(self.pool, conn, {
-            diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::Text, _>(&source.id)
-                .bind::<diesel::sql_types::Text, _>(&source_type)
-                .bind::<diesel::sql_types::Text, _>(&source.name)
-                .bind::<diesel::sql_types::Text, _>(&source.base_url)
-                .bind::<diesel::sql_types::Text, _>(&metadata_json)
-                .bind::<diesel::sql_types::Text, _>(&created_at)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(
-                    last_scraped.as_deref(),
-                )
+            diesel::insert_into(sources::table)
+                .values((
+                    sources::id.eq(&source.id),
+                    sources::source_type.eq(&source_type),
+                    sources::name.eq(&source.name),
+                    sources::base_url.eq(&source.base_url),
+                    sources::metadata.eq(&metadata_json),
+                    sources::created_at.eq(&created_at),
+                    sources::last_scraped.eq(last_scraped.as_deref()),
+                ))
+                .on_conflict(sources::id)
+                .do_update()
+                .set((
+                    sources::source_type.eq(&source_type),
+                    sources::name.eq(&source.name),
+                    sources::base_url.eq(&source.base_url),
+                    sources::metadata.eq(&metadata_json),
+                    sources::last_scraped.eq(last_scraped.as_deref()),
+                ))
                 .execute(&mut conn)
                 .await?;
             Ok(())

@@ -148,22 +148,29 @@ impl DieselDocumentRepository {
                     let page_number = page.page_number as i32;
                     let ocr_status = page.ocr_status.as_str().to_string();
 
-                    diesel::sql_query(
-                        "INSERT INTO document_pages (document_id, version_id, page_number, search_text, ocr_status, created_at, updated_at) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?) \
-                         ON CONFLICT (document_id, version_id, page_number) \
-                         DO UPDATE SET search_text = excluded.search_text, \
-                         ocr_status = excluded.ocr_status, updated_at = excluded.updated_at"
-                    )
-                    .bind::<diesel::sql_types::Text, _>(&page.document_id)
-                    .bind::<diesel::sql_types::Integer, _>(version_id)
-                    .bind::<diesel::sql_types::Integer, _>(page_number)
-                    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&page.search_text)
-                    .bind::<diesel::sql_types::Text, _>(&ocr_status)
-                    .bind::<diesel::sql_types::Text, _>(&now)
-                    .bind::<diesel::sql_types::Text, _>(&now)
-                    .execute(&mut conn)
-                    .await?;
+                    diesel::insert_into(document_pages::table)
+                        .values((
+                            document_pages::document_id.eq(&page.document_id),
+                            document_pages::version_id.eq(version_id),
+                            document_pages::page_number.eq(page_number),
+                            document_pages::search_text.eq(&page.search_text),
+                            document_pages::ocr_status.eq(&ocr_status),
+                            document_pages::created_at.eq(&now),
+                            document_pages::updated_at.eq(&now),
+                        ))
+                        .on_conflict((
+                            document_pages::document_id,
+                            document_pages::version_id,
+                            document_pages::page_number,
+                        ))
+                        .do_update()
+                        .set((
+                            document_pages::search_text.eq(&page.search_text),
+                            document_pages::ocr_status.eq(&ocr_status),
+                            document_pages::updated_at.eq(&now),
+                        ))
+                        .execute(&mut conn)
+                        .await?;
                 }
                 Ok::<_, DieselError>(())
             },

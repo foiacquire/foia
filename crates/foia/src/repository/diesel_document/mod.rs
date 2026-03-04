@@ -163,10 +163,6 @@ impl DieselDocumentRepository {
     /// This also computes and sets the category_id based on the document's
     /// current version's MIME type.
     pub async fn save(&self, doc: &Document) -> Result<(), DieselError> {
-        use crate::repository::pool::build_sql;
-        use crate::repository::sea_tables::Documents;
-        use sea_query::{OnConflict, Query};
-
         let metadata = serde_json::to_string(&doc.metadata)
             .map_err(|e| diesel::result::Error::SerializationError(Box::new(e)))?;
         let created_at = doc.created_at.to_rfc3339();
@@ -179,58 +175,30 @@ impl DieselDocumentRepository {
                 .to_string()
         });
 
-        let stmt = Query::insert()
-            .into_table(Documents::Table)
-            .columns([
-                Documents::Id,
-                Documents::SourceId,
-                Documents::SourceUrl,
-                Documents::Title,
-                Documents::Status,
-                Documents::Metadata,
-                Documents::CreatedAt,
-                Documents::UpdatedAt,
-                Documents::CategoryId,
-            ])
-            .values_panic([
-                doc.id.clone().into(),
-                doc.source_id.clone().into(),
-                doc.source_url.clone().into(),
-                doc.title.clone().into(),
-                status.clone().into(),
-                metadata.clone().into(),
-                created_at.clone().into(),
-                updated_at.clone().into(),
-                category_id.clone().into(),
-            ])
-            .on_conflict(
-                OnConflict::column(Documents::Id)
-                    .update_columns([
-                        Documents::SourceId,
-                        Documents::SourceUrl,
-                        Documents::Title,
-                        Documents::Status,
-                        Documents::Metadata,
-                        Documents::UpdatedAt,
-                        Documents::CategoryId,
-                    ])
-                    .to_owned(),
-            )
-            .to_owned();
-
-        let sql = build_sql(&self.pool, &stmt);
-
         with_conn!(self.pool, conn, {
-            diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::Text, _>(&doc.id)
-                .bind::<diesel::sql_types::Text, _>(&doc.source_id)
-                .bind::<diesel::sql_types::Text, _>(&doc.source_url)
-                .bind::<diesel::sql_types::Text, _>(&doc.title)
-                .bind::<diesel::sql_types::Text, _>(&status)
-                .bind::<diesel::sql_types::Text, _>(&metadata)
-                .bind::<diesel::sql_types::Text, _>(&created_at)
-                .bind::<diesel::sql_types::Text, _>(&updated_at)
-                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(&category_id)
+            diesel::insert_into(documents::table)
+                .values((
+                    documents::id.eq(&doc.id),
+                    documents::source_id.eq(&doc.source_id),
+                    documents::source_url.eq(&doc.source_url),
+                    documents::title.eq(&doc.title),
+                    documents::status.eq(&status),
+                    documents::metadata.eq(&metadata),
+                    documents::created_at.eq(&created_at),
+                    documents::updated_at.eq(&updated_at),
+                    documents::category_id.eq(category_id.as_deref()),
+                ))
+                .on_conflict(documents::id)
+                .do_update()
+                .set((
+                    documents::source_id.eq(&doc.source_id),
+                    documents::source_url.eq(&doc.source_url),
+                    documents::title.eq(&doc.title),
+                    documents::status.eq(&status),
+                    documents::metadata.eq(&metadata),
+                    documents::updated_at.eq(&updated_at),
+                    documents::category_id.eq(category_id.as_deref()),
+                ))
                 .execute(&mut conn)
                 .await?;
             Ok(())
