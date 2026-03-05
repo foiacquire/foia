@@ -764,6 +764,60 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS page_ocr_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_id INTEGER NOT NULL,
+                backend TEXT NOT NULL,
+                text TEXT,
+                confidence REAL,
+                quality_score REAL,
+                char_count INTEGER,
+                word_count INTEGER,
+                processing_time_ms INTEGER,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                model TEXT,
+                image_hash TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_page_ocr_results_unique
+                ON page_ocr_results(page_id, backend, COALESCE(model, ''));
+
+            CREATE TABLE IF NOT EXISTS document_analysis_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_id INTEGER,
+                document_id TEXT NOT NULL,
+                version_id INTEGER NOT NULL,
+                analysis_type TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                result_text TEXT,
+                confidence REAL,
+                processing_time_ms INTEGER,
+                error TEXT,
+                status TEXT NOT NULL DEFAULT 'complete',
+                created_at TEXT NOT NULL,
+                metadata TEXT,
+                model TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_results_page_unique
+                ON document_analysis_results(page_id, analysis_type, backend, COALESCE(model, ''))
+                WHERE page_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_results_doc_unique
+                ON document_analysis_results(document_id, version_id, analysis_type, backend, COALESCE(model, ''))
+                WHERE page_id IS NULL;
+
+            CREATE TABLE IF NOT EXISTS document_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                created_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_de_type_text_doc
+                ON document_entities(entity_type, normalized_text, document_id);
             "#,
         )
         .await

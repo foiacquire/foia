@@ -578,34 +578,10 @@ mod tests {
     use crate::repository::diesel_document::tests::setup_test_db;
     use chrono::Utc;
 
-    async fn create_entity_table(repo: &DieselDocumentRepository) -> Result<(), DieselError> {
-        use diesel_async::SimpleAsyncConnection;
-        with_conn!(repo.pool, conn, {
-            conn.batch_execute(
-                r#"CREATE TABLE IF NOT EXISTS document_entities (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    document_id TEXT NOT NULL,
-                    entity_type TEXT NOT NULL,
-                    entity_text TEXT NOT NULL,
-                    normalized_text TEXT NOT NULL,
-                    latitude REAL,
-                    longitude REAL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_de_type_text_doc
-                    ON document_entities(entity_type, normalized_text, document_id)"#,
-            )
-            .await
-            .unwrap();
-            Ok::<_, DieselError>(())
-        })
-    }
-
     #[tokio::test]
     async fn test_entity_crud() {
         let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
-        create_entity_table(&repo).await.unwrap();
 
         let doc = Document {
             id: "doc-entity-1".to_string(),
@@ -669,7 +645,6 @@ mod tests {
     async fn test_entity_search() {
         let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
-        create_entity_table(&repo).await.unwrap();
 
         // Create two documents
         for i in 1..=2 {
@@ -764,7 +739,6 @@ mod tests {
     async fn test_entity_type_counts() {
         let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
-        create_entity_table(&repo).await.unwrap();
 
         let doc = Document {
             id: "doc-counts-1".to_string(),
@@ -840,7 +814,6 @@ mod tests {
     async fn test_entity_search_with_sql_metacharacters() {
         let (pool, _dir) = setup_test_db().await;
         let repo = DieselDocumentRepository::new(pool);
-        create_entity_table(&repo).await.unwrap();
 
         let filters = vec![EntityFilter {
             entity_type: Some("'; DROP TABLE documents; --".to_string()),
