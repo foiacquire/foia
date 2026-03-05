@@ -368,7 +368,48 @@ impl DieselDocumentRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{DocumentStatus, DocumentVersion};
     use crate::repository::diesel_document::tests::setup_test_db;
+
+    fn make_doc(id: &str, source: &str, status: DocumentStatus) -> Document {
+        Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        }
+    }
+
+    async fn save_doc(repo: &DieselDocumentRepository, id: &str, source: &str, status: DocumentStatus) {
+        let doc = make_doc(id, source, status);
+        repo.save(&doc).await.unwrap();
+        let version = DocumentVersion {
+            id: 0,
+            content_hash: format!("hash-{id}"),
+            content_hash_blake3: None,
+            file_path: None,
+            file_size: 1024,
+            mime_type: "application/pdf".to_string(),
+            acquired_at: Utc::now(),
+            source_url: None,
+            original_filename: None,
+            server_date: None,
+            page_count: None,
+            archive_snapshot_id: None,
+            earliest_archived_at: None,
+            dedup_index: None,
+        };
+        repo.add_version(id, &version).await.unwrap();
+    }
 
     #[test]
     fn test_validate_identifier_accepts_valid() {
@@ -395,5 +436,203 @@ mod tests {
             .count_documents_needing_annotation("'; DROP TABLE documents; --", 1, None)
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_count_documents_needing_annotation() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        // All docs need "ner" annotation (no annotations recorded)
+        let count = repo
+            .count_documents_needing_annotation("ner", 1, None)
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+
+        // With source filter
+        let count_a = repo
+            .count_documents_needing_annotation("ner", 1, Some("src-a"))
+            .await
+            .unwrap();
+        assert_eq!(count_a, 2);
+
+        // Record annotation for d1 at version 1
+        repo.record_annotation("d1", "ner", 1, Some("data"), None)
+            .await
+            .unwrap();
+
+        // d1 no longer needs ner v1
+        let count = repo
+            .count_documents_needing_annotation("ner", 1, None)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // d1 still needs ner v2
+        let count_v2 = repo
+            .count_documents_needing_annotation("ner", 2, None)
+            .await
+            .unwrap();
+        assert_eq!(count_v2, 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_documents_needing_annotation() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src", DocumentStatus::Pending).await;
+
+        let docs = repo
+            .get_documents_needing_annotation("ner", 1, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(docs.len(), 2);
+
+        let limited = repo
+            .get_documents_needing_annotation("ner", 1, None, 1)
+            .await
+            .unwrap();
+        assert_eq!(limited.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_needing_date_estimation() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        // All docs need date estimation (metadata has no estimated_date)
+        let count = repo
+            .count_documents_needing_date_estimation(None)
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+
+        let count_a = repo
+            .count_documents_needing_date_estimation(Some("src-a"))
+            .await
+            .unwrap();
+        assert_eq!(count_a, 2);
+
+        // Update d1 with estimated_date
+        repo.update_estimated_date("d1", Utc::now(), "high", "llm")
+            .await
+            .unwrap();
+
+        let count_after = repo
+            .count_documents_needing_date_estimation(None)
+            .await
+            .unwrap();
+        assert_eq!(count_after, 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_estimated_date() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending).await;
+
+        let date = Utc::now();
+        repo.update_estimated_date("d1", date, "high", "llm")
+            .await
+            .unwrap();
+
+        let doc = repo.get("d1").await.unwrap().unwrap();
+        let ed = &doc.metadata["estimated_date"];
+        assert_eq!(ed["confidence"].as_str(), Some("high"));
+        assert_eq!(ed["source"].as_str(), Some("llm"));
+        assert!(ed["date"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_record_annotation() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending).await;
+
+        repo.record_annotation("d1", "ner", 2, Some("entities found"), None)
+            .await
+            .unwrap();
+
+        let doc = repo.get("d1").await.unwrap().unwrap();
+        let ann = &doc.metadata["annotations"]["ner"];
+        assert_eq!(ann["version"].as_i64(), Some(2));
+        assert_eq!(ann["data"].as_str(), Some("entities found"));
+        assert!(ann["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_reset_annotations() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        // Set d1 and d2 to indexed with synopsis/tags
+        repo.update_synopsis_and_tags(
+            "d1",
+            Some("Synopsis 1"),
+            &["tag1".to_string()],
+        )
+        .await
+        .unwrap();
+        repo.update_synopsis_and_tags(
+            "d2",
+            Some("Synopsis 2"),
+            &["tag2".to_string()],
+        )
+        .await
+        .unwrap();
+
+        // Reset only src-a
+        let reset = repo.reset_annotations(Some("src-a")).await.unwrap();
+        assert_eq!(reset, 2);
+
+        let d1 = repo.get("d1").await.unwrap().unwrap();
+        assert_eq!(d1.status, DocumentStatus::OcrComplete);
+        assert!(d1.synopsis.is_none());
+        assert!(d1.tags.is_empty());
+
+        // d3 should be unchanged (different source, not indexed)
+        let d3 = repo.get("d3").await.unwrap().unwrap();
+        assert_eq!(d3.status, DocumentStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_count_annotated() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        assert_eq!(repo.count_annotated(None).await.unwrap(), 0);
+
+        // Mark d1 and d3 as indexed
+        repo.update_synopsis_and_tags("d1", Some("S1"), &[])
+            .await
+            .unwrap();
+        repo.update_synopsis_and_tags("d3", Some("S3"), &[])
+            .await
+            .unwrap();
+
+        assert_eq!(repo.count_annotated(None).await.unwrap(), 2);
+        assert_eq!(repo.count_annotated(Some("src-a")).await.unwrap(), 1);
+        assert_eq!(repo.count_annotated(Some("src-b")).await.unwrap(), 1);
     }
 }
