@@ -2,20 +2,33 @@
 //!
 //! Uses diesel-async for async database support. Works with both SQLite and PostgreSQL.
 //!
-//! This module is split into submodules for maintainability:
+//! This module is split into submodules by domain:
 //! - `mod.rs` (this file): Core CRUD, virtual files, helpers
 //! - `versions.rs`: Document version operations
 //! - `pages.rs`: Document page and OCR operations
-//! - `queries.rs`: Complex queries, browsing, statistics
-//! - `analysis.rs`: Analysis result operations
+//! - `analysis.rs`: Analysis result storage and worker claims
+//! - `counting.rs`: Basic document counting queries
+//! - `stats.rs`: MIME type and category statistics
+//! - `browsing.rs`: Browse, filter, and navigation queries
+//! - `tags.rs`: Tag search and retrieval
+//! - `timeline.rs`: Timeline bucketing queries
+//! - `annotations.rs`: Metadata-based annotation queries
+//! - `pipeline.rs`: Analysis pipeline queries (needing analysis, priority, finalization)
+//! - `entities.rs`: Entity and spatial queries
 
 mod analysis;
+mod annotations;
+mod browsing;
+mod counting;
 pub mod entities;
 mod pages;
-mod queries;
+mod pipeline;
+mod stats;
+mod tags;
+mod timeline;
 mod versions;
 
-pub use queries::BrowseParams;
+pub use browsing::BrowseParams;
 
 use std::path::PathBuf;
 
