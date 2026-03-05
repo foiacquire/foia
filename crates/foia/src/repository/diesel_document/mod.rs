@@ -932,4 +932,395 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
+
+    fn make_doc(id: &str, source: &str, status: DocumentStatus) -> Document {
+        Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        }
+    }
+
+    fn make_version(hash: &str, mime_type: &str) -> DocumentVersion {
+        DocumentVersion {
+            id: 0,
+            content_hash: hash.to_string(),
+            content_hash_blake3: None,
+            file_path: None,
+            file_size: 1024,
+            mime_type: mime_type.to_string(),
+            acquired_at: Utc::now(),
+            source_url: None,
+            original_filename: None,
+            server_date: None,
+            page_count: None,
+            archive_snapshot_id: None,
+            earliest_archived_at: None,
+            dedup_index: None,
+        }
+    }
+
+    async fn save_doc_with_version(
+        repo: &DieselDocumentRepository,
+        id: &str,
+        source: &str,
+        status: DocumentStatus,
+        mime_type: &str,
+    ) {
+        let doc = make_doc(id, source, status);
+        repo.save(&doc).await.unwrap();
+        let version = make_version(&format!("hash-{id}"), mime_type);
+        repo.add_version(id, &version).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_batch() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src", DocumentStatus::Pending, "application/pdf")
+            .await;
+        save_doc_with_version(&repo, "d2", "src", DocumentStatus::Pending, "application/pdf")
+            .await;
+        save_doc_with_version(&repo, "d3", "src", DocumentStatus::Pending, "image/png").await;
+
+        let batch = repo
+            .get_batch(&["d1".into(), "d3".into()])
+            .await
+            .unwrap();
+        assert_eq!(batch.len(), 2);
+        let ids: Vec<&str> = batch.iter().map(|d| d.id.as_str()).collect();
+        assert!(ids.contains(&"d1"));
+        assert!(ids.contains(&"d3"));
+
+        let empty = repo.get_batch(&[]).await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_source() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src-a", DocumentStatus::Pending, "application/pdf")
+            .await;
+        save_doc_with_version(&repo, "d2", "src-a", DocumentStatus::Pending, "application/pdf")
+            .await;
+        save_doc_with_version(&repo, "d3", "src-b", DocumentStatus::Pending, "image/png").await;
+
+        let src_a = repo.get_by_source("src-a").await.unwrap();
+        assert_eq!(src_a.len(), 2);
+        assert!(src_a.iter().all(|d| d.source_id == "src-a"));
+
+        let src_b = repo.get_by_source("src-b").await.unwrap();
+        assert_eq!(src_b.len(), 1);
+        assert_eq!(src_b[0].id, "d3");
+
+        let none = repo.get_by_source("nonexistent").await.unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_url() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let mut doc1 = make_doc("d1", "src", DocumentStatus::Pending);
+        doc1.source_url = "https://example.com/shared".to_string();
+        repo.save(&doc1).await.unwrap();
+
+        let mut doc2 = make_doc("d2", "src", DocumentStatus::Pending);
+        doc2.source_url = "https://example.com/shared".to_string();
+        repo.save(&doc2).await.unwrap();
+
+        let mut doc3 = make_doc("d3", "src", DocumentStatus::Pending);
+        doc3.source_url = "https://example.com/other".to_string();
+        repo.save(&doc3).await.unwrap();
+
+        let shared = repo
+            .get_by_url("https://example.com/shared")
+            .await
+            .unwrap();
+        assert_eq!(shared.len(), 2);
+
+        let other = repo
+            .get_by_url("https://example.com/other")
+            .await
+            .unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].id, "d3");
+
+        let missing = repo.get_by_url("https://nope.com").await.unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_all() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        for i in 1..=3 {
+            let id = format!("d{i}");
+            let mut doc = make_doc(&id, "src", DocumentStatus::Pending);
+            doc.created_at = Utc::now() + chrono::Duration::seconds(i);
+            repo.save(&doc).await.unwrap();
+        }
+
+        let all = repo.get_all().await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].id, "d3");
+        assert_eq!(all[2].id, "d1");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_urls_set() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src", DocumentStatus::Pending, "application/pdf")
+            .await;
+        save_doc_with_version(&repo, "d2", "src", DocumentStatus::Pending, "image/png").await;
+
+        let doc_no_version = make_doc("d3", "src", DocumentStatus::Pending);
+        repo.save(&doc_no_version).await.unwrap();
+
+        let urls = repo.get_all_urls_set().await.unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains("https://example.com/d1"));
+        assert!(urls.contains("https://example.com/d2"));
+        assert!(!urls.contains("https://example.com/d3"));
+    }
+
+    #[tokio::test]
+    async fn test_get_urls_by_source() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src-a", DocumentStatus::Pending))
+            .await
+            .unwrap();
+        repo.save(&make_doc("d2", "src-a", DocumentStatus::Pending))
+            .await
+            .unwrap();
+        repo.save(&make_doc("d3", "src-b", DocumentStatus::Pending))
+            .await
+            .unwrap();
+
+        let urls_a = repo.get_urls_by_source("src-a").await.unwrap();
+        assert_eq!(urls_a.len(), 2);
+        assert!(urls_a.contains(&"https://example.com/d1".to_string()));
+        assert!(urls_a.contains(&"https://example.com/d2".to_string()));
+
+        let urls_b = repo.get_urls_by_source("src-b").await.unwrap();
+        assert_eq!(urls_b.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_save_with_versions() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let mut doc = make_doc("d1", "src", DocumentStatus::Pending);
+        doc.versions.push(make_version("hash-v1", "application/pdf"));
+
+        repo.save_with_versions(&doc).await.unwrap();
+
+        let fetched = repo.get("d1").await.unwrap().unwrap();
+        assert_eq!(fetched.versions.len(), 1);
+        assert_eq!(fetched.versions[0].content_hash, "hash-v1");
+        assert_eq!(fetched.versions[0].mime_type, "application/pdf");
+    }
+
+    #[tokio::test]
+    async fn test_virtual_files() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src", DocumentStatus::Pending, "application/zip")
+            .await;
+
+        let vf1 = VirtualFile {
+            id: "vf-1".to_string(),
+            document_id: "d1".to_string(),
+            version_id: 1,
+            archive_path: "archive/path1.txt".to_string(),
+            filename: "file1.txt".to_string(),
+            file_size: 100,
+            mime_type: "text/plain".to_string(),
+            extracted_text: Some("hello world".to_string()),
+            synopsis: None,
+            tags: vec!["tag1".to_string()],
+            status: VirtualFileStatus::Pending,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let vf2 = VirtualFile {
+            id: "vf-2".to_string(),
+            document_id: "d1".to_string(),
+            version_id: 1,
+            archive_path: "archive/path2.pdf".to_string(),
+            filename: "file2.pdf".to_string(),
+            file_size: 2048,
+            mime_type: "application/pdf".to_string(),
+            extracted_text: None,
+            synopsis: Some("A PDF".to_string()),
+            tags: vec![],
+            status: VirtualFileStatus::OcrComplete,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        repo.insert_virtual_file(&vf1).await.unwrap();
+        repo.insert_virtual_file(&vf2).await.unwrap();
+
+        let files = repo.get_virtual_files("d1", 1).await.unwrap();
+        assert_eq!(files.len(), 2);
+
+        let f1 = files.iter().find(|f| f.id == "vf-1").unwrap();
+        assert_eq!(f1.filename, "file1.txt");
+        assert_eq!(f1.extracted_text.as_deref(), Some("hello world"));
+        assert_eq!(f1.tags, vec!["tag1".to_string()]);
+        assert_eq!(f1.status, VirtualFileStatus::Pending);
+
+        let f2 = files.iter().find(|f| f.id == "vf-2").unwrap();
+        assert_eq!(f2.synopsis.as_deref(), Some("A PDF"));
+        assert_eq!(f2.status, VirtualFileStatus::OcrComplete);
+
+        let empty = repo.get_virtual_files("d1", 999).await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_count_unprocessed_archives() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(
+            &repo, "d1", "src-a", DocumentStatus::Pending, "application/zip",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d2", "src-a", DocumentStatus::Downloaded, "application/x-tar",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d3", "src-b", DocumentStatus::Pending, "application/zip",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d4", "src-a", DocumentStatus::Pending, "application/pdf",
+        )
+        .await;
+        save_doc_with_version(
+            &repo,
+            "d5",
+            "src-a",
+            DocumentStatus::OcrComplete,
+            "application/zip",
+        )
+        .await;
+
+        let all = repo.count_unprocessed_archives(None).await.unwrap();
+        assert_eq!(all, 3);
+
+        let src_a = repo
+            .count_unprocessed_archives(Some("src-a"))
+            .await
+            .unwrap();
+        assert_eq!(src_a, 2);
+
+        let src_b = repo
+            .count_unprocessed_archives(Some("src-b"))
+            .await
+            .unwrap();
+        assert_eq!(src_b, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_unprocessed_archives() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(
+            &repo, "d1", "src", DocumentStatus::Pending, "application/zip",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d2", "src", DocumentStatus::Pending, "application/zip",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d3", "src", DocumentStatus::Pending, "application/zip",
+        )
+        .await;
+
+        let limited = repo.get_unprocessed_archives(None, 2).await.unwrap();
+        assert_eq!(limited.len(), 2);
+
+        let all = repo.get_unprocessed_archives(None, 100).await.unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_count_unprocessed_emails() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(
+            &repo, "d1", "src-a", DocumentStatus::Pending, "message/rfc822",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d2", "src-a", DocumentStatus::Downloaded, "application/x-rfc822",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d3", "src-b", DocumentStatus::Pending, "message/rfc822",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d4", "src-a", DocumentStatus::Pending, "application/pdf",
+        )
+        .await;
+
+        let all = repo.count_unprocessed_emails(None).await.unwrap();
+        assert_eq!(all, 3);
+
+        let src_a = repo
+            .count_unprocessed_emails(Some("src-a"))
+            .await
+            .unwrap();
+        assert_eq!(src_a, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_unprocessed_emails() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(
+            &repo, "d1", "src", DocumentStatus::Pending, "message/rfc822",
+        )
+        .await;
+        save_doc_with_version(
+            &repo, "d2", "src", DocumentStatus::Pending, "message/rfc822",
+        )
+        .await;
+
+        let emails = repo.get_unprocessed_emails(None, 10).await.unwrap();
+        assert_eq!(emails.len(), 2);
+
+        let limited = repo.get_unprocessed_emails(None, 1).await.unwrap();
+        assert_eq!(limited.len(), 1);
+    }
 }
