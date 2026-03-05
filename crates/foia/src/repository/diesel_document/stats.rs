@@ -28,19 +28,17 @@ impl DieselDocumentRepository {
             .to_owned();
 
         let latest_alias = Alias::new("latest");
+        let mime_col = Expr::col((DocumentVersions::Table, DocumentVersions::MimeType));
+        let doc_id_col = Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId));
+
         let stmt = Query::select()
             .expr_as(
-                Expr::cust_with_expr(
-                    "COALESCE($1, 'unknown')",
-                    Expr::col((DocumentVersions::Table, DocumentVersions::MimeType)),
-                ),
+                Expr::case(mime_col.clone().is_null(), Expr::val("unknown"))
+                    .finally(mime_col.clone()),
                 Alias::new("mime_type"),
             )
             .expr_as(
-                Expr::cust_with_expr(
-                    "COUNT(DISTINCT $1)",
-                    Expr::col((DocumentVersions::Table, DocumentVersions::DocumentId)),
-                ),
+                doc_id_col.count_distinct(),
                 Alias::new("count"),
             )
             .from(DocumentVersions::Table)
@@ -136,5 +134,106 @@ impl DieselDocumentRepository {
                 Ok(stats)
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Document, DocumentStatus, DocumentVersion};
+    use crate::repository::diesel_document::tests::setup_test_db;
+    use chrono::Utc;
+
+    async fn save_doc_with_version(
+        repo: &DieselDocumentRepository,
+        id: &str,
+        source: &str,
+        mime_type: &str,
+        category: &str,
+    ) {
+        let doc = Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status: DocumentStatus::Pending,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        };
+        repo.save(&doc).await.unwrap();
+        // Update category_id directly (bypassing the macro since test helpers don't return Result)
+        match &repo.pool {
+            crate::repository::pool::DbPool::Sqlite(pool) => {
+                let mut conn = pool.get().await.unwrap();
+                diesel::update(documents::table.find(id))
+                    .set(documents::category_id.eq(category))
+                    .execute(&mut conn)
+                    .await
+                    .unwrap();
+            }
+            #[cfg(feature = "postgres")]
+            _ => unreachable!("tests use SQLite"),
+        }
+
+        let version = DocumentVersion {
+            id: 0,
+            content_hash: format!("hash-{id}"),
+            content_hash_blake3: None,
+            file_path: None,
+            file_size: 1024,
+            mime_type: mime_type.to_string(),
+            acquired_at: Utc::now(),
+            source_url: None,
+            original_filename: None,
+            server_date: None,
+            page_count: None,
+            archive_snapshot_id: None,
+            earliest_archived_at: None,
+            dedup_index: None,
+        };
+        repo.add_version(id, &version).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_type_stats() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src", "application/pdf", "documents").await;
+        save_doc_with_version(&repo, "d2", "src", "application/pdf", "documents").await;
+        save_doc_with_version(&repo, "d3", "src", "image/png", "images").await;
+
+        let stats = repo.get_type_stats().await.unwrap();
+        assert_eq!(stats.get("application/pdf"), Some(&2));
+        assert_eq!(stats.get("image/png"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn test_get_category_stats_with_source_filter() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_version(&repo, "d1", "src-a", "application/pdf", "documents").await;
+        save_doc_with_version(&repo, "d2", "src-a", "application/pdf", "documents").await;
+        save_doc_with_version(&repo, "d3", "src-b", "image/png", "images").await;
+
+        let stats = repo.get_category_stats(Some("src-a")).await.unwrap();
+        assert_eq!(stats.get("documents"), Some(&2));
+        assert_eq!(stats.get("images"), None);
+    }
+
+    #[tokio::test]
+    async fn test_get_type_stats_empty() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let stats = repo.get_type_stats().await.unwrap();
+        assert!(stats.is_empty());
     }
 }

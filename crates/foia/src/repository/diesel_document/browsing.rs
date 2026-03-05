@@ -357,3 +357,156 @@ impl DieselDocumentRepository {
         self.get_batch(&doc_ids).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::DocumentStatus;
+    use crate::repository::diesel_document::tests::setup_test_db;
+    use chrono::Utc;
+
+    async fn save_doc(
+        repo: &DieselDocumentRepository,
+        id: &str,
+        source: &str,
+        status: DocumentStatus,
+        title: &str,
+    ) {
+        let doc = Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: title.to_string(),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: Some(format!("Synopsis for {id}")),
+            tags: vec![],
+            status,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        };
+        repo.save(&doc).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_recent() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending, "First").await;
+        save_doc(&repo, "d2", "src", DocumentStatus::Pending, "Second").await;
+
+        let recent = repo.get_recent(1).await.unwrap();
+        assert_eq!(recent.len(), 1);
+
+        let all = repo.get_recent(10).await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_browse_with_source_filter() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending, "Doc A1").await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending, "Doc A2").await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending, "Doc B1").await;
+
+        let params = BrowseParams {
+            source_id: Some("src-a"),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = repo.browse(params).await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|d| d.source_id == "src-a"));
+    }
+
+    #[tokio::test]
+    async fn test_browse_with_status_filter() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending, "Pending").await;
+        save_doc(&repo, "d2", "src", DocumentStatus::Downloaded, "Downloaded").await;
+
+        let params = BrowseParams {
+            status: Some("downloaded"),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = repo.browse(params).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, DocumentStatus::Downloaded);
+    }
+
+    #[tokio::test]
+    async fn test_browse_with_search_query() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending, "Alpha Report").await;
+        save_doc(&repo, "d2", "src", DocumentStatus::Pending, "Beta Report").await;
+        save_doc(&repo, "d3", "src", DocumentStatus::Pending, "Gamma Study").await;
+
+        let params = BrowseParams {
+            search_query: Some("Report"),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = repo.browse(params).await.unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_browse_pagination() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        for i in 0..5 {
+            save_doc(&repo, &format!("d{i}"), "src", DocumentStatus::Pending, &format!("Doc {i}")).await;
+        }
+
+        let page1 = BrowseParams { limit: 2, offset: 0, ..Default::default() };
+        let page2 = BrowseParams { limit: 2, offset: 2, ..Default::default() };
+        let page3 = BrowseParams { limit: 2, offset: 4, ..Default::default() };
+
+        assert_eq!(repo.browse(page1).await.unwrap().len(), 2);
+        assert_eq!(repo.browse(page2).await.unwrap().len(), 2);
+        assert_eq!(repo.browse(page3).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_browse_count() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending, "Doc 1").await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Downloaded, "Doc 2").await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending, "Doc 3").await;
+
+        let total = repo.browse_count(None, None, &[], &[], None).await.unwrap();
+        assert_eq!(total, 3);
+
+        let src_a = repo.browse_count(Some("src-a"), None, &[], &[], None).await.unwrap();
+        assert_eq!(src_a, 2);
+
+        let filtered = repo.browse_count(None, Some("downloaded"), &[], &[], None).await.unwrap();
+        assert_eq!(filtered, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_document_navigation() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src", DocumentStatus::Pending, "First").await;
+        save_doc(&repo, "d2", "src", DocumentStatus::Pending, "Second").await;
+        save_doc(&repo, "d3", "src", DocumentStatus::Pending, "Third").await;
+
+        let nav = repo.get_document_navigation("d2", "src").await.unwrap();
+        assert_eq!(nav.prev_id.as_deref(), Some("d1"));
+        assert_eq!(nav.next_id.as_deref(), Some("d3"));
+        assert_eq!(nav.position, 2);
+        assert_eq!(nav.total, 3);
+
+        let first_nav = repo.get_document_navigation("d1", "src").await.unwrap();
+        assert_eq!(first_nav.prev_id, None);
+        assert_eq!(first_nav.next_id.as_deref(), Some("d2"));
+    }
+}

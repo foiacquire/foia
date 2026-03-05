@@ -20,12 +20,10 @@ impl DieselDocumentRepository {
 
         with_conn_split!(self.pool,
             sqlite: conn => {
-                let json_each = Func::cust(Alias::new("json_each")).arg(
-                    Expr::cust_with_expr(
-                        "json_extract($1, '$.tags')",
-                        Expr::col(Documents::Metadata),
-                    ),
-                );
+                let json_extract = Func::cust(Alias::new("json_extract"))
+                    .arg(Expr::col(Documents::Metadata))
+                    .arg(Expr::cust("'$.tags'"));
+                let json_each = Func::cust(Alias::new("json_each")).arg(json_extract);
 
                 let stmt = Query::select()
                     .distinct()
@@ -35,32 +33,26 @@ impl DieselDocumentRepository {
                         json_each,
                         DynIden::new(Alias::new("_je")),
                     ))
-                    .and_where(Expr::cust_with_expr(
-                        "LOWER(value) LIKE $1",
-                        Expr::val(&pattern as &str),
-                    ))
+                    .and_where(Expr::cust("LOWER(value) LIKE ?"))
                     .order_by(Alias::new("value"), sea_query::Order::Asc)
-                    .limit(100)
                     .to_owned();
 
                 let (sql, _) = stmt.build(sea_query::SqliteQueryBuilder);
+                let sql = format!("{sql} LIMIT 100");
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(&pattern),
                     &mut conn,
                 )
-                .await
-                .unwrap_or_default();
+                .await?;
                 Ok(results.into_iter().map(|r| r.tag).collect())
             },
             postgres: conn => {
                 let tags_col = Alias::new("tags");
                 let jsonb_elements =
                     Func::cust(Alias::new("jsonb_array_elements_text")).arg(
-                        Expr::cust_with_expr(
-                            "$1::jsonb",
-                            Expr::col((Documents::Table, tags_col.clone())),
-                        ),
+                        Expr::col((Documents::Table, tags_col.clone()))
+                            .cast_as(Alias::new("jsonb")),
                     );
 
                 let stmt = Query::select()
@@ -74,26 +66,22 @@ impl DieselDocumentRepository {
                     .and_where(
                         Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
                     )
-                    .and_where(Expr::cust_with_expr(
-                        "$1 != '[]'",
-                        Expr::col((Documents::Table, tags_col)),
-                    ))
-                    .and_where(Expr::cust_with_expr(
-                        "LOWER(tag) LIKE $1",
-                        Expr::val(&pattern as &str),
-                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col))
+                            .ne(Expr::cust("'[]'")),
+                    )
+                    .and_where(Expr::cust("LOWER(tag) LIKE $1"))
                     .order_by(Alias::new("tag"), sea_query::Order::Asc)
-                    .limit(100)
                     .to_owned();
 
                 let (sql, _) = stmt.build(sea_query::PostgresQueryBuilder);
+                let sql = format!("{sql} LIMIT 100");
                 let results: Vec<TagRow> = diesel_async::RunQueryDsl::load(
                     diesel::sql_query(&sql)
                         .bind::<diesel::sql_types::Text, _>(&pattern),
                     &mut conn,
                 )
-                .await
-                .unwrap_or_default();
+                .await?;
                 Ok(results.into_iter().map(|r| r.tag).collect())
             }
         )
@@ -123,10 +111,10 @@ impl DieselDocumentRepository {
                     .and_where(
                         Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
                     )
-                    .and_where(Expr::cust_with_expr(
-                        "$1 != '[]'",
-                        Expr::col((Documents::Table, tags_col.clone())),
-                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col.clone()))
+                            .ne(Expr::cust("'[]'")),
+                    )
                     .order_by(Alias::new("value"), sea_query::Order::Asc)
                     .to_owned();
 
@@ -135,17 +123,14 @@ impl DieselDocumentRepository {
                     diesel::sql_query(&sql),
                     &mut conn,
                 )
-                .await
-                .unwrap_or_default();
+                .await?;
                 Ok(results.into_iter().map(|r| r.tag).collect())
             },
             postgres: conn => {
                 let jsonb_elements =
                     Func::cust(Alias::new("jsonb_array_elements_text")).arg(
-                        Expr::cust_with_expr(
-                            "$1::jsonb",
-                            Expr::col((Documents::Table, tags_col.clone())),
-                        ),
+                        Expr::col((Documents::Table, tags_col.clone()))
+                            .cast_as(Alias::new("jsonb")),
                     );
 
                 let stmt = Query::select()
@@ -159,10 +144,10 @@ impl DieselDocumentRepository {
                     .and_where(
                         Expr::col((Documents::Table, tags_col.clone())).is_not_null(),
                     )
-                    .and_where(Expr::cust_with_expr(
-                        "$1 != '[]'",
-                        Expr::col((Documents::Table, tags_col)),
-                    ))
+                    .and_where(
+                        Expr::col((Documents::Table, tags_col))
+                            .ne(Expr::cust("'[]'")),
+                    )
                     .order_by(Alias::new("tag"), sea_query::Order::Asc)
                     .to_owned();
 
@@ -171,8 +156,7 @@ impl DieselDocumentRepository {
                     diesel::sql_query(&sql),
                     &mut conn,
                 )
-                .await
-                .unwrap_or_default();
+                .await?;
                 Ok(results.into_iter().map(|r| r.tag).collect())
             }
         )
@@ -242,7 +226,41 @@ impl DieselDocumentRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::DocumentStatus;
     use crate::repository::diesel_document::tests::setup_test_db;
+    use chrono::Utc;
+
+    async fn save_doc_with_tags(
+        repo: &DieselDocumentRepository,
+        id: &str,
+        source: &str,
+        tags: &[&str],
+    ) {
+        let tags_vec: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
+        // metadata.tags is read by search_tags (SQLite json_extract path)
+        let metadata = serde_json::json!({ "tags": tags });
+        let doc = Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: tags_vec.clone(),
+            status: DocumentStatus::Pending,
+            metadata,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        };
+        repo.save(&doc).await.unwrap();
+        // documents.tags column is written by update_synopsis_and_tags,
+        // which get_all_tags reads via json_each(documents.tags)
+        repo.update_synopsis_and_tags(id, None, &tags_vec)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn test_get_by_tag_with_sql_metacharacters() {
@@ -252,5 +270,73 @@ mod tests {
         let result = repo.get_by_tag("'; DROP TABLE documents; --", None).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_tag_returns_matching_docs() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_tags(&repo, "d1", "src", &["foia", "government"]).await;
+        save_doc_with_tags(&repo, "d2", "src", &["foia"]).await;
+        save_doc_with_tags(&repo, "d3", "src", &["other"]).await;
+
+        let foia_docs = repo.get_by_tag("foia", None).await.unwrap();
+        assert_eq!(foia_docs.len(), 2);
+
+        let other_docs = repo.get_by_tag("other", None).await.unwrap();
+        assert_eq!(other_docs.len(), 1);
+        assert_eq!(other_docs[0].id, "d3");
+    }
+
+    #[tokio::test]
+    async fn test_get_by_tag_filters_by_source() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_tags(&repo, "d1", "src-a", &["foia"]).await;
+        save_doc_with_tags(&repo, "d2", "src-b", &["foia"]).await;
+
+        let filtered = repo.get_by_tag("foia", Some("src-a")).await.unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "d1");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_tags_returns_unique_tags() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_tags(&repo, "d1", "src", &["alpha", "beta"]).await;
+        save_doc_with_tags(&repo, "d2", "src", &["beta", "gamma"]).await;
+
+        let all_tags = repo.get_all_tags().await.unwrap();
+        assert_eq!(all_tags.len(), 3);
+        assert!(all_tags.contains(&"alpha".to_string()));
+        assert!(all_tags.contains(&"beta".to_string()));
+        assert!(all_tags.contains(&"gamma".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_all_tags_empty_db() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let all_tags = repo.get_all_tags().await.unwrap();
+        assert!(all_tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_tags_matches_substring() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_doc_with_tags(&repo, "d1", "src", &["government", "governance"]).await;
+        save_doc_with_tags(&repo, "d2", "src", &["policy"]).await;
+
+        let results = repo.search_tags("govern").await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.contains(&"government".to_string()));
+        assert!(results.contains(&"governance".to_string()));
     }
 }

@@ -109,3 +109,101 @@ impl DieselDocumentRepository {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Document, DocumentStatus};
+    use crate::repository::diesel_document::tests::setup_test_db;
+    use chrono::Utc;
+
+    async fn save_doc(repo: &DieselDocumentRepository, id: &str, source: &str, status: DocumentStatus) {
+        let doc = Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        };
+        repo.save(&doc).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_count_empty() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        assert_eq!(repo.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_multiple() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-b", DocumentStatus::Downloaded).await;
+        assert_eq!(repo.count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_count_by_source() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+        assert_eq!(repo.count_by_source("src-a").await.unwrap(), 2);
+        assert_eq!(repo.count_by_source("src-b").await.unwrap(), 1);
+        assert_eq!(repo.count_by_source("src-missing").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_all_source_counts() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+        let counts = repo.get_all_source_counts().await.unwrap();
+        assert_eq!(counts.get("src-a"), Some(&2));
+        assert_eq!(counts.get("src-b"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn test_count_by_status() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Downloaded).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        let all = repo.count_all_by_status().await.unwrap();
+        assert_eq!(all.get("pending"), Some(&2));
+        assert_eq!(all.get("downloaded"), Some(&1));
+
+        let src_a = repo.count_by_status(Some("src-a")).await.unwrap();
+        assert_eq!(src_a.get("pending"), Some(&1));
+        assert_eq!(src_a.get("downloaded"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn test_get_source_status_counts() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        save_doc(&repo, "d1", "src-a", DocumentStatus::Pending).await;
+        save_doc(&repo, "d2", "src-a", DocumentStatus::Downloaded).await;
+        save_doc(&repo, "d3", "src-b", DocumentStatus::Pending).await;
+
+        let result = repo.get_source_status_counts().await.unwrap();
+        assert_eq!(result["src-a"]["pending"], 1);
+        assert_eq!(result["src-a"]["downloaded"], 1);
+        assert_eq!(result["src-b"]["pending"], 1);
+    }
+}
