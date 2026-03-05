@@ -443,18 +443,20 @@ impl DieselDocumentRepository {
         with_conn_split!(self.pool,
             sqlite: conn => {
                 // SQLite: word count via LENGTH trick, INSERT OR IGNORE
+                // NOTE: Use Func::cust / Expr::cust with inline column refs instead of
+                // Expr::cust_with_expr — the latter doesn't replace $N on SqliteQueryBuilder.
+                let st_col = Expr::col((dp.clone(), DocumentPages::SearchText));
+                let char_count = sea_query::Func::cust(Alias::new("LENGTH")).arg(st_col.clone());
+                let word_count = Expr::cust(
+                    "LENGTH(\"dp\".\"search_text\") - LENGTH(REPLACE(\"dp\".\"search_text\", ' ', '')) + 1",
+                );
+
                 let select = Query::select()
                     .column((dp.clone(), DocumentPages::Id))
                     .expr(Expr::cust("'pdftotext'"))
                     .column((dp.clone(), DocumentPages::SearchText))
-                    .expr(Expr::cust_with_expr(
-                        "LENGTH($1)",
-                        Expr::col((dp.clone(), DocumentPages::SearchText)),
-                    ))
-                    .expr(Expr::cust_with_expr(
-                        "LENGTH($1) - LENGTH(REPLACE($1, ' ', '')) + 1",
-                        Expr::col((dp.clone(), DocumentPages::SearchText)),
-                    ))
+                    .expr(char_count)
+                    .expr(word_count)
                     .expr(Expr::val(&now as &str))
                     .from_as(DocumentPages::Table, dp.clone())
                     .and_where(
@@ -467,7 +469,8 @@ impl DieselDocumentRepository {
                         Expr::col((dp.clone(), DocumentPages::SearchText)).is_not_null(),
                     )
                     .and_where(
-                        Expr::col((dp.clone(), DocumentPages::SearchText)).ne(""),
+                        Expr::col((dp.clone(), DocumentPages::SearchText))
+                            .ne(Expr::cust("''")),
                     )
                     .and_where(Expr::exists(not_exists.clone()).not())
                     .to_owned();
@@ -1063,5 +1066,461 @@ impl DieselDocumentRepository {
         _backend: &str,
     ) -> Result<Vec<DocumentPage>, DieselError> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Document, DocumentStatus, DocumentVersion, PageOcrStatus};
+    use crate::repository::diesel_document::tests::setup_test_db;
+    use crate::repository::diesel_document::DieselDocumentRepository;
+    use chrono::Utc;
+
+    async fn setup_doc_with_version(
+        repo: &DieselDocumentRepository,
+        doc_id: &str,
+        source: &str,
+    ) -> i64 {
+        let doc = Document {
+            id: doc_id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {doc_id}"),
+            source_url: format!("https://example.com/{doc_id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status: DocumentStatus::Pending,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        };
+        repo.save(&doc).await.unwrap();
+        let version = DocumentVersion {
+            id: 0,
+            content_hash: format!("hash-{doc_id}"),
+            content_hash_blake3: None,
+            file_path: None,
+            file_size: 1024,
+            mime_type: "application/pdf".to_string(),
+            acquired_at: Utc::now(),
+            source_url: None,
+            original_filename: None,
+            server_date: None,
+            page_count: None,
+            archive_snapshot_id: None,
+            earliest_archived_at: None,
+            dedup_index: None,
+        };
+        repo.add_version(doc_id, &version).await.unwrap()
+    }
+
+    fn make_page(doc_id: &str, version_id: i64, page_num: u32) -> DocumentPage {
+        DocumentPage::new(doc_id.to_string(), version_id, page_num)
+    }
+
+    #[tokio::test]
+    async fn test_count_pages() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        for i in 1..=3 {
+            repo.save_page(&make_page("d1", vid, i)).await.unwrap();
+        }
+
+        let count = repo.count_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(count, 3);
+
+        let zero = repo.count_pages("d1", 999).await.unwrap();
+        assert_eq!(zero, 0);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_pages() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let mut p2 = make_page("d1", vid, 2);
+        p2.search_text = Some("page two text".to_string());
+        let mut p1 = make_page("d1", vid, 1);
+        p1.search_text = Some("page one text".to_string());
+        let p3 = make_page("d1", vid, 3);
+
+        repo.save_page(&p2).await.unwrap();
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p3).await.unwrap();
+
+        let pages = repo.get_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(pages.len(), 3);
+        assert_eq!(pages[0].page_number, 1);
+        assert_eq!(pages[1].page_number, 2);
+        assert_eq!(pages[2].page_number, 3);
+        assert_eq!(pages[0].search_text.as_deref(), Some("page one text"));
+        assert_eq!(pages[1].search_text.as_deref(), Some("page two text"));
+        assert!(pages[2].search_text.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_save_pages_batch() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let pages: Vec<DocumentPage> = (1..=5).map(|i| make_page("d1", vid, i)).collect();
+        repo.save_pages_batch(&pages).await.unwrap();
+
+        let count = repo.count_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(count, 5);
+
+        repo.save_pages_batch(&[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_pages() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        for i in 1..=3 {
+            repo.save_page(&make_page("d1", vid, i)).await.unwrap();
+        }
+        assert_eq!(repo.count_pages("d1", vid as i32).await.unwrap(), 3);
+
+        repo.delete_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(repo.count_pages("d1", vid as i32).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_are_all_pages_complete() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let mut p1 = make_page("d1", vid, 1);
+        p1.ocr_status = PageOcrStatus::OcrComplete;
+        let p2 = make_page("d1", vid, 2); // Pending
+
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p2).await.unwrap();
+
+        let complete = repo.are_all_pages_complete("d1", vid as i32).await.unwrap();
+        assert!(!complete);
+
+        // Update p2 to complete
+        let mut p2_updated = make_page("d1", vid, 2);
+        p2_updated.ocr_status = PageOcrStatus::OcrComplete;
+        repo.save_page(&p2_updated).await.unwrap();
+
+        let complete = repo.are_all_pages_complete("d1", vid as i32).await.unwrap();
+        assert!(complete);
+    }
+
+    #[tokio::test]
+    async fn test_get_combined_page_text() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let mut p1 = make_page("d1", vid, 1);
+        p1.search_text = Some("First page".to_string());
+        let mut p2 = make_page("d1", vid, 2);
+        p2.search_text = Some("Second page".to_string());
+        let p3 = make_page("d1", vid, 3); // No text
+
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p2).await.unwrap();
+        repo.save_page(&p3).await.unwrap();
+
+        let combined = repo
+            .get_combined_page_text("d1", vid as i32)
+            .await
+            .unwrap();
+        assert_eq!(combined.as_deref(), Some("First page\n\nSecond page"));
+
+        // All None → None
+        let vid2 = setup_doc_with_version(&repo, "d2", "src").await;
+        repo.save_page(&make_page("d2", vid2, 1)).await.unwrap();
+        let none = repo
+            .get_combined_page_text("d2", vid2 as i32)
+            .await
+            .unwrap();
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_count_pages_needing_ocr() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let p1 = make_page("d1", vid, 1); // Pending
+        let mut p2 = make_page("d1", vid, 2);
+        p2.ocr_status = PageOcrStatus::TextExtracted;
+        let mut p3 = make_page("d1", vid, 3);
+        p3.ocr_status = PageOcrStatus::OcrComplete;
+
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p2).await.unwrap();
+        repo.save_page(&p3).await.unwrap();
+
+        let count = repo.count_pages_needing_ocr().await.unwrap();
+        assert_eq!(count, 2); // pending + text_extracted
+    }
+
+    #[tokio::test]
+    async fn test_get_pages_needing_ocr() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let p1 = make_page("d1", vid, 1); // Pending
+        let mut p2 = make_page("d1", vid, 2);
+        p2.ocr_status = PageOcrStatus::TextExtracted;
+        let mut p3 = make_page("d1", vid, 3);
+        p3.ocr_status = PageOcrStatus::OcrComplete;
+
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p2).await.unwrap();
+        repo.save_page(&p3).await.unwrap();
+
+        let pages = repo
+            .get_pages_needing_ocr("d1", vid as i32, 10)
+            .await
+            .unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].page_number, 1);
+        assert_eq!(pages[1].page_number, 2);
+    }
+
+    #[tokio::test]
+    async fn test_store_page_ocr_result() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let page_id = repo.save_page(&make_page("d1", vid, 1)).await.unwrap();
+
+        repo.store_page_ocr_result(
+            page_id,
+            "tesseract",
+            None,
+            Some("OCR text from tesseract"),
+            Some(0.95),
+            Some(1500),
+            Some("abc123"),
+        )
+        .await
+        .unwrap();
+
+        // search_text should be updated via update_search_text
+        let pages = repo.get_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(
+            pages[0].search_text.as_deref(),
+            Some("OCR text from tesseract")
+        );
+
+        // Verify OCR result stored
+        let results = repo.get_page_ocr_results(page_id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].backend, "tesseract");
+        assert_eq!(results[0].text.as_deref(), Some("OCR text from tesseract"));
+        assert_eq!(results[0].image_hash.as_deref(), Some("abc123"));
+    }
+
+    #[tokio::test]
+    async fn test_store_page_ocr_error() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let page_id = repo.save_page(&make_page("d1", vid, 1)).await.unwrap();
+
+        repo.store_page_ocr_error(page_id, "groq", Some("llama-v3"), "rate limited")
+            .await
+            .unwrap();
+
+        let results = repo.get_page_ocr_results(page_id).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].backend, "groq");
+        assert_eq!(results[0].model.as_deref(), Some("llama-v3"));
+        assert_eq!(results[0].error_message.as_deref(), Some("rate limited"));
+        assert!(results[0].text.is_none());
+
+        // search_text should remain None (no successful OCR)
+        let pages = repo.get_pages("d1", vid as i32).await.unwrap();
+        assert!(pages[0].search_text.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_page_ocr_results_multiple_backends() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let page_id = repo.save_page(&make_page("d1", vid, 1)).await.unwrap();
+
+        repo.store_page_ocr_result(
+            page_id,
+            "tesseract",
+            None,
+            Some("short text"),
+            Some(0.8),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        repo.store_page_ocr_result(
+            page_id,
+            "groq",
+            Some("llama-v3"),
+            Some("much longer text with better quality"),
+            Some(0.95),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let results = repo.get_page_ocr_results(page_id).await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        // search_text should be the longest (best) text
+        let pages = repo.get_pages("d1", vid as i32).await.unwrap();
+        assert_eq!(
+            pages[0].search_text.as_deref(),
+            Some("much longer text with better quality")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_ocr_result_by_image_hash() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        let page_id = repo.save_page(&make_page("d1", vid, 1)).await.unwrap();
+
+        repo.store_page_ocr_result(
+            page_id,
+            "tesseract",
+            None,
+            Some("cached OCR text"),
+            None,
+            None,
+            Some("img-hash-abc"),
+        )
+        .await
+        .unwrap();
+
+        let found = repo
+            .find_ocr_result_by_image_hash("img-hash-abc", "tesseract")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().text.as_deref(), Some("cached OCR text"));
+
+        let not_found = repo
+            .find_ocr_result_by_image_hash("nonexistent", "tesseract")
+            .await
+            .unwrap();
+        assert!(not_found.is_none());
+
+        let wrong_backend = repo
+            .find_ocr_result_by_image_hash("img-hash-abc", "groq")
+            .await
+            .unwrap();
+        assert!(wrong_backend.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_all_pages_needing_ocr_priority() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let vid1 = setup_doc_with_version(&repo, "d1", "src").await;
+        let vid2 = setup_doc_with_version(&repo, "d2", "src").await;
+
+        // Set d2 to higher priority
+        match &repo.pool {
+            crate::repository::pool::DbPool::Sqlite(pool) => {
+                let mut conn = pool.get().await.unwrap();
+                use crate::schema::documents;
+                use diesel::prelude::*;
+                diesel_async::RunQueryDsl::execute(
+                    diesel::update(documents::table.find("d2"))
+                        .set(documents::analysis_priority.eq(10)),
+                    &mut conn,
+                )
+                .await
+                .unwrap();
+            }
+            #[cfg(feature = "postgres")]
+            _ => unreachable!("tests use SQLite"),
+        }
+
+        // d1 pages: pending
+        repo.save_page(&make_page("d1", vid1, 1)).await.unwrap();
+        // d2 pages: pending (but higher priority)
+        repo.save_page(&make_page("d2", vid2, 1)).await.unwrap();
+
+        let pages = repo.get_all_pages_needing_ocr(10).await.unwrap();
+        assert_eq!(pages.len(), 2);
+        // d2 should come first (higher priority)
+        assert_eq!(pages[0].document_id, "d2");
+        assert_eq!(pages[1].document_id, "d1");
+    }
+
+    #[tokio::test]
+    async fn test_store_pdftotext_results_batch() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+        let vid = setup_doc_with_version(&repo, "d1", "src").await;
+
+        // Save pages with search_text (simulating pdftotext extraction)
+        let mut p1 = make_page("d1", vid, 1);
+        p1.search_text = Some("First page extracted text".to_string());
+        let mut p2 = make_page("d1", vid, 2);
+        p2.search_text = Some("Second page extracted text".to_string());
+        let p3 = make_page("d1", vid, 3); // No text
+
+        repo.save_page(&p1).await.unwrap();
+        repo.save_page(&p2).await.unwrap();
+        repo.save_page(&p3).await.unwrap();
+
+        // Store pdftotext results in batch
+        repo.store_pdftotext_results_batch("d1", vid as i32)
+            .await
+            .unwrap();
+
+        // Verify page_ocr_results were created for pages with text
+        let pages = repo.get_pages("d1", vid as i32).await.unwrap();
+        let p1_results = repo.get_page_ocr_results(pages[0].id).await.unwrap();
+        assert_eq!(p1_results.len(), 1);
+        assert_eq!(p1_results[0].backend, "pdftotext");
+        assert_eq!(
+            p1_results[0].text.as_deref(),
+            Some("First page extracted text")
+        );
+
+        let p2_results = repo.get_page_ocr_results(pages[1].id).await.unwrap();
+        assert_eq!(p2_results.len(), 1);
+        assert_eq!(p2_results[0].backend, "pdftotext");
+
+        // Page 3 has no text, so no OCR result
+        let p3_results = repo.get_page_ocr_results(pages[2].id).await.unwrap();
+        assert!(p3_results.is_empty());
+
+        // Running again should be idempotent (ON CONFLICT DO NOTHING)
+        repo.store_pdftotext_results_batch("d1", vid as i32)
+            .await
+            .unwrap();
+        let p1_results_again = repo.get_page_ocr_results(pages[0].id).await.unwrap();
+        assert_eq!(p1_results_again.len(), 1);
     }
 }
