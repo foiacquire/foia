@@ -426,6 +426,59 @@ mod tests {
     use super::*;
     use crate::repository::diesel_document::tests::setup_test_db;
 
+    use crate::models::{Document, DocumentStatus, DocumentVersion};
+    use chrono::Utc;
+
+    fn make_doc(id: &str, source: &str) -> Document {
+        Document {
+            id: id.to_string(),
+            source_id: source.to_string(),
+            title: format!("Doc {id}"),
+            source_url: format!("https://example.com/{id}"),
+            extracted_text: None,
+            synopsis: None,
+            tags: vec![],
+            status: DocumentStatus::Pending,
+            metadata: serde_json::Value::Object(Default::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            discovery_method: "seed".to_string(),
+            versions: vec![],
+        }
+    }
+
+    fn make_version(hash: &str, mime: &str) -> DocumentVersion {
+        DocumentVersion {
+            id: 0,
+            content_hash: hash.to_string(),
+            content_hash_blake3: Some(format!("b3-{hash}")),
+            file_path: None,
+            file_size: 1024,
+            mime_type: mime.to_string(),
+            acquired_at: Utc::now(),
+            source_url: None,
+            original_filename: None,
+            server_date: None,
+            page_count: None,
+            archive_snapshot_id: None,
+            earliest_archived_at: None,
+            dedup_index: None,
+        }
+    }
+
+    async fn save_with_version(
+        repo: &DieselDocumentRepository,
+        id: &str,
+        source: &str,
+        hash: &str,
+        mime: &str,
+    ) -> i64 {
+        repo.save(&make_doc(id, source)).await.unwrap();
+        repo.add_version(id, &make_version(hash, mime))
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn test_find_sources_by_hash_with_sql_metacharacters() {
         let (pool, _dir) = setup_test_db().await;
@@ -436,5 +489,236 @@ mod tests {
             .await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_current_version_id() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let v1 = repo
+            .add_version("d1", &make_version("h1", "application/pdf"))
+            .await
+            .unwrap();
+        let v2 = repo
+            .add_version("d1", &make_version("h2", "application/pdf"))
+            .await
+            .unwrap();
+        assert!(v2 > v1);
+
+        let current = repo.get_current_version_id("d1").await.unwrap();
+        assert_eq!(current, Some(v2));
+
+        let missing = repo.get_current_version_id("nonexistent").await.unwrap();
+        assert_eq!(missing, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_version_mime_type() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        let vid = save_with_version(&repo, "d1", "src", "h1", "application/pdf");
+
+        repo.update_version_mime_type(vid.await, "image/tiff")
+            .await
+            .unwrap();
+
+        let latest = repo.get_latest_version("d1").await.unwrap().unwrap();
+        assert_eq!(latest.mime_type, "image/tiff");
+    }
+
+    #[tokio::test]
+    async fn test_find_existing_file() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let mut v = make_version("sha256-abc", "application/pdf");
+        v.content_hash_blake3 = Some("blake3-abc".to_string());
+        v.file_size = 2048;
+        v.file_path = Some(std::path::PathBuf::from("/data/files/abc.pdf"));
+        repo.add_version("d1", &v).await.unwrap();
+
+        let found = repo
+            .find_existing_file("sha256-abc", "blake3-abc", 2048)
+            .await
+            .unwrap();
+        assert_eq!(found, Some("/data/files/abc.pdf".to_string()));
+
+        let wrong_hash = repo
+            .find_existing_file("sha256-wrong", "blake3-abc", 2048)
+            .await
+            .unwrap();
+        assert_eq!(wrong_hash, None);
+
+        let wrong_size = repo
+            .find_existing_file("sha256-abc", "blake3-abc", 9999)
+            .await
+            .unwrap();
+        assert_eq!(wrong_size, None);
+    }
+
+    #[tokio::test]
+    async fn test_clear_version_file_path() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let mut v = make_version("h1", "application/pdf");
+        v.file_path = Some(std::path::PathBuf::from("/old/path.pdf"));
+        let vid = repo.add_version("d1", &v).await.unwrap();
+
+        repo.clear_version_file_path(vid, Some(42)).await.unwrap();
+
+        let latest = repo.get_latest_version("d1").await.unwrap().unwrap();
+        assert!(latest.file_path.is_none());
+        assert_eq!(latest.dedup_index, Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_clear_version_file_paths_batch() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let mut v1 = make_version("h1", "application/pdf");
+        v1.file_path = Some(std::path::PathBuf::from("/path1"));
+        let vid1 = repo.add_version("d1", &v1).await.unwrap();
+
+        let mut v2 = make_version("h2", "application/pdf");
+        v2.file_path = Some(std::path::PathBuf::from("/path2"));
+        let vid2 = repo.add_version("d1", &v2).await.unwrap();
+
+        let mut v3 = make_version("h3", "application/pdf");
+        v3.file_path = Some(std::path::PathBuf::from("/path3"));
+        let _vid3 = repo.add_version("d1", &v3).await.unwrap();
+
+        let cleared = repo
+            .clear_version_file_paths_batch(&[vid1 as i32, vid2 as i32])
+            .await
+            .unwrap();
+        assert_eq!(cleared, 2);
+
+        let remaining = repo.count_legacy_file_paths().await.unwrap();
+        assert_eq!(remaining, 1);
+
+        let empty = repo
+            .clear_version_file_paths_batch(&[])
+            .await
+            .unwrap();
+        assert_eq!(empty, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_legacy_file_paths() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let mut v1 = make_version("h1", "application/pdf");
+        v1.file_path = Some(std::path::PathBuf::from("/path1"));
+        repo.add_version("d1", &v1).await.unwrap();
+
+        let mut v2 = make_version("h2", "application/pdf");
+        v2.file_path = Some(std::path::PathBuf::from("/path2"));
+        repo.add_version("d1", &v2).await.unwrap();
+
+        let v3 = make_version("h3", "application/pdf");
+        repo.add_version("d1", &v3).await.unwrap();
+
+        let count = repo.count_legacy_file_paths().await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_legacy_file_path_versions() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src")).await.unwrap();
+        let mut v1 = make_version("h1", "application/pdf");
+        v1.file_path = Some(std::path::PathBuf::from("/path1"));
+        let vid1 = repo.add_version("d1", &v1).await.unwrap();
+
+        let mut v2 = make_version("h2", "image/png");
+        v2.file_path = Some(std::path::PathBuf::from("/path2"));
+        let _vid2 = repo.add_version("d1", &v2).await.unwrap();
+
+        let batch1 = repo
+            .get_legacy_file_path_versions(0, 1)
+            .await
+            .unwrap();
+        assert_eq!(batch1.len(), 1);
+        assert_eq!(batch1[0].0.content_hash, "h1");
+        assert_eq!(batch1[0].1, "https://example.com/d1");
+        assert_eq!(batch1[0].2, "Doc d1");
+
+        let batch2 = repo
+            .get_legacy_file_path_versions(vid1, 10)
+            .await
+            .unwrap();
+        assert_eq!(batch2.len(), 1);
+        assert_eq!(batch2[0].0.content_hash, "h2");
+    }
+
+    #[tokio::test]
+    async fn test_get_content_hashes() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        repo.save(&make_doc("d1", "src-a")).await.unwrap();
+        repo.add_version("d1", &make_version("old-hash", "application/pdf"))
+            .await
+            .unwrap();
+        repo.add_version("d1", &make_version("new-hash", "application/pdf"))
+            .await
+            .unwrap();
+
+        repo.save(&make_doc("d2", "src-b")).await.unwrap();
+        repo.add_version("d2", &make_version("d2-hash", "image/png"))
+            .await
+            .unwrap();
+
+        let hashes = repo.get_content_hashes().await.unwrap();
+        assert_eq!(hashes.len(), 2);
+
+        let d1_row = hashes.iter().find(|r| r.0 == "d1").unwrap();
+        assert_eq!(d1_row.1, "src-a");
+        assert_eq!(d1_row.2, "new-hash");
+        assert_eq!(d1_row.3, "Doc d1");
+
+        let d2_row = hashes.iter().find(|r| r.0 == "d2").unwrap();
+        assert_eq!(d2_row.2, "d2-hash");
+    }
+
+    #[tokio::test]
+    async fn test_find_sources_by_hash() {
+        let (pool, _dir) = setup_test_db().await;
+        let repo = DieselDocumentRepository::new(pool);
+
+        save_with_version(&repo, "d1", "src-a", "shared-hash", "application/pdf").await;
+        save_with_version(&repo, "d2", "src-b", "shared-hash", "application/pdf").await;
+        save_with_version(&repo, "d3", "src-c", "different", "application/pdf").await;
+
+        let all = repo
+            .find_sources_by_hash("shared-hash", None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let excluded = repo
+            .find_sources_by_hash("shared-hash", Some("src-a"))
+            .await
+            .unwrap();
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0].0, "src-b");
+
+        let none = repo
+            .find_sources_by_hash("nonexistent", None)
+            .await
+            .unwrap();
+        assert!(none.is_empty());
     }
 }
