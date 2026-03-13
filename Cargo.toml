@@ -6,6 +6,7 @@ members = [
     "crates/foia-annotate",
     "crates/foia-cli",
     "crates/foia-import",
+    "crates/foia-models",
     "crates/foia-scrape",
     "crates/foia-server",
 ]
@@ -168,6 +169,9 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 
 # System info
 hostname = "0.4.2"
+
+# Workspace crates
+foia-models = { path = "crates/foia-models" }
 
 # Unix-only
 libc = "0.2"
