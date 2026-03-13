@@ -13,6 +13,7 @@ name = "foia"
 path = "src/lib.rs"
 
 [dependencies]
+foia-models = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 scraper = { workspace = true }
