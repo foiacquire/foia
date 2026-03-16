@@ -2770,6 +2770,7 @@ dependencies = [
  "diesel-async",
  "dirs 5.0.1",
  "dotenvy",
+ "foia-models",
  "futures",
  "futures-util",
  "hex",
@@ -2909,6 +2910,21 @@ dependencies = [
  "tracing",
  "uuid 1.21.0",
  "warc",
+]
+
+[[package]]
+name = "foia-models"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "hex",
+ "hostname",
+ "serde",
+ "serde_json",
+ "sha2",
+ "urlencoding",
+ "uuid 1.21.0",
 ]
 
 [[package]]
