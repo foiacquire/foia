@@ -173,7 +173,7 @@ impl OcrBackend for FallbackOcrBackend {
     fn is_deferred(&self) -> bool {
         self.backends
             .first()
-            .map_or(false, |b| b.is_deferred())
+            .is_some_and(|b| b.is_deferred())
     }
 
     fn is_available(&self) -> bool {

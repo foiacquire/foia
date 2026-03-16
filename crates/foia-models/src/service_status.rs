@@ -21,6 +21,7 @@ impl ServiceType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "scraper" => Some(Self::Scraper),
@@ -53,6 +54,7 @@ impl ServiceState {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "starting" => Some(Self::Starting),
