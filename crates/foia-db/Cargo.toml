@@ -1,0 +1,56 @@
+[package]
+name = "foia-db"
+description = "Database repository layer for FOIA document system"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "foia_db"
+path = "src/lib.rs"
+
+[dependencies]
+foia-models = { workspace = true }
+
+diesel = { workspace = true }
+diesel-async = { workspace = true }
+deadpool = { workspace = true }
+libsqlite3-sys = { workspace = true }
+cetane = { workspace = true }
+sea-query = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+
+# Optional: PostgreSQL support
+tokio-postgres = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+
+[features]
+postgres = [
+    "diesel-async/postgres",
+    "dep:tokio-postgres",
+    "dep:tokio-postgres-rustls",
+    "dep:rustls",
+    "dep:rustls-native-certs",
+    "dep:futures-util",
+    "dep:bytes",
+]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile = { workspace = true }

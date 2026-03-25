@@ -69,7 +69,7 @@ pub async fn cmd_config_get(settings: &Settings, setting: &str) -> anyhow::Resul
         None => (setting, None),
     };
 
-    let config = repos.scraper_configs.get(source_id).await?.ok_or_else(|| {
+    let config = repos.scraper_configs.get::<ScraperConfig>(source_id).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "No scraper config found for '{}'. Run 'config transfer' first.",
             source_id
@@ -104,7 +104,7 @@ pub async fn cmd_config_set(settings: &Settings, setting: &str, value: &str) -> 
     })?;
 
     // Load existing config or start with empty
-    let existing = repos.scraper_configs.get(source_id).await?;
+    let existing = repos.scraper_configs.get::<ScraperConfig>(source_id).await?;
     let mut json_value = match existing {
         Some(config) => serde_json::to_value(&config)?,
         None => serde_json::to_value(ScraperConfig::default())?,

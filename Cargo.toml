@@ -5,6 +5,7 @@ members = [
     "crates/foia-analysis",
     "crates/foia-annotate",
     "crates/foia-cli",
+    "crates/foia-db",
     "crates/foia-http",
     "crates/foia-import",
     "crates/foia-models",
@@ -173,6 +174,7 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 hostname = "0.4.2"
 
 # Workspace crates
+foia-db = { path = "crates/foia-db" }
 foia-http = { path = "crates/foia-http" }
 foia-models = { path = "crates/foia-models" }
 foia-privacy = { path = "crates/foia-privacy" }

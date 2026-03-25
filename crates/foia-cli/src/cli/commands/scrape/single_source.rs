@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use console::style;
 
-use foia::config::{Config, Settings, DEFAULT_REFRESH_TTL_DAYS};
+use foia::config::{Config, ScraperConfig, Settings, DEFAULT_REFRESH_TTL_DAYS};
 use foia::llm::LlmClient;
 use foia::models::{ScraperStats, ServiceStatus, Source, SourceType};
 use foia::privacy::PrivacyConfig;
@@ -45,7 +45,7 @@ pub(super) async fn cmd_scrape_single_tui(
 
     // Load scraper config from database (server config)
     let repos = settings.repositories()?;
-    let mut scraper_config = match repos.scraper_configs.get(source_id).await? {
+    let mut scraper_config = match repos.scraper_configs.get::<ScraperConfig>(source_id).await? {
         Some(c) => c,
         None => {
             log_msg(&format!(

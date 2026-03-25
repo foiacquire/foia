@@ -2,7 +2,7 @@
 
 use console::style;
 
-use foia::config::Settings;
+use foia::config::{ScraperConfig, Settings};
 use foia_scrape::discovery::{DiscoveredUrl, DiscoverySourceConfig};
 
 use super::{add_discovered_urls, get_source_base_url};
@@ -44,7 +44,7 @@ pub async fn cmd_discover_search(
         let repos = settings.repositories()?;
         repos
             .scraper_configs
-            .get(source_id)
+            .get::<ScraperConfig>(source_id)
             .await?
             .map(|s| s.discovery.search_queries.clone())
             .unwrap_or_default()

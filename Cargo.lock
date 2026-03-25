@@ -2769,6 +2769,7 @@ dependencies = [
  "diesel-async",
  "dirs 5.0.1",
  "dotenvy",
+ "foia-db",
  "foia-http",
  "foia-models",
  "foia-privacy",
@@ -2894,6 +2895,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "foia-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cetane",
+ "chrono",
+ "deadpool",
+ "diesel",
+ "diesel-async",
+ "foia-models",
+ "futures-util",
+ "libsqlite3-sys",
+ "regex",
+ "rusqlite",
+ "rustls",
+ "rustls-native-certs 0.8.3",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "uuid 1.21.0",
+]
+
+[[package]]
 name = "foia-http"
 version = "0.1.0"
 dependencies = [
@@ -2935,6 +2967,8 @@ dependencies = [
 name = "foia-models"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "blake3",
  "chrono",
  "hex",

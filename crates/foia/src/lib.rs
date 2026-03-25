@@ -20,6 +20,11 @@ pub mod privacy;
 pub mod rate_limit;
 pub mod repository;
 pub mod schema;
+
+// Re-export macros from foia-db at crate root for backwards compatibility.
+// These were originally #[macro_export]ed in foia's repository/pool.rs.
+pub use foia_db::with_conn;
+pub use foia_db::with_conn_split;
 pub mod services;
 pub mod storage;
 pub mod utils;

@@ -5,25 +5,10 @@
 //! and browser automation crates.
 
 use async_trait::async_trait;
-use foia_models::{CrawlRequest, CrawlUrl};
 
-/// Storage backend for crawl request logging and URL tracking.
-///
-/// Implemented by `DieselCrawlRepository` in `foia`.
-#[async_trait]
-pub trait CrawlStore: Send + Sync {
-    /// Log an HTTP request/response pair.
-    async fn log_request(&self, request: &mut CrawlRequest) -> anyhow::Result<()>;
-
-    /// Look up a crawl URL by source and URL.
-    async fn get_url(&self, source_id: &str, url: &str) -> anyhow::Result<Option<CrawlUrl>>;
-
-    /// Update an existing crawl URL's status.
-    async fn update_url(&self, crawl_url: &CrawlUrl) -> anyhow::Result<()>;
-
-    /// Add a new URL to the crawl queue. Returns true if newly added.
-    async fn add_url(&self, crawl_url: &CrawlUrl) -> anyhow::Result<bool>;
-}
+// CrawlStore is defined in foia-models (domain-level trait).
+// Re-exported here for convenience.
+pub use foia_models::CrawlStore;
 
 /// Result from a browser-based page fetch.
 pub struct BrowserFetchResult {
