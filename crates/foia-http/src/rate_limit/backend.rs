@@ -1,6 +1,6 @@
 //! Pluggable backend trait for rate limiting storage.
 //!
-//! Allows swapping between in-memory (single process), SQLite (multi-process),
+//! Allows swapping between in-memory (single process), SQLite/PostgreSQL (Diesel),
 //! or external backends like Redis (distributed).
 
 #![allow(dead_code)]
@@ -20,12 +20,6 @@ pub enum RateLimitError {
     Unavailable(String),
     #[error("Serialization error: {0}")]
     Serialization(String),
-}
-
-impl From<diesel::result::Error> for RateLimitError {
-    fn from(e: diesel::result::Error) -> Self {
-        RateLimitError::Database(e.to_string())
-    }
 }
 
 /// State for a domain's rate limiting.

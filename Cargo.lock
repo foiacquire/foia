@@ -2754,7 +2754,6 @@ name = "foia"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arti-client",
  "async-trait",
  "base64",
  "blake3",
@@ -2770,7 +2769,9 @@ dependencies = [
  "diesel-async",
  "dirs 5.0.1",
  "dotenvy",
+ "foia-http",
  "foia-models",
+ "foia-privacy",
  "futures",
  "futures-util",
  "hex",
@@ -2803,7 +2804,6 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "toml 0.8.23",
- "tor-rtcompat",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2894,6 +2894,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "foia-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "foia-models",
+ "foia-privacy",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
 name = "foia-import"
 version = "0.1.0"
 dependencies = [
@@ -2920,11 +2939,27 @@ dependencies = [
  "chrono",
  "hex",
  "hostname",
+ "prefer",
  "serde",
  "serde_json",
  "sha2",
  "urlencoding",
  "uuid 1.21.0",
+]
+
+[[package]]
+name = "foia-privacy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arti-client",
+ "prefer",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tor-rtcompat",
+ "tracing",
+ "which 7.0.3",
 ]
 
 [[package]]

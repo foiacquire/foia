@@ -17,3 +17,4 @@ hex = { workspace = true }
 uuid = { workspace = true }
 urlencoding = { workspace = true }
 hostname = { workspace = true }
+prefer = { workspace = true }
