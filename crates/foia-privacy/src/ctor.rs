@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use super::HiddenServiceConfig;
+use crate::HiddenServiceConfig;
 
 /// Default Tor control port.
 const DEFAULT_CONTROL_PORT: u16 = 9051;

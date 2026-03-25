@@ -404,7 +404,7 @@ impl PrivacyConfig {
 
         // Try embedded Arti if available
         #[cfg(feature = "embedded-tor")]
-        if let Some(url) = crate::privacy::get_arti_socks_url() {
+        if let Some(url) = crate::get_arti_socks_url() {
             return Some(url);
         }
 
@@ -502,7 +502,7 @@ See https://rustsec.org/advisories/RUSTSEC-2023-0071 for details."#
         // Check for embedded Tor
         #[cfg(feature = "embedded-tor")]
         {
-            crate::privacy::get_arti_socks_url()
+            crate::get_arti_socks_url()
         }
 
         // Fall back to default C-Tor port
@@ -611,7 +611,7 @@ pub enum SecurityLevel {
 /// both privacy warnings and hidden service warnings.
 ///
 /// The delay is clamped to `MIN_WARNING_DELAY` — callers cannot skip the countdown.
-pub(crate) async fn display_security_warning(message: &str, details: &[&str], raw_delay: u64) {
+pub async fn display_security_warning(message: &str, details: &[&str], raw_delay: u64) {
     use std::io::{self, Write};
 
     eprintln!();

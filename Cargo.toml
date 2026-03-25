@@ -7,6 +7,7 @@ members = [
     "crates/foia-cli",
     "crates/foia-import",
     "crates/foia-models",
+    "crates/foia-privacy",
     "crates/foia-scrape",
     "crates/foia-server",
 ]
@@ -172,6 +173,7 @@ hostname = "0.4.2"
 
 # Workspace crates
 foia-models = { path = "crates/foia-models" }
+foia-privacy = { path = "crates/foia-privacy" }
 
 # Unix-only
 libc = "0.2"
