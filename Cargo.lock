@@ -2014,7 +2014,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "671d7e4bedfb1971dbce30d75726d94f3d1520db2eac56d8d4b0b0805b6a5dda"
 dependencies = [
  "derive-deftly-macros",
- "heck 0.5.0",
+ "heck 0.4.1",
 ]
 
 [[package]]
@@ -2023,8 +2023,8 @@ version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337f65eb93d9996551b9442423480eca4532586b337484446eb5138d0cd8fcf0"
 dependencies = [
- "heck 0.5.0",
- "indexmap 2.13.0",
+ "heck 0.4.1",
+ "indexmap 1.9.3",
  "itertools 0.14.0",
  "proc-macro-crate",
  "proc-macro2",
@@ -2754,7 +2754,6 @@ name = "foia"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arti-client",
  "async-trait",
  "base64",
  "blake3",
@@ -2770,6 +2769,10 @@ dependencies = [
  "diesel-async",
  "dirs 5.0.1",
  "dotenvy",
+ "foia-db",
+ "foia-http",
+ "foia-models",
+ "foia-privacy",
  "futures",
  "futures-util",
  "hex",
@@ -2802,7 +2805,6 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "toml 0.8.23",
- "tor-rtcompat",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2893,6 +2895,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "foia-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cetane",
+ "chrono",
+ "deadpool",
+ "diesel",
+ "diesel-async",
+ "foia-models",
+ "futures-util",
+ "libsqlite3-sys",
+ "regex",
+ "rusqlite",
+ "rustls",
+ "rustls-native-certs 0.8.3",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "uuid 1.21.0",
+]
+
+[[package]]
+name = "foia-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "foia-models",
+ "foia-privacy",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
 name = "foia-import"
 version = "0.1.0"
 dependencies = [
@@ -2909,6 +2961,39 @@ dependencies = [
  "tracing",
  "uuid 1.21.0",
  "warc",
+]
+
+[[package]]
+name = "foia-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "hex",
+ "hostname",
+ "prefer",
+ "serde",
+ "serde_json",
+ "sha2",
+ "urlencoding",
+ "uuid 1.21.0",
+]
+
+[[package]]
+name = "foia-privacy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arti-client",
+ "prefer",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tor-rtcompat",
+ "tracing",
+ "which 7.0.3",
 ]
 
 [[package]]
@@ -5712,7 +5797,7 @@ dependencies = [
  "derive-deftly",
  "libc",
  "paste",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5761,9 +5846,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",

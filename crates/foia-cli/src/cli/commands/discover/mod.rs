@@ -9,7 +9,7 @@ mod sources;
 
 use console::style;
 
-use foia::config::Settings;
+use foia::config::{ScraperConfig, Settings};
 use foia_scrape::discovery::DiscoveredUrl;
 
 pub use all::cmd_discover_all;
@@ -27,7 +27,7 @@ pub(super) async fn get_source_base_url(
     let repos = settings.repositories()?;
     let scraper = repos
         .scraper_configs
-        .get(source_id)
+        .get::<ScraperConfig>(source_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Source '{}' not found in configuration", source_id))?;
 

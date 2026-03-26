@@ -103,7 +103,7 @@ fn parse_allowed_ips_from_env() -> Option<Vec<IpNet>> {
             s.parse::<IpNet>()
                 .or_else(|_| {
                     s.parse::<IpAddr>()
-                        .map(|ip| IpNet::from(ip))
+                        .map(IpNet::from)
                 })
                 .map_err(|e| {
                     tracing::warn!("Invalid IP/CIDR in DEEPSEEK_ALLOWED_IPS: '{}': {}", s, e);

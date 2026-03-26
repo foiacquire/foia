@@ -1,0 +1,22 @@
+[package]
+name = "foia-models"
+description = "Domain types for FOIA document acquisition and research"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+blake3 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+urlencoding = { workspace = true }
+hostname = { workspace = true }
+prefer = { workspace = true }

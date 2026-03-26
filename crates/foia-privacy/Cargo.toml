@@ -1,0 +1,33 @@
+[package]
+name = "foia-privacy"
+description = "Privacy subsystem for Tor and SOCKS proxy routing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "foia_privacy"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+prefer = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+which = { workspace = true }
+
+# Embedded Tor (optional, disabled by default due to RUSTSEC-2023-0071)
+arti-client = { workspace = true, optional = true }
+tor-rtcompat = { workspace = true, optional = true }
+
+[features]
+embedded-tor = ["arti-client", "tor-rtcompat"]
+# Development only: skip security warnings and delays (NEVER use in production)
+unsafe-dev = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
