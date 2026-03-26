@@ -4,7 +4,7 @@
 pub use foia_db::{
     context, diesel_config_history, diesel_context, diesel_crawl, diesel_document,
     diesel_scraper_config, diesel_service_status, diesel_source, migration,
-    migration_sqlite, models, pool, schema, sea_tables, source, util,
+    migration_sqlite, models, pool, sea_tables, source, util,
 };
 
 #[cfg(feature = "postgres")]
