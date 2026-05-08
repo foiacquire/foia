@@ -2014,7 +2014,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "671d7e4bedfb1971dbce30d75726d94f3d1520db2eac56d8d4b0b0805b6a5dda"
 dependencies = [
  "derive-deftly-macros",
- "heck 0.5.0",
+ "heck 0.4.1",
 ]
 
 [[package]]
@@ -2023,9 +2023,9 @@ version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "337f65eb93d9996551b9442423480eca4532586b337484446eb5138d0cd8fcf0"
 dependencies = [
- "heck 0.5.0",
- "indexmap 2.13.0",
- "itertools 0.14.0",
+ "heck 0.4.1",
+ "indexmap 1.9.3",
+ "itertools 0.13.0",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -3754,9 +3754,9 @@ dependencies = [
 
 [[package]]
 name = "imageproc"
-version = "0.25.0"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2393fb7808960751a52e8a154f67e7dd3f8a2ef9bd80d1553078a7b4e8ed3f0d"
+checksum = "602b4e8a4cc3e98372b766cd184ab532999bc0e839b7469e759511ccabc65d77"
 dependencies = [
  "ab_glyph",
  "approx",
@@ -5712,7 +5712,7 @@ dependencies = [
  "derive-deftly",
  "libc",
  "paste",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
