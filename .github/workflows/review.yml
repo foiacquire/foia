@@ -1,0 +1,24 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: LimpidTech/codereview@main
+        with:
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          instructions: |
+            This is a Rust Cargo workspace. All database queries must use Diesel's
+            query builder DSL, never raw SQL. No file should exceed 500 lines
+            (excluding inline tests). Prefer Diesel DSL over sea-query where possible.

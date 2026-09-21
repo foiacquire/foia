@@ -241,7 +241,7 @@ impl AnalysisService {
             let mut to_clear: Vec<i32> = Vec::new();
 
             for (version, source_url, title) in &batch {
-                cursor = version.id as i64;
+                cursor = version.id;
                 checked += 1;
 
                 let stored = version.resolve_path(&self.documents_dir, source_url, title);

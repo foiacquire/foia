@@ -144,7 +144,7 @@ impl PipelineStage for TextExtractionStage {
 
         let has_more = {
             let work_ids = self.work_ids.lock().await;
-            work_ids.as_ref().map_or(false, |ids| !ids.is_empty())
+            work_ids.as_ref().is_some_and(|ids| !ids.is_empty())
         };
 
         let succeeded = Arc::new(AtomicUsize::new(0));
@@ -299,9 +299,9 @@ impl OcrStage {
             .first()
             .map(|entry| {
                 let names = entry.backends();
-                names.first().map_or(false, |name| {
+                names.first().is_some_and(|name| {
                     OcrBackendType::from_str(name)
-                        .map_or(false, |t| t.is_deferred())
+                        .is_some_and(|t| t.is_deferred())
                 })
             })
             .unwrap_or(false);
@@ -332,7 +332,7 @@ impl PipelineStage for OcrStage {
             .count_pages_needing_ocr()
             .await
             .map_err(|e| PipelineError::Other(e.into()))?;
-        Ok(n as u64)
+        Ok(n)
     }
 
     async fn run_chunk(

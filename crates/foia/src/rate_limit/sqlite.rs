@@ -11,11 +11,14 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use tracing::warn;
 
-use super::backend::{DomainRateState, RateLimitBackend, RateLimitError, RateLimitResult};
+use foia_http::rate_limit::{DomainRateState, RateLimitBackend, RateLimitError, RateLimitResult};
 use crate::repository::pool::DbPool;
 use crate::repository::{NewRateLimitState, RateLimitStateRecord};
 use crate::schema::rate_limit_state;
-use crate::with_conn_split;
+
+fn db_err<E: std::fmt::Display>(e: E) -> RateLimitError {
+    RateLimitError::Database(e.to_string())
+}
 
 /// Diesel-backed rate limit storage (SQLite/PostgreSQL).
 #[derive(Clone)]
@@ -63,33 +66,31 @@ impl DieselRateLimitBackend {
         let total_requests = i32::try_from(state.total_requests).unwrap_or(i32::MAX);
         let rate_limit_hits = i32::try_from(state.rate_limit_hits).unwrap_or(i32::MAX);
 
-        with_conn_split!(self.pool,
-            sqlite: conn => {
+        let values = NewRateLimitState {
+            domain,
+            current_delay_ms,
+            in_backoff,
+            total_requests,
+            rate_limit_hits,
+            updated_at: &now,
+        };
+
+        match &self.pool {
+            DbPool::Sqlite(pool) => {
+                let mut conn = pool.get().await.map_err(db_err)?;
                 diesel::replace_into(rate_limit_state::table)
-                    .values(NewRateLimitState {
-                        domain,
-                        current_delay_ms,
-                        in_backoff,
-                        total_requests,
-                        rate_limit_hits,
-                        updated_at: &now,
-                    })
+                    .values(&values)
                     .execute(&mut conn)
                     .await
-                    .map_err(|e| RateLimitError::Database(e.to_string()))?;
-                Ok(())
-            },
-            postgres: conn => {
+                    .map_err(db_err)?;
+            }
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => {
+                use crate::repository::util::to_diesel_error;
                 use diesel::upsert::excluded;
+                let mut conn = pool.get().await.map_err(to_diesel_error).map_err(db_err)?;
                 diesel::insert_into(rate_limit_state::table)
-                    .values(NewRateLimitState {
-                        domain,
-                        current_delay_ms,
-                        in_backoff,
-                        total_requests,
-                        rate_limit_hits,
-                        updated_at: &now,
-                    })
+                    .values(&values)
                     .on_conflict(rate_limit_state::domain)
                     .do_update()
                     .set((
@@ -101,32 +102,36 @@ impl DieselRateLimitBackend {
                     ))
                     .execute(&mut conn)
                     .await
-                    .map_err(|e| RateLimitError::Database(e.to_string()))?;
-                Ok(())
+                    .map_err(db_err)?;
             }
-        )
+        }
+        Ok(())
     }
 
     /// Load a domain state from the database.
     async fn load_state(&self, domain: &str) -> RateLimitResult<Option<DomainRateState>> {
-        let result: Option<RateLimitStateRecord> = with_conn_split!(self.pool,
-            sqlite: conn => {
+        let result: Option<RateLimitStateRecord> = match &self.pool {
+            DbPool::Sqlite(pool) => {
+                let mut conn = pool.get().await.map_err(db_err)?;
                 rate_limit_state::table
                     .find(domain)
                     .first::<RateLimitStateRecord>(&mut conn)
                     .await
                     .optional()
-                    .map_err(|e| RateLimitError::Database(e.to_string()))?
-            },
-            postgres: conn => {
-                rate_limit_state::table
-                    .find(domain)
-                    .first::<RateLimitStateRecord>(&mut conn)
-                    .await
-                    .optional()
-                    .map_err(|e| RateLimitError::Database(e.to_string()))?
+                    .map_err(db_err)?
             }
-        );
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => {
+                use crate::repository::util::to_diesel_error;
+                let mut conn = pool.get().await.map_err(to_diesel_error).map_err(db_err)?;
+                rate_limit_state::table
+                    .find(domain)
+                    .first::<RateLimitStateRecord>(&mut conn)
+                    .await
+                    .optional()
+                    .map_err(db_err)?
+            }
+        };
 
         Ok(result.map(Self::record_to_state))
     }

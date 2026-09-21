@@ -13,6 +13,10 @@ name = "foia"
 path = "src/lib.rs"
 
 [dependencies]
+foia-db = { workspace = true }
+foia-http = { workspace = true }
+foia-models = { workspace = true }
+foia-privacy = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 scraper = { workspace = true }
@@ -67,8 +71,6 @@ rustls = { workspace = true, optional = true }
 rustls-native-certs = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
-arti-client = { workspace = true, optional = true }
-tor-rtcompat = { workspace = true, optional = true }
 hostname = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -79,7 +81,7 @@ default = ["browser"]
 gis = []
 browser = ["chromiumoxide"]
 # Note: diesel-async/postgres enables diesel/postgres_backend (types only, no libpq/OpenSSL needed)
-postgres = ["diesel-async/postgres", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures-util", "dep:bytes"]
+postgres = ["foia-db/postgres", "diesel-async/postgres", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-native-certs", "dep:futures-util", "dep:bytes"]
 redis-backend = ["redis"]
 amqp-broker = ["lapin"]
 # Tor/privacy features
@@ -87,9 +89,9 @@ amqp-broker = ["lapin"]
 # (Marvin Attack timing side-channel in rsa crate). Use C-Tor for hidden services
 # and external SOCKS proxy for outbound Tor until arti updates to a fixed rsa version.
 # See: https://rustsec.org/advisories/RUSTSEC-2023-0071
-embedded-tor = ["arti-client", "tor-rtcompat"]
+embedded-tor = ["foia-privacy/embedded-tor"]
 # Development only: skip security warnings and delays (NEVER use in production)
-unsafe-dev = []
+unsafe-dev = ["foia-privacy/unsafe-dev"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -183,26 +183,7 @@ pub async fn save_document_async(
     }
 }
 
-/// Map MIME type to file extension.
-pub fn mime_to_extension(mime: &str) -> &'static str {
-    match mime {
-        "application/pdf" => "pdf",
-        "text/html" => "html",
-        "text/plain" => "txt",
-        "application/json" => "json",
-        "application/xml" | "text/xml" => "xml",
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "application/msword" => "doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
-        "application/vnd.ms-excel" => "xls",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
-        "application/zip" => "zip",
-        "application/gzip" => "gz",
-        _ => "bin",
-    }
-}
+pub use foia_models::mime_to_extension;
 
 /// Save new version content to disk.
 ///

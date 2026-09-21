@@ -1,5 +1,3 @@
-//! Archive history models for document provenance verification.
-
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
@@ -7,6 +5,9 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::schema::{archive_checks, archive_snapshots};
+// Pure enums are re-exported at the models level from foia_models.
+// Re-export here so `foia::models::archive::ArchiveService` also works.
+pub use foia_models::archive::{ArchiveCheckResult, ArchiveService};
 
 /// A snapshot captured by an archive service (Wayback Machine, archive.today, etc.)
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
@@ -135,36 +136,6 @@ pub struct NewArchiveCheck {
     pub error_message: Option<String>,
 }
 
-/// Result of an archive check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ArchiveCheckResult {
-    /// Content verified to exist at earlier date(s)
-    Verified,
-    /// Found versions with different content
-    NewVersions,
-    /// No snapshots found in archive
-    NoSnapshots,
-    /// Error during check
-    Error,
-}
-
-impl ArchiveCheckResult {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Verified => "verified",
-            Self::NewVersions => "new_versions",
-            Self::NoSnapshots => "no_snapshots",
-            Self::Error => "error",
-        }
-    }
-}
-
-impl std::fmt::Display for ArchiveCheckResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
 impl NewArchiveCheck {
     pub fn new(
         document_version_id: i32,
@@ -193,55 +164,5 @@ impl NewArchiveCheck {
     pub fn with_error(mut self, error: impl Into<String>) -> Self {
         self.error_message = Some(error.into());
         self
-    }
-}
-
-/// Archive service identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveService {
-    Wayback,
-    ArchiveToday,
-    CommonCrawl,
-    PermaCC,
-}
-
-impl ArchiveService {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Wayback => "wayback",
-            Self::ArchiveToday => "archive_today",
-            Self::CommonCrawl => "common_crawl",
-            Self::PermaCC => "perma_cc",
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Wayback => "Wayback Machine",
-            Self::ArchiveToday => "archive.today",
-            Self::CommonCrawl => "Common Crawl",
-            Self::PermaCC => "Perma.cc",
-        }
-    }
-}
-
-impl std::fmt::Display for ArchiveService {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for ArchiveService {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().replace(['-', '.'], "_").as_str() {
-            "wayback" | "wayback_machine" | "archive_org" => Ok(Self::Wayback),
-            "archive_today" | "archive_is" | "archive_ph" => Ok(Self::ArchiveToday),
-            "common_crawl" | "commoncrawl" => Ok(Self::CommonCrawl),
-            "perma_cc" | "permacc" | "perma" => Ok(Self::PermaCC),
-            _ => Err(format!("Unknown archive service: {}", s)),
-        }
     }
 }

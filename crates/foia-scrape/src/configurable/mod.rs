@@ -113,7 +113,7 @@ impl ConfigurableScraper {
             builder = builder.rate_limiter(limiter);
         }
         if let Some(repo) = crawl_repo.clone() {
-            builder = builder.crawl_repo(repo);
+            builder = builder.crawl_store(repo);
         }
         let client = builder.build()?;
 

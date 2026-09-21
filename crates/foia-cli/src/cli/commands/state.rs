@@ -6,7 +6,7 @@ use std::time::Duration;
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use foia::config::{Config, Settings, DEFAULT_REFRESH_TTL_DAYS};
+use foia::config::{Config, ScraperConfig, Settings, DEFAULT_REFRESH_TTL_DAYS};
 use foia::models::{Source, SourceType};
 use foia_scrape::ConfigurableScraper;
 
@@ -144,7 +144,7 @@ pub async fn cmd_crawl(settings: &Settings, source_id: &str, _limit: usize) -> a
 
     // Load scraper config from database (server config)
     let repos = settings.repositories()?;
-    let scraper_config = match repos.scraper_configs.get(source_id).await? {
+    let scraper_config = match repos.scraper_configs.get::<ScraperConfig>(source_id).await? {
         Some(c) => c,
         None => {
             println!(
