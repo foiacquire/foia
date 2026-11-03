@@ -108,7 +108,7 @@ askama = "0.12"
 tempfile = "3"
 
 # Archive handling
-zip = "2"
+zip = "9"
 
 # Email parsing
 mail-parser = "0.9"
